@@ -86,16 +86,22 @@ class Context(ChangeLoggedModel):
 
             # Replicate relevant tables from the primary schema
             for table in get_tables_to_replicate():
+                # Create the table in the new schema
                 cursor.execute(
-                    f"CREATE TABLE {schema}.{table} ( LIKE public.{table} INCLUDING ALL )"
+                    f"CREATE TABLE {schema}.{table} ( LIKE public.{table} INCLUDING INDEXES )"
                 )
+                # Copy data from the source table
                 cursor.execute(
                     f"INSERT INTO {schema}.{table} SELECT * FROM public.{table}"
+                )
+                # Set the default value for the ID column to the sequence associated with the source table
+                cursor.execute(
+                    f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
                 )
 
     def deprovision(self):
         with connection.cursor() as cursor:
-            # Delete the schema
+            # Delete the schema and all its tables
             cursor.execute(
                 f"DROP SCHEMA {self.schema_name} CASCADE"
             )
