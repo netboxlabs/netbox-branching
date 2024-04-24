@@ -26,3 +26,4 @@ class ContextEditView(generic.ObjectEditView):
 @register_model_view(Context, 'delete')
 class ContextDeleteView(generic.ObjectDeleteView):
     queryset = Context.objects.all()
+    default_return_url = 'plugins:netbox_vcs:context_list'

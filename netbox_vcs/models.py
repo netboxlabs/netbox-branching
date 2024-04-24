@@ -1,9 +1,12 @@
+from functools import cached_property
+
 from django.contrib.auth import get_user_model
 from django.db import connection, models
 from django.urls import reverse
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 
+from netbox.context import current_request
 from netbox.models import ChangeLoggedModel
 
 from .todo import get_tables_to_replicate
@@ -47,6 +50,12 @@ class Context(ChangeLoggedModel):
 
     def get_absolute_url(self):
         return reverse('plugins:netbox_vcs:context', args=[self.pk])
+
+    @cached_property
+    def is_active(self):
+        request = current_request.get('context')
+        active_context_id = request.session.get('context')
+        return self.pk and self.pk == active_context_id
 
     def clean(self):
         # Generate the schema name from the Context name (if not already set)
