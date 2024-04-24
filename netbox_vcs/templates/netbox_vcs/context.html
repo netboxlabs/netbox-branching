@@ -16,6 +16,16 @@
             <td>{{ object.name }}</td>
           </tr>
           <tr>
+            <th scope="row">{% trans "Active" %}</th>
+            <td>
+              {% if request.session.context == object.pk %}
+                Yes <a href="?_context=">Deactivate</a>
+              {% else %}
+                No <a href="?_context={{ object.pk }}">Activate</a>
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
             <th scope="row">{% trans "Description" %}</th>
             <td>{{ object.description|placeholder }}</td>
           </tr>
