@@ -18,8 +18,11 @@ class ContextAwareRouter:
     def _get_active_schema(self):
         if request := current_request.get():
             if active_context := request.session.get('context'):
-                context = Context.objects.using('default').get(pk=active_context)
-                return context.schema_name
+                try:
+                    context = Context.objects.using('default').get(pk=active_context)
+                    return context.schema_name
+                except Context.DoesNotExist:
+                    pass
 
     def db_for_read(self, model, **hints):
         if model is Session:

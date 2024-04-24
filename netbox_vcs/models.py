@@ -1,10 +1,12 @@
 from django.contrib.auth import get_user_model
-from django.db import models
+from django.db import connection, models
 from django.urls import reverse
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 
 from netbox.models import ChangeLoggedModel
+
+from .todo import get_tables_to_replicate
 
 __all__ = (
     'Context',
@@ -52,3 +54,48 @@ class Context(ChangeLoggedModel):
             self.schema_name = slugify(self.name)[:63]
 
         super().clean()
+
+    def save(self, *args, **kwargs):
+        super().save(*args, **kwargs)
+
+        self.provision()
+
+    def delete(self, *args, **kwargs):
+        ret = super().delete(*args, **kwargs)
+
+        self.deprovision()
+
+        return ret
+
+    def provision(self):
+        """
+        Create the schema & replicate main tables.
+        """
+        with connection.cursor() as cursor:
+            schema = self.schema_name
+
+            # Create the new schema
+            cursor.execute(
+                f"CREATE SCHEMA {schema}"
+            )
+
+            # Create an empty copy of the global change log
+            cursor.execute(
+                f"CREATE TABLE {schema}.extras_objectchange ( LIKE public.extras_objectchange INCLUDING ALL )"
+            )
+
+            # Replicate relevant tables from the primary schema
+            for table in get_tables_to_replicate():
+                cursor.execute(
+                    f"CREATE TABLE {schema}.{table} ( LIKE public.{table} INCLUDING ALL )"
+                )
+                cursor.execute(
+                    f"INSERT INTO {schema}.{table} SELECT * FROM public.{table}"
+                )
+
+    def deprovision(self):
+        with connection.cursor() as cursor:
+            # Delete the schema
+            cursor.execute(
+                f"DROP SCHEMA {self.schema_name} CASCADE"
+            )
