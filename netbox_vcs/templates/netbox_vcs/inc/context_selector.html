@@ -1,0 +1,21 @@
+{% if active_context %}
+  <div class="align-items-center me-3">
+    Context: {{ active_context|linkify }}
+    <a href="?_context=" class="btn btn-sm btn-danger">
+      <i class="mdi mdi-close" title="Deactivate"></i>
+    </a>
+  </div>
+{% else %}
+  <form method="get" class="row align-items-center me-3">
+    <div class="col-auto">
+      <select name="_context" id="context_selector" class="form-select form-select-sm">
+        {% for context in contexts %}
+          <option value="{{ context.schema_name }}">{{ context.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-auto">
+      <input type="submit" value="Activate" class="btn btn-sm btn-primary" />
+    </div>
+  </form>
+{% endif %}
