@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
 from django.db import models
 from django.urls import reverse
+from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 
 from netbox.models import ChangeLoggedModel
@@ -28,6 +29,11 @@ class Context(ChangeLoggedModel):
         null=True,
         related_name='contexts'
     )
+    schema_name = models.CharField(
+        max_length=63,  # PostgreSQL limit on schema name length
+        verbose_name=_('schema name'),
+        editable=False
+    )
 
     class Meta:
         ordering = ('name',)
@@ -39,3 +45,10 @@ class Context(ChangeLoggedModel):
 
     def get_absolute_url(self):
         return reverse('plugins:netbox_vcs:context', args=[self.pk])
+
+    def clean(self):
+        # Generate the schema name from the Context name (if not already set)
+        if not self.schema_name:
+            self.schema_name = slugify(self.name)[:63]
+
+        super().clean()

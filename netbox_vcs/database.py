@@ -19,8 +19,7 @@ class ContextAwareRouter:
         if request := current_request.get():
             if active_context := request.session.get('context'):
                 context = Context.objects.using('default').get(pk=active_context)
-                # TODO: Store a slug on Context model for schema name
-                return context.name.lower()
+                return context.schema_name
 
     def db_for_read(self, model, **hints):
         if model is Session:

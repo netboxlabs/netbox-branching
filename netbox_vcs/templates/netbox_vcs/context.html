@@ -29,6 +29,10 @@
             <th scope="row">{% trans "Description" %}</th>
             <td>{{ object.description|placeholder }}</td>
           </tr>
+          <tr>
+            <th scope="row">{% trans "Schema Name" %}</th>
+            <td class="font-monospace">{{ object.schema_name }}</td>
+          </tr>
         </table>
       </div>
       {% include 'inc/panels/tags.html' %}
