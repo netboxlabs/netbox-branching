@@ -7,4 +7,4 @@ __all__ = (
 
 def get_active_context():
     if request := current_request.get():
-        return request.session.get('context')
+        return request.COOKIES.get('active_context')

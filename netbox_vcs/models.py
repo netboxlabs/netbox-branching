@@ -10,6 +10,7 @@ from netbox.context import current_request
 from netbox.models import ChangeLoggedModel
 
 from .todo import get_tables_to_replicate
+from .utilities import get_active_context
 
 __all__ = (
     'Context',
@@ -53,9 +54,8 @@ class Context(ChangeLoggedModel):
 
     @cached_property
     def is_active(self):
-        request = current_request.get('context')
-        active_context_id = request.session.get('context')
-        return self.pk and self.pk == active_context_id
+        active_context = get_active_context()
+        return self.schema_name == active_context
 
     def clean(self):
         # Generate the schema name from the Context name (if not already set)

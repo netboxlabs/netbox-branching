@@ -18,10 +18,10 @@
           <tr>
             <th scope="row">{% trans "Active" %}</th>
             <td>
-              {% if request.session.context == object.pk %}
+              {% if request.COOKIES.active_context == object.schema_name %}
                 Yes <a href="?_context=">Deactivate</a>
               {% else %}
-                No <a href="?_context={{ object.pk }}">Activate</a>
+                No <a href="?_context={{ object.schema_name }}">Activate</a>
               {% endif %}
             </td>
           </tr>
