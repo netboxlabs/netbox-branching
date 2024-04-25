@@ -1,0 +1,47 @@
+{% extends 'generic/object.html' %}
+{% load static %}
+{% load helpers %}
+{% load plugins %}
+{% load render_table from django_tables2 %}
+{% load i18n %}
+
+{% block title %}{{ object }} - Diff{% endblock %}
+
+{% block content %}
+  <div class="card">
+    <table class="table object-list">
+      <thead>
+        <tr>
+          <th>{% trans "Model" %}</th>
+          <th>{% trans "Object" %}</th>
+          <th>{% trans "Removed" %}</th>
+          <th>{% trans "Added" %}</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for obj, data in diff.items %}
+          <tr>
+            <td>{{ obj|meta:"model_name"|bettertitle }}</td>
+            <td>{{ obj|linkify }}</td>
+            <td>
+              {% if data.removed %}
+                <pre class="p-0">{% for k, v in data.removed.items %}{{ k }}: {{ v }}
+{% endfor %}</pre>
+              {% else %}
+                {{ ''|placeholder }}
+              {% endif %}
+            </td>
+            <td>
+              {% if data.added %}
+                <pre class="p-0">{% for k, v in data.added.items %}{{ k }}: {{ v }}
+{% endfor %}</pre>
+              {% else %}
+                {{ ''|placeholder }}
+              {% endif %}
+            </td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% endblock content %}

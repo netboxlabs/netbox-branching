@@ -1,5 +1,7 @@
+from django.utils.translation import gettext_lazy as _
+
 from netbox.views import generic
-from utilities.views import register_model_view
+from utilities.views import ViewTab, register_model_view
 
 from . import forms, tables
 from .models import Context
@@ -27,3 +29,19 @@ class ContextEditView(generic.ObjectEditView):
 class ContextDeleteView(generic.ObjectDeleteView):
     queryset = Context.objects.all()
     default_return_url = 'plugins:netbox_vcs:context_list'
+
+
+@register_model_view(Context, 'diff')
+class ContextDiffView(generic.ObjectView):
+    queryset = Context.objects.all()
+    template_name = 'netbox_vcs/context_diff.html'
+    tab = ViewTab(
+        label=_('Diff'),
+        # badge=lambda obj: Stuff.objects.filter(site=obj).count(),
+        permission='netbox_vcs.view_context'
+    )
+
+    def get_extra_context(self, request, instance):
+        return {
+            'diff': instance.diff()
+        }

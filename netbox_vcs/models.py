@@ -1,3 +1,4 @@
+from collections import defaultdict
 from functools import cached_property
 
 from django.contrib.auth import get_user_model
@@ -6,8 +7,12 @@ from django.urls import reverse
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 
+from extras.choices import ObjectChangeActionChoices
+from extras.models import ObjectChange
 from netbox.context import current_request
 from netbox.models import ChangeLoggedModel
+from utilities.data import shallow_compare_dict
+from utilities.serialization import serialize_object
 
 from .todo import get_tables_to_replicate
 from .utilities import get_active_context
@@ -75,6 +80,46 @@ class Context(ChangeLoggedModel):
         self.deprovision()
 
         return ret
+
+    def diff(self):
+        """
+        Return a summary of changes made within this Context relative to the primary.
+        """
+        def get_default():
+            return {
+                'added': {},
+                'removed': {},
+            }
+
+        entries = defaultdict(get_default)
+
+        for change in ObjectChange.objects.order_by('time'):
+            # Retrieve the object in its current form (outside the Context)
+            model = change.changed_object_type.model_class()
+            try:
+                # TODO: Optimize object retrieval
+                original = model.objects.using('default').get(pk=change.changed_object_id)
+                prechange_data = serialize_object(original, exclude=['last_updated'])
+            except model.DoesNotExist:
+                print(f'did not find {change.changed_object_type} {change.changed_object_id}')
+                prechange_data = {}
+
+            diff_added = shallow_compare_dict(
+                prechange_data,
+                change.postchange_data or dict(),
+                exclude=['last_updated'],
+            )
+            diff_removed = shallow_compare_dict(
+                change.postchange_data or dict(),
+                prechange_data,
+                exclude=['last_updated'],
+            )
+
+            key = change.changed_object or original
+            entries[key]['added'].update(diff_added)
+            entries[key]['removed'].update(diff_removed)
+
+        return dict(entries)
 
     def provision(self):
         """
