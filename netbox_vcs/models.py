@@ -8,7 +8,7 @@ from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 
 from extras.choices import ObjectChangeActionChoices
-from extras.models import ObjectChange
+from extras.models import ObjectChange as ObjectChange_
 from netbox.context import current_request
 from netbox.models import ChangeLoggedModel
 from utilities.data import shallow_compare_dict
@@ -19,6 +19,7 @@ from .utilities import get_active_context
 
 __all__ = (
     'Context',
+    'ObjectChange',
 )
 
 
@@ -93,7 +94,7 @@ class Context(ChangeLoggedModel):
 
         entries = defaultdict(get_default)
 
-        for change in ObjectChange.objects.order_by('time'):
+        for change in ObjectChange.objects.using(f'schema_{self.schema_name}').order_by('time'):
             # Retrieve the object in its current form (outside the Context)
             model = change.changed_object_type.model_class()
             try:
@@ -101,18 +102,17 @@ class Context(ChangeLoggedModel):
                 original = model.objects.using('default').get(pk=change.changed_object_id)
                 prechange_data = serialize_object(original, exclude=['last_updated'])
             except model.DoesNotExist:
-                print(f'did not find {change.changed_object_type} {change.changed_object_id}')
                 prechange_data = {}
 
             diff_added = shallow_compare_dict(
                 prechange_data,
                 change.postchange_data or dict(),
-                exclude=['last_updated'],
+                exclude=('created', 'last_updated'),
             )
             diff_removed = shallow_compare_dict(
                 change.postchange_data or dict(),
                 prechange_data,
-                exclude=['last_updated'],
+                exclude=('created', 'last_updated'),
             )
 
             key = change.changed_object or original
@@ -159,3 +159,30 @@ class Context(ChangeLoggedModel):
             cursor.execute(
                 f"DROP SCHEMA {self.schema_name} CASCADE"
             )
+
+
+class ObjectChange(ObjectChange_):
+    """
+    Proxy model for NetBox's ObjectChange.
+    """
+    class Meta:
+        proxy = True
+
+    def diff(self):
+        """
+        Return a dictionary of object values which have been updated.
+        """
+        prechange_data = self.prechange_data or {}
+
+        if self.action == ObjectChangeActionChoices.ACTION_DELETE:
+            return {
+                k: type(v)() for k, v in prechange_data.items()
+            }
+
+        # TODO: Support deep (recursive) comparison
+        return shallow_compare_dict(
+            prechange_data,
+            self.postchange_data,
+            # TODO: Omit all read-only fields
+            exclude=('created', 'last_updated')
+        )
