@@ -2,7 +2,7 @@ from collections import defaultdict
 from functools import cached_property
 
 from django.contrib.auth import get_user_model
-from django.db import connection, models
+from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.urls import reverse
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
@@ -12,7 +12,8 @@ from extras.models import ObjectChange as ObjectChange_
 from netbox.context import current_request
 from netbox.models import ChangeLoggedModel
 from utilities.data import shallow_compare_dict
-from utilities.serialization import serialize_object
+from utilities.exceptions import AbortTransaction
+from utilities.serialization import deserialize_object, serialize_object
 
 from .todo import get_tables_to_replicate
 from .utilities import get_active_context
@@ -121,6 +122,13 @@ class Context(ChangeLoggedModel):
 
         return dict(entries)
 
+    def apply(self, commit=True):
+        with transaction.atomic():
+            for change in ObjectChange.objects.using(f'schema_{self.schema_name}').order_by('time'):
+                change.apply()
+            if not commit:
+                raise AbortTransaction()
+
     def provision(self):
         """
         Create the schema & replicate main tables.
@@ -186,3 +194,30 @@ class ObjectChange(ObjectChange_):
             # TODO: Omit all read-only fields
             exclude=('created', 'last_updated')
         )
+
+    def apply(self):
+        """
+        Apply the change to the primary schema.
+        """
+        model = self.changed_object_type.model_class()
+
+        # Creating a new object
+        if self.action == ObjectChangeActionChoices.ACTION_CREATE:
+            instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
+            print(f'Creating {model._meta.verbose_name} {instance}')
+            instance.save(using=DEFAULT_DB_ALIAS)
+
+        # Modifying an object
+        elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
+            instance = model.objects.get(pk=self.changed_object_id)
+            for k, v in self.diff().items():
+                setattr(instance, k, v)
+            print(f'Updating {model._meta.verbose_name} {instance}')
+            instance.save(using=DEFAULT_DB_ALIAS)
+
+        # Deleting an object
+        elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
+            instance = model.objects.get(pk=self.changed_object_id)
+            print(f'Deleting {model._meta.verbose_name} {instance}')
+            instance.delete(using=DEFAULT_DB_ALIAS)
+    apply.alters_data = True
