@@ -14,30 +14,41 @@
         <tr>
           <th>{% trans "Model" %}</th>
           <th>{% trans "Object" %}</th>
-          <th>{% trans "Removed" %}</th>
-          <th>{% trans "Added" %}</th>
+          <th>{% trans "Current" %}</th>
+          <th>{% trans "Changed" %}</th>
         </tr>
       </thead>
       <tbody>
-        {% for obj, data in diff.items %}
+        {% for key, data in diff.items %}
           <tr>
-            <td>{{ obj|meta:"model_name"|bettertitle }}</td>
-            <td>{{ obj|linkify }}</td>
+{#            <td>{{ data.object|meta:"model_name"|bettertitle }}</td>#}
+            <td>{{ key }}</td>
             <td>
-              {% if data.removed %}
-                <pre class="p-0">{% for k, v in data.removed.items %}{{ k }}: {{ v }}
-{% endfor %}</pre>
+              {% if data.object %}
+                {{ data.object|linkify }}
               {% else %}
+                {{ data.object_repr }}
+              {% endif %}</td>
+            <td>
+              {% for k, v in data.current.items %}
+                <div class="font-monospace">
+                  {{ k }}: {{ v|placeholder }}
+                </div>
+              {% empty %}
                 {{ ''|placeholder }}
-              {% endif %}
+              {% endfor %}
             </td>
             <td>
-              {% if data.added %}
-                <pre class="p-0">{% for k, v in data.added.items %}{{ k }}: {{ v }}
-{% endfor %}</pre>
-              {% else %}
+              {% for k, v in data.changed.post.items %}
+                <div class="font-monospace">
+                  {{ k }}: {{ v }}
+                  {% if data.changed.pre|get_item:k != data.current|get_item:k %}
+                    <i class="mdi mdi-alert"></i>
+                  {% endif %}
+                </div>
+              {% empty %}
                 {{ ''|placeholder }}
-              {% endif %}
+              {% endfor %}
             </td>
           </tr>
         {% endfor %}

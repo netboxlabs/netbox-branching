@@ -16,7 +16,8 @@
           <th>{% trans "Action" %}</th>
           <th>{% trans "Model" %}</th>
           <th>{% trans "Object" %}</th>
-          <th>{% trans "Changed" %}</th>
+          <th>{% trans "Before" %}</th>
+          <th>{% trans "After" %}</th>
         </tr>
       </thead>
       <tbody>
@@ -27,10 +28,18 @@
             <td>{{ record.model|meta:"verbose_name"|bettertitle }}</td>
             <td>{{ record.change.changed_object|default:record.change.object_repr|linkify }}</td>
             <td>
+              {% if record.change.action == 'create' %}
+                {{ ''|placeholder }}
+              {% else %}
+                <pre class="p-0">{% for k, v in record.data.pre.items %}{{ k }}: {{ v }}
+{% endfor %}</pre>
+              {% endif %}
+            </td>
+            <td>
               {% if record.change.action == 'delete' %}
                 {{ ''|placeholder }}
               {% else %}
-                <pre class="p-0">{% for k, v in record.data.items %}{{ k }}: {{ v }}
+                <pre class="p-0">{% for k, v in record.data.post.items %}{{ k }}: {{ v }}
 {% endfor %}</pre>
               {% endif %}
             </td>

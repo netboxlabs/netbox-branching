@@ -9,12 +9,12 @@ from django.utils.translation import gettext_lazy as _
 
 from extras.choices import ObjectChangeActionChoices
 from extras.models import ObjectChange as ObjectChange_
-from netbox.context import current_request
 from netbox.models import ChangeLoggedModel
 from utilities.data import shallow_compare_dict
 from utilities.exceptions import AbortTransaction
 from utilities.serialization import deserialize_object, serialize_object
 
+from .constants import DIFF_EXCLUDE_FIELDS
 from .todo import get_tables_to_replicate
 from .utilities import get_active_context
 
@@ -89,36 +89,41 @@ class Context(ChangeLoggedModel):
         """
         def get_default():
             return {
-                'added': {},
-                'removed': {},
+                'current': {},
+                'changed': {
+                    'pre': {},
+                    'post': {},
+                },
             }
 
         entries = defaultdict(get_default)
 
         for change in ObjectChange.objects.using(f'schema_{self.schema_name}').order_by('time'):
-            # Retrieve the object in its current form (outside the Context)
             model = change.changed_object_type.model_class()
+
+            # Retrieve the object in its current form (outside the Context)
             try:
                 # TODO: Optimize object retrieval
-                original = model.objects.using('default').get(pk=change.changed_object_id)
-                prechange_data = serialize_object(original, exclude=['last_updated'])
+                instance = model.objects.using('default').get(pk=change.changed_object_id)
+                instance_serialized = serialize_object(instance, exclude=['last_updated'])
             except model.DoesNotExist:
-                prechange_data = {}
+                instance = change.changed_object
+                instance_serialized = {}
 
-            diff_added = shallow_compare_dict(
-                prechange_data,
-                change.postchange_data or dict(),
-                exclude=('created', 'last_updated'),
-            )
-            diff_removed = shallow_compare_dict(
-                change.postchange_data or dict(),
-                prechange_data,
-                exclude=('created', 'last_updated'),
-            )
+            changed_in_context = change.diff()
+            current_data = {
+                k: v for k, v in sorted(instance_serialized.items())
+                if k in changed_in_context['post']
+            }
 
-            key = change.changed_object or original
-            entries[key]['added'].update(diff_added)
-            entries[key]['removed'].update(diff_removed)
+            key = f'{change.changed_object_type}:{change.changed_object_id}'
+            entries[key]['object'] = instance
+            entries[key]['object_repr'] = change.object_repr
+            entries[key]['current'].update(current_data)
+            entries[key]['changed']['post'].update(changed_in_context['post'])
+            for k, v in changed_in_context['pre'].items():
+                if k not in entries[key]['changed']['pre']:
+                    entries[key]['changed']['pre'][k] = v
 
         return dict(entries)
 
@@ -178,22 +183,32 @@ class ObjectChange(ObjectChange_):
 
     def diff(self):
         """
-        Return a dictionary of object values which have been updated.
+        Return a dictionary of pre- and post-change values for attribute values which have changed.
         """
         prechange_data = self.prechange_data or {}
+        postchange_data = self.postchange_data or {}
 
-        if self.action == ObjectChangeActionChoices.ACTION_DELETE:
-            return {
-                k: type(v)() for k, v in prechange_data.items()
-            }
+        if self.action == ObjectChangeActionChoices.ACTION_CREATE:
+            changed_attrs = sorted(postchange_data.keys())
+        elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
+            changed_attrs = sorted(prechange_data.keys())
+        else:
+            # TODO: Support deep (recursive) comparison
+            changed_data = shallow_compare_dict(
+                prechange_data,
+                postchange_data,
+                exclude=DIFF_EXCLUDE_FIELDS  # TODO: Omit all read-only fields
+            )
+            changed_attrs = sorted(changed_data.keys())
 
-        # TODO: Support deep (recursive) comparison
-        return shallow_compare_dict(
-            prechange_data,
-            self.postchange_data,
-            # TODO: Omit all read-only fields
-            exclude=('created', 'last_updated')
-        )
+        return {
+            'pre': {
+                k: prechange_data.get(k) for k in changed_attrs
+            },
+            'post': {
+                k: postchange_data.get(k) for k in changed_attrs
+            },
+        }
 
     def apply(self):
         """
@@ -210,7 +225,7 @@ class ObjectChange(ObjectChange_):
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             instance = model.objects.get(pk=self.changed_object_id)
-            for k, v in self.diff().items():
+            for k, v in self.diff()['post'].items():
                 setattr(instance, k, v)
             print(f'Updating {model._meta.verbose_name} {instance}')
             instance.save(using=DEFAULT_DB_ALIAS)
