@@ -225,14 +225,23 @@ class ObjectChange(ObjectChange_):
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             instance = model.objects.get(pk=self.changed_object_id)
+            print(instance)
             for k, v in self.diff()['post'].items():
-                setattr(instance, k, v)
+                # Assign FKs by integer
+                # TODO: Inspect model to determine proper way to assign value
+                if hasattr(instance, f'{k}_id'):
+                    setattr(instance, f'{k}_id', v)
+                else:
+                    setattr(instance, k, v)
             print(f'Updating {model._meta.verbose_name} {instance}')
             instance.save(using=DEFAULT_DB_ALIAS)
 
         # Deleting an object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
-            instance = model.objects.get(pk=self.changed_object_id)
-            print(f'Deleting {model._meta.verbose_name} {instance}')
-            instance.delete(using=DEFAULT_DB_ALIAS)
+            try:
+                instance = model.objects.get(pk=self.changed_object_id)
+                print(f'Deleting {model._meta.verbose_name} {instance}')
+                instance.delete(using=DEFAULT_DB_ALIAS)
+            except model.DoesNotExist:
+                print(f'{model._meta.verbose_name} ID {self.changed_object_id} already deleted; skipping')
     apply.alters_data = True
