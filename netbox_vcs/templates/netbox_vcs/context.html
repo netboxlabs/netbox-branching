@@ -40,13 +40,19 @@
     </div>
     <div class="col col-md-6">
       <div class="card">
-        <div class="card-body">
-          <form method="post" action="{% url 'plugins:netbox_vcs:context_apply' pk=object.pk %}">
-            {% csrf_token %}
-            {{ apply_form }}
-            <input type="submit" class="btn btn-primary" value="Apply">
-          </form>
-        </div>
+        {% if object.is_active %}
+          <div class="card-body">
+            Deactivate context to apply
+          </div>
+        {% else %}
+          <div class="card-body">
+            <form method="post" action="{% url 'plugins:netbox_vcs:context_apply' pk=object.pk %}">
+              {% csrf_token %}
+              {{ apply_form }}
+              <input type="submit" class="btn btn-primary" value="Apply">
+            </form>
+          </div>
+        {% endif %}
       </div>
       {% include 'inc/panels/custom_fields.html' %}
       {% plugin_right_page object %}
