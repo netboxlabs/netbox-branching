@@ -4,6 +4,7 @@ from functools import cached_property
 from django.contrib.auth import get_user_model
 from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 
@@ -15,7 +16,7 @@ from utilities.exceptions import AbortTransaction
 from utilities.serialization import deserialize_object, serialize_object
 
 from .constants import DIFF_EXCLUDE_FIELDS
-from .todo import get_tables_to_replicate
+from .todo import get_relevant_content_types, get_tables_to_replicate
 from .utilities import get_active_context
 
 __all__ = (
@@ -47,6 +48,11 @@ class Context(ChangeLoggedModel):
         verbose_name=_('schema name'),
         editable=False
     )
+    rebase_time = models.DateTimeField(
+        blank=True,
+        null=True,
+        editable=False
+    )
 
     class Meta:
         ordering = ('name',)
@@ -64,6 +70,10 @@ class Context(ChangeLoggedModel):
         active_context = get_active_context()
         return self.schema_name == active_context
 
+    @cached_property
+    def connection_name(self):
+        return f'schema_{self.schema_name}'
+
     def clean(self):
         # Generate the schema name from the Context name (if not already set)
         if not self.schema_name:
@@ -72,9 +82,12 @@ class Context(ChangeLoggedModel):
         super().clean()
 
     def save(self, *args, **kwargs):
+        _provision = self.pk is None
+
         super().save(*args, **kwargs)
 
-        self.provision()
+        if _provision:
+            self.provision()
 
     def delete(self, *args, **kwargs):
         ret = super().delete(*args, **kwargs)
@@ -98,7 +111,7 @@ class Context(ChangeLoggedModel):
 
         entries = defaultdict(get_default)
 
-        for change in ObjectChange.objects.using(f'schema_{self.schema_name}').order_by('time'):
+        for change in ObjectChange.objects.using(self.connection_name).order_by('time'):
             model = change.changed_object_type.model_class()
 
             # Retrieve the object in its current form (outside the Context)
@@ -127,9 +140,28 @@ class Context(ChangeLoggedModel):
 
         return dict(entries)
 
+    def rebase(self, commit=True):
+        """
+        Replay changes from main onto the Context's schema.
+        """
+        start_time = self.rebase_time or self.created
+        changes = ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
+            changed_object_type__in=get_relevant_content_types(),
+            time__gt=start_time
+        ).order_by('time')
+
+        with transaction.atomic():
+            for change in changes:
+                change.apply(using=self.connection_name)
+            if not commit:
+                raise AbortTransaction()
+
+        self.rebase_time = timezone.now()
+        self.save()
+
     def apply(self, commit=True):
         with transaction.atomic():
-            for change in ObjectChange.objects.using(f'schema_{self.schema_name}').order_by('time'):
+            for change in ObjectChange.objects.using(self.connection_name).order_by('time'):
                 change.apply()
             if not commit:
                 raise AbortTransaction()
@@ -210,23 +242,28 @@ class ObjectChange(ObjectChange_):
             },
         }
 
-    def apply(self):
+    def apply(self, using=DEFAULT_DB_ALIAS):
         """
         Apply the change to the primary schema.
         """
         model = self.changed_object_type.model_class()
+        print(f'Applying change {self} using {using}')
 
         # Creating a new object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
+            # TODO: Properly handle M2M assignments
+            self.postchange_data.pop('asns', None)
             instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
             print(f'Creating {model._meta.verbose_name} {instance}')
-            instance.save(using=DEFAULT_DB_ALIAS)
+            instance.save(using=using)
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
-            instance = model.objects.get(pk=self.changed_object_id)
-            print(instance)
+            instance = model.objects.using(using).get(pk=self.changed_object_id)
             for k, v in self.diff()['post'].items():
+                # TODO: Properly handle M2M assignments
+                if k == 'asns':
+                    continue
                 # Assign FKs by integer
                 # TODO: Inspect model to determine proper way to assign value
                 if hasattr(instance, f'{k}_id'):
@@ -234,14 +271,14 @@ class ObjectChange(ObjectChange_):
                 else:
                     setattr(instance, k, v)
             print(f'Updating {model._meta.verbose_name} {instance}')
-            instance.save(using=DEFAULT_DB_ALIAS)
+            instance.save(using=using)
 
         # Deleting an object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
             try:
                 instance = model.objects.get(pk=self.changed_object_id)
                 print(f'Deleting {model._meta.verbose_name} {instance}')
-                instance.delete(using=DEFAULT_DB_ALIAS)
+                instance.delete(using=using)
             except model.DoesNotExist:
                 print(f'{model._meta.verbose_name} ID {self.changed_object_id} already deleted; skipping')
     apply.alters_data = True

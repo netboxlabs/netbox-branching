@@ -33,6 +33,10 @@
             <th scope="row">{% trans "Schema Name" %}</th>
             <td class="font-monospace">{{ object.schema_name }}</td>
           </tr>
+          <tr>
+            <th scope="row">{% trans "Last Rebased" %}</th>
+            <td>{{ object.rebase_time|placeholder }}</td>
+          </tr>
         </table>
       </div>
       {% include 'inc/panels/tags.html' %}
@@ -40,6 +44,23 @@
     </div>
     <div class="col col-md-6">
       <div class="card">
+        <h5 class="card-header">Rebase Context</h5>
+        {% if object.is_active %}
+          <div class="card-body">
+            Deactivate context to rebase
+          </div>
+        {% else %}
+          <div class="card-body">
+            <form method="post" action="{% url 'plugins:netbox_vcs:context_rebase' pk=object.pk %}">
+              {% csrf_token %}
+              {{ rebase_form }}
+              <input type="submit" class="btn btn-primary" value="Rebase">
+            </form>
+          </div>
+        {% endif %}
+      </div>
+      <div class="card">
+        <h5 class="card-header">Apply Changes</h5>
         {% if object.is_active %}
           <div class="card-body">
             Deactivate context to apply

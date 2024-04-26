@@ -19,6 +19,12 @@ class ContextForm(NetBoxModelForm):
         )
 
 
+class RebaseContextForm(ConfirmationForm):
+    commit = forms.BooleanField(
+        required=False
+    )
+
+
 class ApplyContextForm(ConfirmationForm):
     commit = forms.BooleanField(
         required=False
