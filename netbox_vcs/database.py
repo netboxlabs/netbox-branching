@@ -20,3 +20,7 @@ class ContextAwareRouter:
         if active_context := get_active_context():
             return f'schema_{active_context}'
         return None
+
+    def allow_relation(self, obj1, obj2, **hints):
+        # Permit relations from the context schema to the primary (public) schema
+        return True
