@@ -74,15 +74,12 @@ class Context(ChangeLoggedModel):
     def connection_name(self):
         return f'schema_{self.schema_name}'
 
-    def clean(self):
+    def save(self, *args, **kwargs):
+        _provision = self.pk is None
+
         # Generate the schema name from the Context name (if not already set)
         if not self.schema_name:
             self.schema_name = slugify(self.name)[:63]
-
-        super().clean()
-
-    def save(self, *args, **kwargs):
-        _provision = self.pk is None
 
         super().save(*args, **kwargs)
 
