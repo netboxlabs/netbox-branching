@@ -56,7 +56,7 @@ class ContextTestCase(TestCase):
                 cursor.execute(f"SELECT COUNT(id) FROM {PRIMARY_SCHEMA}.{table_name}")
                 primary_count = fetchone(cursor).count
                 cursor.execute(f"SELECT COUNT(id) FROM {context.schema_name}.{table_name}")
-                context_count = fetchone(cursor).count + 1
+                context_count = fetchone(cursor).count
                 self.assertEqual(
                     primary_count,
                     context_count,
