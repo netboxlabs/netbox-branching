@@ -12,13 +12,13 @@ class ContextAwareRouter:
     the active context (if any).
     """
     def db_for_read(self, model, **hints):
-        if active_context := get_active_context():
-            return f'schema_{active_context}'
+        if context := get_active_context():
+            return f'schema_{context.schema_name}'
         return None
 
     def db_for_write(self, model, **hints):
-        if active_context := get_active_context():
-            return f'schema_{active_context}'
+        if context := get_active_context():
+            return f'schema_{context.schema_name}'
         return None
 
     def allow_relation(self, obj1, obj2, **hints):

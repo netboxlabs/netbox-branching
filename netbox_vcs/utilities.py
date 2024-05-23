@@ -17,11 +17,10 @@ class DynamicSchemaDict(dict):
         if type(item) is str and item.startswith('schema_'):
             if schema := item.removeprefix('schema_'):
                 default_config = super().__getitem__('default')
-                schema_name = f'{SCHEMA_PREFIX}{schema}'
                 return {
                     **default_config,
                     'OPTIONS': {
-                        'options': f'-c search_path={schema_name},public'
+                        'options': f'-c search_path={schema},public'
                     }
                 }
         return super().__getitem__(item)
@@ -34,4 +33,4 @@ class DynamicSchemaDict(dict):
 
 def get_active_context():
     if request := current_request.get():
-        return request.COOKIES.get('active_context')
+        return getattr(request, 'context', None)

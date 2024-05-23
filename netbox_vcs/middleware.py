@@ -1,3 +1,6 @@
+from django.core.exceptions import ObjectDoesNotExist
+from django.http import HttpResponseBadRequest
+
 from .models import Context
 
 __all__ = (
@@ -11,21 +14,31 @@ class ContextMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
-        active_context = None
 
-        # Update the active Context if specified
-        if context := request.GET.get('_context'):
-            if Context.objects.filter(schema_id=context).exists():
-                active_context = context
-                request.COOKIES['active_context'] = active_context
+        # Activating a context
+        if schema_id := request.GET.get('_context'):
+            try:
+                context = Context.objects.get(schema_id=schema_id)
+                request.context = context
+                request.COOKIES['active_context'] = context.schema_id
+            except ObjectDoesNotExist:
+                return HttpResponseBadRequest(f"Context {schema_id} not found")
+
+        # Deactivating the current schema
         elif '_context' in request.GET:
             del request.COOKIES['active_context']
-            active_context = None
+            request.context = None
+
+        # Infer the active context from cookie
+        elif schema_id := request.COOKIES.get('active_context'):
+            request.context = Context.objects.get(schema_id=schema_id)
+        else:
+            request.context = None
 
         response = self.get_response(request)
 
-        if active_context:
-            response.set_cookie('active_context', active_context)
+        if request.context:
+            response.set_cookie('active_context', request.context.schema_id)
         elif '_context' in request.GET:
             response.delete_cookie('active_context')
 

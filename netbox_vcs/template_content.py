@@ -8,7 +8,7 @@ class ContextSelector(PluginTemplateExtension):
 
     def navbar(self):
         return self.render('netbox_vcs/inc/context_selector.html', extra_context={
-            'active_context': Context.objects.filter(schema_id=get_active_context()).first(),
+            'active_context': get_active_context(),
             'contexts': Context.objects.all(),
         })
 

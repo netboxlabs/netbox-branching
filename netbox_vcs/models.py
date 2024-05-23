@@ -75,7 +75,7 @@ class Context(ChangeLoggedModel):
 
     @cached_property
     def is_active(self):
-        return self.schema_id == get_active_context()
+        return self == get_active_context()
 
     @cached_property
     def schema_name(self):
