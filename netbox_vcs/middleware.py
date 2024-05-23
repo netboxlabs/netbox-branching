@@ -26,7 +26,7 @@ class ContextMiddleware:
 
         # Deactivating the current schema
         elif '_context' in request.GET:
-            del request.COOKIES['active_context']
+            request.COOKIES.pop('active_context', None)
             request.context = None
 
         # Infer the active context from cookie
