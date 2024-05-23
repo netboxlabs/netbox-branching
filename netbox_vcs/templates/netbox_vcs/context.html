@@ -18,10 +18,10 @@
           <tr>
             <th scope="row">{% trans "Active" %}</th>
             <td>
-              {% if request.COOKIES.active_context == object.schema_name %}
+              {% if request.COOKIES.active_context == object.schema_id %}
                 Yes <a href="?_context=">Deactivate</a>
               {% else %}
-                No <a href="?_context={{ object.schema_name }}">Activate</a>
+                No <a href="?_context={{ object.schema_id }}">Activate</a>
               {% endif %}
             </td>
           </tr>
@@ -30,8 +30,8 @@
             <td>{{ object.description|placeholder }}</td>
           </tr>
           <tr>
-            <th scope="row">{% trans "Schema Name" %}</th>
-            <td class="font-monospace">{{ object.schema_name }}</td>
+            <th scope="row">{% trans "Schema ID" %}</th>
+            <td class="font-monospace">{{ object.schema_id }}</td>
           </tr>
           <tr>
             <th scope="row">{% trans "Last Rebased" %}</th>

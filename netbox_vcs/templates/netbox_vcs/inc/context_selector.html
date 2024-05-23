@@ -10,7 +10,7 @@
     <div class="col-auto">
       <select name="_context" id="context_selector" class="form-select form-select-sm">
         {% for context in contexts %}
-          <option value="{{ context.schema_name }}">{{ context.name }}</option>
+          <option value="{{ context.schema_id }}">{{ context.name }}</option>
         {% endfor %}
       </select>
     </div>

@@ -1,5 +1,7 @@
 from netbox.context import current_request
 
+from .constants import SCHEMA_PREFIX
+
 __all__ = (
     'DynamicSchemaDict',
     'get_active_context',
@@ -15,10 +17,11 @@ class DynamicSchemaDict(dict):
         if type(item) is str and item.startswith('schema_'):
             if schema := item.removeprefix('schema_'):
                 default_config = super().__getitem__('default')
+                schema_name = f'{SCHEMA_PREFIX}{schema}'
                 return {
                     **default_config,
                     'OPTIONS': {
-                        'options': f'-c search_path={schema},public'
+                        'options': f'-c search_path={schema_name},public'
                     }
                 }
         return super().__getitem__(item)

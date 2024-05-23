@@ -1,3 +1,5 @@
+import random
+import string
 from collections import defaultdict
 from functools import cached_property
 
@@ -5,7 +7,6 @@ from django.contrib.auth import get_user_model
 from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.text import slugify
 from django.utils.translation import gettext_lazy as _
 
 from extras.choices import ObjectChangeActionChoices
@@ -15,7 +16,7 @@ from utilities.data import shallow_compare_dict
 from utilities.exceptions import AbortTransaction
 from utilities.serialization import deserialize_object, serialize_object
 
-from .constants import DIFF_EXCLUDE_FIELDS
+from .constants import DIFF_EXCLUDE_FIELDS, SCHEMA_PREFIX
 from .todo import get_relevant_content_types, get_tables_to_replicate
 from .utilities import get_active_context
 
@@ -43,9 +44,9 @@ class Context(ChangeLoggedModel):
         null=True,
         related_name='contexts'
     )
-    schema_name = models.CharField(
-        max_length=63,  # PostgreSQL limit on schema name length
-        verbose_name=_('schema name'),
+    schema_id = models.CharField(
+        max_length=8,
+        verbose_name=_('schema ID'),
         editable=False
     )
     rebase_time = models.DateTimeField(
@@ -59,6 +60,13 @@ class Context(ChangeLoggedModel):
         verbose_name = _('context')
         verbose_name_plural = _('contexts')
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Generate a random schema ID if this is a new Context
+        if self.pk is None:
+            self.schema_id = self._generate_schema_id()
+
     def __str__(self):
         return self.name
 
@@ -67,8 +75,11 @@ class Context(ChangeLoggedModel):
 
     @cached_property
     def is_active(self):
-        active_context = get_active_context()
-        return self.schema_name == active_context
+        return self.schema_id == get_active_context()
+
+    @cached_property
+    def schema_name(self):
+        return f'{SCHEMA_PREFIX}{self.schema_id}'
 
     @cached_property
     def connection_name(self):
@@ -76,10 +87,6 @@ class Context(ChangeLoggedModel):
 
     def save(self, *args, **kwargs):
         _provision = self.pk is None
-
-        # Generate the schema name from the Context name (if not already set)
-        if not self.schema_name:
-            self.schema_name = slugify(self.name)[:63]
 
         super().save(*args, **kwargs)
 
@@ -92,6 +99,14 @@ class Context(ChangeLoggedModel):
         self.deprovision()
 
         return ret
+
+    @staticmethod
+    def _generate_schema_id(length=8):
+        """
+        Generate a random alphanumeric schema identifier of the specified length.
+        """
+        chars = [*string.ascii_lowercase, *string.digits]
+        return ''.join(random.choices(chars, k=length))
 
     def diff(self):
         """

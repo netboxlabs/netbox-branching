@@ -58,7 +58,7 @@ class ContextDiffView(generic.ObjectView):
 
 
 def _get_change_count(obj):
-    return ObjectChange.objects.using(f'schema_{obj.schema_name}').count()
+    return ObjectChange.objects.using(f'schema_{obj.schema_id}').count()
 
 
 @register_model_view(Context, 'replay')
@@ -73,7 +73,7 @@ class ContextReplayView(generic.ObjectView):
 
     def get_extra_context(self, request, instance):
         replay = []
-        for change in ObjectChange.objects.using(f'schema_{instance.schema_name}').order_by('time'):
+        for change in ObjectChange.objects.using(f'schema_{instance.schema_id}').order_by('time'):
             replay.append({
                 'model': change.changed_object_type.model_class(),
                 'change': change,

@@ -1,3 +1,5 @@
+import re
+
 from django.db import connection
 from django.test import TestCase
 
@@ -22,13 +24,6 @@ class ContextTestCase(TestCase):
     def test_create_context(self):
         context = Context(name='Context1')
         context.save()
-
-        # Validate the generated raw schema name
-        self.assertEqual(
-            context.schema_name,
-            'context1',
-            msg="Context name does not match expected value"
-        )
 
         tables_to_replicate = get_tables_to_replicate()
 
@@ -77,3 +72,13 @@ class ContextTestCase(TestCase):
             )
             row = fetchone(cursor)
             self.assertIsNone(row)
+
+    def test_context_schema_id(self):
+        context = Context(name='Context1')
+        self.assertIsNotNone(context.schema_id, msg="Schema ID has not been set")
+        self.assertIsNotNone(re.match(r'^[a-z0-9]{8}', context.schema_id), msg="Schema ID does not conform")
+        schema_id = context.schema_id
+
+        context.save()
+        context.refresh_from_db()
+        self.assertEqual(context.schema_id, schema_id, msg="Schema ID was changed during save()")

@@ -16,6 +16,6 @@ class ContextSerializer(NetBoxModelSerializer):
     class Meta:
         model = Context
         fields = [
-            'id', 'url', 'display', 'name', 'description', 'schema_name', 'custom_fields', 'created', 'last_updated',
+            'id', 'url', 'display', 'name', 'description', 'schema_id', 'custom_fields', 'created', 'last_updated',
         ]
         brief_fields = ('id', 'url', 'display', 'name', 'description')

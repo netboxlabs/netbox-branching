@@ -15,7 +15,7 @@ class ContextMiddleware:
 
         # Update the active Context if specified
         if context := request.GET.get('_context'):
-            if Context.objects.filter(schema_name=context).exists():
+            if Context.objects.filter(schema_id=context).exists():
                 active_context = context
                 request.COOKIES['active_context'] = active_context
         elif '_context' in request.GET:
