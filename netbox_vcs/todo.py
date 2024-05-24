@@ -14,9 +14,12 @@ MODELS_TO_REPLICATE = (
 )
 
 
+# TODO: Source app labels & model names from MODELS_TO_REPLICATE
 def get_relevant_content_types():
     return ContentType.objects.filter(
-        Q(app_label='dcim', model__in=['site', 'sitegroup', 'tenant']) |
+        Q(app_label='dcim', model__in=['region', 'site', 'sitegroup', 'tenant']) |
+        Q(app_label='extras', model__in=['tag']) |
+        Q(app_label='ipam', model__in=['asn']) |
         Q(app_label='tenancy', model__in=['tenant', 'tenantgroup'])
     )
 
