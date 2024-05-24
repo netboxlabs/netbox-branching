@@ -31,7 +31,7 @@ class ContextMiddleware:
 
         # Infer the active context from cookie
         elif schema_id := request.COOKIES.get('active_context'):
-            request.context = Context.objects.get(schema_id=schema_id)
+            request.context = Context.objects.filter(schema_id=schema_id).first()
         else:
             request.context = None
 

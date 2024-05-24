@@ -263,8 +263,6 @@ class ObjectChange(ObjectChange_):
 
         # Creating a new object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
-            # TODO: Properly handle M2M assignments
-            self.postchange_data.pop('asns', None)
             instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
             print(f'Creating {model._meta.verbose_name} {instance}')
             instance.save(using=using)
@@ -273,9 +271,6 @@ class ObjectChange(ObjectChange_):
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             instance = model.objects.using(using).get(pk=self.changed_object_id)
             for k, v in self.diff()['post'].items():
-                # TODO: Properly handle M2M assignments
-                if k == 'asns':
-                    continue
                 # Assign FKs by integer
                 # TODO: Inspect model to determine proper way to assign value
                 if hasattr(instance, f'{k}_id'):

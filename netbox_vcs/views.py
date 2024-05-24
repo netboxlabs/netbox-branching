@@ -58,7 +58,7 @@ class ContextDiffView(generic.ObjectView):
 
 
 def _get_change_count(obj):
-    return ObjectChange.objects.using(f'schema_{obj.schema_id}').count()
+    return ObjectChange.objects.using(obj.connection_name).count()
 
 
 @register_model_view(Context, 'replay')
@@ -73,7 +73,7 @@ class ContextReplayView(generic.ObjectView):
 
     def get_extra_context(self, request, instance):
         replay = []
-        for change in ObjectChange.objects.using(f'schema_{instance.schema_id}').order_by('time'):
+        for change in ObjectChange.objects.using(instance.connection_name).order_by('time'):
             replay.append({
                 'model': change.changed_object_type.model_class(),
                 'change': change,
@@ -102,9 +102,7 @@ class ContextRebaseView(generic.ObjectView):
 
                 # Rebase the Context
                 context.rebase(form.cleaned_data['commit'])
-                messages.success(request, f"Applied context {context}!")
-
-                return redirect('plugins:netbox_vcs:context_list')
+                messages.success(request, f"Rebased context {context}!")
 
             except AbortTransaction:
                 messages.info(request, f"Rebased context {context} & rolled back")
