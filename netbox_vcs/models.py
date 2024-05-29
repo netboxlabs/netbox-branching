@@ -143,7 +143,8 @@ class Context(ChangeLoggedModel):
                 if k in changed_in_context['post']
             }
 
-            key = f'{change.changed_object_type}:{change.changed_object_id}'
+            ct = change.changed_object_type
+            key = f'{ct.app_label}.{ct.model}:{change.changed_object_id}'
             entries[key]['object'] = instance
             entries[key]['object_repr'] = change.object_repr
             entries[key]['current'].update(current_data)

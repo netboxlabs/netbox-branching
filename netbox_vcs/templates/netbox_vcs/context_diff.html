@@ -12,7 +12,7 @@
     <table class="table object-list">
       <thead>
         <tr>
-          <th>{% trans "Model" %}</th>
+          <th>{% trans "Identifier" %}</th>
           <th>{% trans "Object" %}</th>
           <th>{% trans "Current" %}</th>
           <th>{% trans "Changed" %}</th>
@@ -21,7 +21,6 @@
       <tbody>
         {% for key, data in diff.items %}
           <tr>
-{#            <td>{{ data.object|meta:"model_name"|bettertitle }}</td>#}
             <td>{{ key }}</td>
             <td>
               {% if data.object %}
