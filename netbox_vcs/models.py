@@ -17,8 +17,9 @@ from utilities.exceptions import AbortTransaction
 from utilities.serialization import deserialize_object, serialize_object
 
 from .constants import SCHEMA_PREFIX
+from .contextvars import active_context
 from .todo import get_relevant_content_types, get_tables_to_replicate
-from .utilities import get_active_context
+from .utilities import deactivate_context
 
 __all__ = (
     'Context',
@@ -75,7 +76,7 @@ class Context(ChangeLoggedModel):
 
     @cached_property
     def is_active(self):
-        return self == get_active_context()
+        return self == active_context.get()
 
     @cached_property
     def schema_name(self):
@@ -128,9 +129,10 @@ class Context(ChangeLoggedModel):
 
             # Retrieve the object in its current form (outside the Context)
             try:
-                # TODO: Optimize object retrieval
-                instance = model.objects.using('default').get(pk=change.changed_object_id)
-                instance_serialized = serialize_object(instance, exclude=['last_updated'])
+                with deactivate_context():
+                    # TODO: Optimize object retrieval
+                    instance = model.objects.get(pk=change.changed_object_id)
+                    instance_serialized = serialize_object(instance, exclude=['last_updated'])
             except model.DoesNotExist:
                 instance = change.changed_object
                 instance_serialized = {}

@@ -1,11 +1,11 @@
 from contextlib import contextmanager
-from netbox.context import current_request
-from utilities.request import NetBoxFakeRequest
+
+from .contextvars import active_context
 
 __all__ = (
     'DynamicSchemaDict',
     'activate_context',
-    'get_active_context',
+    'deactivate_context',
 )
 
 
@@ -32,21 +32,26 @@ class DynamicSchemaDict(dict):
         return super().__contains__(item)
 
 
-def get_active_context():
-    if request := current_request.get():
-        return getattr(request, 'context', None)
-
-
 @contextmanager
 def activate_context(context):
     """
-    A context manager for temporarily activating a Context.
+    A context manager for activating a Context.
     """
-    # Create a fake request and activate the context
-    request = NetBoxFakeRequest({})
-    request.context = context
-    token = current_request.set(request)
+    token = active_context.set(context)
 
     yield
 
-    current_request.reset(token)
+    active_context.reset(token)
+
+
+@contextmanager
+def deactivate_context():
+    """
+    A context manager for temporarily deactivating the active Context (if any). This is a
+    convenience function for `activate_context(None)`.
+    """
+    token = active_context.set(None)
+
+    yield
+
+    active_context.reset(token)

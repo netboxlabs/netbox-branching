@@ -1,4 +1,4 @@
-from .utilities import get_active_context
+from .contextvars import active_context
 
 
 __all__ = (
@@ -12,12 +12,12 @@ class ContextAwareRouter:
     the active context (if any).
     """
     def db_for_read(self, model, **hints):
-        if context := get_active_context():
+        if context := active_context.get():
             return f'schema_{context.schema_name}'
         return None
 
     def db_for_write(self, model, **hints):
-        if context := get_active_context():
+        if context := active_context.get():
             return f'schema_{context.schema_name}'
         return None
 
