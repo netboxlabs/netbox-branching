@@ -15,6 +15,7 @@
           <th>{% trans "Identifier" %}</th>
           <th>{% trans "Object" %}</th>
           <th>{% trans "Current" %}</th>
+          <th>{% trans "Original" %}</th>
           <th>{% trans "Changed" %}</th>
         </tr>
       </thead>
@@ -32,6 +33,15 @@
               {% for k, v in data.current.items %}
                 <div class="font-monospace">
                   {{ k }}: {{ v|placeholder }}
+                </div>
+              {% empty %}
+                {{ ''|placeholder }}
+              {% endfor %}
+            </td>
+            <td>
+              {% for k, v in data.changed.pre.items %}
+                <div class="font-monospace">
+                  {{ k }}: {{ v }}
                 </div>
               {% empty %}
                 {{ ''|placeholder }}

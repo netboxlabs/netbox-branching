@@ -111,7 +111,7 @@ class Context(ChangeLoggedModel):
 
     def diff(self):
         """
-        Return a summary of changes made within this Context relative to the primary.
+        Return a summary of changes made within this Context relative to the primary schema.
         """
         def get_default():
             return {
@@ -124,40 +124,49 @@ class Context(ChangeLoggedModel):
 
         entries = defaultdict(get_default)
 
+        # Retrieve all ObjectChanges for the Context, in chronological order
         for change in ObjectChange.objects.using(self.connection_name).order_by('time'):
-            model = change.changed_object_type.model_class()
-
-            # Retrieve the object in its current form (outside the Context)
-            try:
-                with deactivate_context():
-                    # TODO: Optimize object retrieval
-                    instance = model.objects.get(pk=change.changed_object_id)
-                    instance_serialized = serialize_object(instance, exclude=['last_updated'])
-            except model.DoesNotExist:
-                instance = change.changed_object
-                instance_serialized = {}
-
-            changed_in_context = change.diff()
-            current_data = {
-                k: v for k, v in sorted(instance_serialized.items())
-                if k in changed_in_context['post']
-            }
-
             ct = change.changed_object_type
             key = f'{ct.app_label}.{ct.model}:{change.changed_object_id}'
+            model = change.changed_object_type.model_class()
+            change_diff = change.diff()
+
+            # Retrieve the object in its current form (outside the Context)
+            if change.action != ObjectChangeActionChoices.ACTION_CREATE:
+                try:
+                    with deactivate_context():
+                        # TODO: Optimize object retrieval
+                        instance = model.objects.get(pk=change.changed_object_id)
+                        instance_serialized = serialize_object(instance, exclude=['last_updated'])
+                        current_data = {
+                            k: v for k, v in sorted(instance_serialized.items())
+                            if k in change_diff['post']
+                        }
+                        entries[key]['current'].update(current_data)
+                except model.DoesNotExist:
+                    # The object has since been deleted from the primary schema
+                    instance = change.changed_object
+            else:
+                instance = change.changed_object
+
             entries[key]['object'] = instance
             entries[key]['object_repr'] = change.object_repr
-            entries[key]['current'].update(current_data)
-            entries[key]['changed']['post'].update(changed_in_context['post'])
-            for k, v in changed_in_context['pre'].items():
-                if k not in entries[key]['changed']['pre']:
-                    entries[key]['changed']['pre'][k] = v
+
+            if change.action == ObjectChangeActionChoices.ACTION_DELETE:
+                entries[key]['changed']['post'] = {}
+            else:
+                entries[key]['changed']['post'].update(change_diff['post'])
+
+            if change.action != ObjectChangeActionChoices.ACTION_CREATE:
+                for k, v in change_diff['pre'].items():
+                    if k not in entries[key]['changed']['pre']:
+                        entries[key]['changed']['pre'][k] = v
 
         return dict(entries)
 
     def rebase(self, commit=True):
         """
-        Replay changes from main onto the Context's schema.
+        Replay changes from the primary schema onto the Context's schema.
         """
         start_time = self.rebase_time or self.created
         changes = ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
@@ -175,6 +184,10 @@ class Context(ChangeLoggedModel):
         self.save()
 
     def apply(self, commit=True):
+        """
+        Apply all changes in the Context to the primary schema by replaying them in
+        chronological order.
+        """
         with transaction.atomic():
             for change in ObjectChange.objects.using(self.connection_name).order_by('time'):
                 change.apply()
@@ -214,6 +227,9 @@ class Context(ChangeLoggedModel):
                 )
 
     def deprovision(self):
+        """
+        Delete the context's schema and all its tables from the database.
+        """
         with connection.cursor() as cursor:
             # Delete the schema and all its tables
             cursor.execute(
