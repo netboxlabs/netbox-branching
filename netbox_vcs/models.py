@@ -8,15 +8,15 @@ from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from mptt.models import MPTTModel
 
 from extras.choices import ObjectChangeActionChoices
 from extras.models import ObjectChange as ObjectChange_
 from netbox.models import ChangeLoggedModel
-from utilities.data import shallow_compare_dict
 from utilities.exceptions import AbortTransaction
 from utilities.serialization import deserialize_object, serialize_object
 
-from .constants import DIFF_EXCLUDE_FIELDS, SCHEMA_PREFIX
+from .constants import SCHEMA_PREFIX
 from .todo import get_relevant_content_types, get_tables_to_replicate
 from .utilities import get_active_context
 
@@ -225,35 +225,6 @@ class ObjectChange(ObjectChange_):
     class Meta:
         proxy = True
 
-    def diff(self):
-        """
-        Return a dictionary of pre- and post-change values for attribute values which have changed.
-        """
-        prechange_data = self.prechange_data or {}
-        postchange_data = self.postchange_data or {}
-
-        if self.action == ObjectChangeActionChoices.ACTION_CREATE:
-            changed_attrs = sorted(postchange_data.keys())
-        elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
-            changed_attrs = sorted(prechange_data.keys())
-        else:
-            # TODO: Support deep (recursive) comparison
-            changed_data = shallow_compare_dict(
-                prechange_data,
-                postchange_data,
-                exclude=DIFF_EXCLUDE_FIELDS  # TODO: Omit all read-only fields
-            )
-            changed_attrs = sorted(changed_data.keys())
-
-        return {
-            'pre': {
-                k: prechange_data.get(k) for k in changed_attrs
-            },
-            'post': {
-                k: postchange_data.get(k) for k in changed_attrs
-            },
-        }
-
     def apply(self, using=DEFAULT_DB_ALIAS):
         """
         Apply the change to the primary schema.
@@ -288,4 +259,9 @@ class ObjectChange(ObjectChange_):
                 instance.delete(using=using)
             except model.DoesNotExist:
                 print(f'{model._meta.verbose_name} ID {self.changed_object_id} already deleted; skipping')
+
+        # Rebuild the MPTT tree where applicable
+        if issubclass(model, MPTTModel):
+            model.objects.rebuild()
+
     apply.alters_data = True
