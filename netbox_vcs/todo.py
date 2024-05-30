@@ -1,27 +1,117 @@
 # Temporary placeholder for stuff we still need to build
+from collections import defaultdict
+
 from django.apps import apps
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Q
 
 MODELS_TO_REPLICATE = (
+    'circuits.circuit',
+    'circuits.circuittermination',
+    'circuits.circuittype',
+    'circuits.provider',
+    'circuits.provideraccount',
+    'circuits.providernetwork',
+    'dcim.cable',
+    'dcim.cabletermination',
+    'dcim.consoleport',
+    'dcim.consoleporttemplate',
+    'dcim.consoleserverport',
+    'dcim.consoleserverporttemplate',
+    'dcim.device',
+    'dcim.devicebay',
+    'dcim.devicebaytemplate',
+    'dcim.devicerole',
+    'dcim.devicetype',
+    'dcim.frontport',
+    'dcim.frontporttemplate',
+    'dcim.interface',
+    'dcim.interfacetemplate',
+    'dcim.inventoryitem',
+    'dcim.inventoryitemrole',
+    'dcim.inventoryitemtemplate',
+    'dcim.location',
+    'dcim.manufacturer',
+    'dcim.module',
+    'dcim.modulebay',
+    'dcim.modulebaytemplate',
+    'dcim.moduletype',
+    'dcim.platform',
+    'dcim.powerfeed',
+    'dcim.poweroutlet',
+    'dcim.poweroutlettemplate',
+    'dcim.powerpanel',
+    'dcim.powerport',
+    'dcim.powerporttemplate',
+    'dcim.rack',
+    'dcim.rackreservation',
+    'dcim.rackrole',
+    'dcim.rearport',
+    'dcim.rearporttemplate',
     'dcim.region',
     'dcim.site',
     'dcim.sitegroup',
-    'extras.tag',
+    'dcim.virtualchassis',
+    'dcim.virtualdevicecontext',
+    'ipam.aggregate',
     'ipam.asn',
+    'ipam.asnrange',
+    'ipam.fhrpgroup',
+    'ipam.fhrpgroupassignment',
+    'ipam.ipaddress',
+    'ipam.iprange',
+    'ipam.prefix',
+    'ipam.rir',
+    'ipam.role',
+    'ipam.routetarget',
+    'ipam.service',
+    'ipam.servicetemplate',
+    'ipam.vlan',
+    'ipam.vlangroup',
+    'ipam.vrf',
+    'extras.configcontext',
+    'extras.configtemplate',
+    'extras.imageattachment',
+    'extras.journalentry',
+    'extras.tag',
+    'tenancy.contact',
+    'tenancy.contactassignment',
+    'tenancy.contactgroup',
+    'tenancy.contactrole',
     'tenancy.tenant',
     'tenancy.tenantgroup',
+    'virtualization.cluster',
+    'virtualization.clustergroup',
+    'virtualization.clustertype',
+    'virtualization.virtualdisk',
+    'virtualization.virtualmachine',
+    'virtualization.vminterface',
+    'vpn.ikepolicy',
+    'vpn.ikeproposal',
+    'vpn.ipsecpolicy',
+    'vpn.ipsecprofile',
+    'vpn.ipsecproposal',
+    'vpn.l2vpn',
+    'vpn.l2vpntermination',
+    'vpn.tunnel',
+    'vpn.tunnelgroup',
+    'vpn.tunneltermination',
 )
 
 
 # TODO: Source app labels & model names from MODELS_TO_REPLICATE
 def get_relevant_content_types():
-    return ContentType.objects.filter(
-        Q(app_label='dcim', model__in=['region', 'site', 'sitegroup', 'tenant']) |
-        Q(app_label='extras', model__in=['tag']) |
-        Q(app_label='ipam', model__in=['asn']) |
-        Q(app_label='tenancy', model__in=['tenant', 'tenantgroup'])
-    )
+    model_map = defaultdict(set)
+
+    for model_name in MODELS_TO_REPLICATE:
+        app_label, model = model_name.split('.')
+        model_map[app_label].add(model)
+
+    q = Q()
+    for app_label, models in model_map.items():
+        q |= Q(app_label=app_label, model__in=models)
+
+    return ContentType.objects.filter(q)
 
 
 def get_tables_to_replicate():
