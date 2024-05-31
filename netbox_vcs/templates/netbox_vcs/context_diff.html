@@ -52,7 +52,9 @@
                 <div class="font-monospace">
                   {{ k }}: {{ v }}
                   {% if data.changed.pre|get_item:k != data.current|get_item:k %}
-                    <i class="mdi mdi-alert"></i>
+                    <span class="badge bg-red text-red-fg" style="font-family: sans-serif">
+                      <i class="mdi mdi-alert"></i> Conflict
+                    </span>
                   {% endif %}
                 </div>
               {% empty %}
