@@ -1,4 +1,5 @@
 from django.contrib import messages
+from django.core.exceptions import ValidationError
 from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.shortcuts import redirect
 from django.utils.translation import gettext_lazy as _
@@ -130,6 +131,8 @@ class ContextApplyView(generic.ObjectView):
                 messages.success(request, f"Applied context {context}!")
                 context.delete()
                 return redirect('plugins:netbox_vcs:context_list')
+            except ValidationError as e:
+                messages.error(self.request, ", ".join(e.messages))
             except AbortTransaction:
                 messages.info(request, f"Applied & rolled back context {context}")
 

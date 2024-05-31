@@ -4,6 +4,7 @@ from collections import defaultdict
 from functools import cached_property
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.urls import reverse
 from django.utils import timezone
@@ -15,7 +16,6 @@ from extras.models import ObjectChange as ObjectChange_
 from netbox.models import ChangeLoggedModel
 from utilities.exceptions import AbortTransaction
 from utilities.serialization import deserialize_object, serialize_object
-
 from .constants import SCHEMA_PREFIX
 from .contextvars import active_context
 from .todo import get_relevant_content_types, get_tables_to_replicate
@@ -188,11 +188,15 @@ class Context(ChangeLoggedModel):
         Apply all changes in the Context to the primary schema by replaying them in
         chronological order.
         """
-        with transaction.atomic():
-            for change in ObjectChange.objects.using(self.connection_name).order_by('time'):
-                change.apply()
-            if not commit:
-                raise AbortTransaction()
+        try:
+            with transaction.atomic():
+                for change in ObjectChange.objects.using(self.connection_name).order_by('time'):
+                    change.apply()
+                if not commit:
+                    raise AbortTransaction()
+        except ValidationError as e:
+            messages = ', '.join(e.messages)
+            raise ValidationError(f'{change.changed_object}: {messages}')
 
     def provision(self):
         """
@@ -255,6 +259,7 @@ class ObjectChange(ObjectChange_):
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
             instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
             print(f'Creating {model._meta.verbose_name} {instance}')
+            instance.object.full_clean()
             instance.save(using=using)
 
         # Modifying an object
@@ -268,6 +273,7 @@ class ObjectChange(ObjectChange_):
                 else:
                     setattr(instance, k, v)
             print(f'Updating {model._meta.verbose_name} {instance}')
+            instance.object.full_clean()
             instance.save(using=using)
 
         # Deleting an object
