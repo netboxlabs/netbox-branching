@@ -124,8 +124,8 @@ class Context(ChangeLoggedModel):
 
             # Retrieve the object in its current form (outside the Context)
             if change.action != ObjectChangeActionChoices.ACTION_CREATE:
-                try:
-                    with deactivate_context():
+                with deactivate_context():
+                    try:
                         # TODO: Optimize object retrieval
                         instance = model.objects.get(pk=change.changed_object_id)
                         instance_serialized = serialize_object(instance, exclude=['last_updated'])
@@ -134,9 +134,9 @@ class Context(ChangeLoggedModel):
                             if k in change_diff['post']
                         }
                         entries[key].current.update(current_data)
-                except model.DoesNotExist:
-                    # The object has since been deleted from the primary schema
-                    instance = change.changed_object
+                    except model.DoesNotExist:
+                        # The object has since been deleted from the primary schema
+                        instance = change.changed_object
             else:
                 instance = change.changed_object
 
