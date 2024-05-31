@@ -18,15 +18,7 @@ $ source /opt/netbox/venv/bin/activate
 $ pip install -e .
 ```
 
-3. Set `DATABASE_ROUTERS` in `configuration.py`
-
-```python
-DATABASE_ROUTERS = [
-    'netbox_vcs.database.ContextAwareRouter',
-]
-```
-
-4. Create `local_settings.py` to override the `DATABASES` setting. This enables dynamic schema support.
+3. Create `local_settings.py` to override the `DATABASES` setting. This enables dynamic schema support.
 
 ```python
 from netbox_vcs.utilities import DynamicSchemaDict
@@ -36,4 +28,15 @@ from .configuration import DATABASE
 DATABASES = DynamicSchemaDict({
     'default': DATABASE,
 })
+
+# Employ our custom database router
+DATABASE_ROUTERS = [
+    'netbox_vcs.database.ContextAwareRouter',
+]
+```
+
+4. Run NetBox migrations
+
+```
+$ ./manage.py migrate
 ```
