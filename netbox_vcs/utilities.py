@@ -1,8 +1,12 @@
 from contextlib import contextmanager
+from dataclasses import dataclass, field
+from functools import cached_property
 
+from extras.choices import ObjectChangeActionChoices
 from .contextvars import active_context
 
 __all__ = (
+    'ChangeDiff',
     'DynamicSchemaDict',
     'activate_context',
     'deactivate_context',
@@ -30,6 +34,26 @@ class DynamicSchemaDict(dict):
         if type(item) is str and item.startswith('schema_'):
             return True
         return super().__contains__(item)
+
+
+@dataclass
+class ChangeDiff:
+    object: object = None
+    object_repr: str = ''
+    action: str = ''
+    before: dict = field(default_factory=dict)
+    after: dict = field(default_factory=dict)
+    current: dict = field(default_factory=dict)
+
+    @cached_property
+    def conflicts(self):
+        if self.action == ObjectChangeActionChoices.ACTION_CREATE:
+            # Newly created objects cannot have change conflicts
+            return []
+        return [
+            k for k, v in self.current.items()
+            if self.before[k] != self.current[k]
+        ]
 
 
 @contextmanager

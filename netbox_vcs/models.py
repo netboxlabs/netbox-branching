@@ -19,7 +19,7 @@ from utilities.serialization import deserialize_object, serialize_object
 from .constants import SCHEMA_PREFIX
 from .contextvars import active_context
 from .todo import get_relevant_content_types, get_tables_to_replicate
-from .utilities import deactivate_context
+from .utilities import ChangeDiff, deactivate_context
 
 __all__ = (
     'Context',
@@ -113,16 +113,7 @@ class Context(ChangeLoggedModel):
         """
         Return a summary of changes made within this Context relative to the primary schema.
         """
-        def get_default():
-            return {
-                'current': {},
-                'changed': {
-                    'pre': {},
-                    'post': {},
-                },
-            }
-
-        entries = defaultdict(get_default)
+        entries = defaultdict(ChangeDiff)
 
         # Retrieve all ObjectChanges for the Context, in chronological order
         for change in ObjectChange.objects.using(self.connection_name).order_by('time'):
@@ -142,25 +133,29 @@ class Context(ChangeLoggedModel):
                             k: v for k, v in sorted(instance_serialized.items())
                             if k in change_diff['post']
                         }
-                        entries[key]['current'].update(current_data)
+                        entries[key].current.update(current_data)
                 except model.DoesNotExist:
                     # The object has since been deleted from the primary schema
                     instance = change.changed_object
             else:
                 instance = change.changed_object
 
-            entries[key]['object'] = instance
-            entries[key]['object_repr'] = change.object_repr
+            if entries[key].action != ObjectChangeActionChoices.ACTION_CREATE:
+                entries[key].action = change.action
+            entries[key].object = instance
+            entries[key].object_repr = change.object_repr
 
             if change.action == ObjectChangeActionChoices.ACTION_DELETE:
-                entries[key]['changed']['post'] = {}
+                entries[key].after = {}
             else:
-                entries[key]['changed']['post'].update(change_diff['post'])
+                entries[key].after.update(change_diff['post'])
 
             if change.action != ObjectChangeActionChoices.ACTION_CREATE:
-                for k, v in change_diff['pre'].items():
-                    if k not in entries[key]['changed']['pre']:
-                        entries[key]['changed']['pre'][k] = v
+                # Skip updating "before" data if this object was created in the context
+                if entries[key].action != ObjectChangeActionChoices.ACTION_CREATE:
+                    for k, v in change_diff['pre'].items():
+                        if k not in entries[key].before:
+                            entries[key].before[k] = v
 
         return dict(entries)
 

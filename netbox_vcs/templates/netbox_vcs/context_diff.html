@@ -14,23 +14,35 @@
         <tr>
           <th>{% trans "Identifier" %}</th>
           <th>{% trans "Object" %}</th>
-          <th>{% trans "Current" %}</th>
+          <th>{% trans "Action" %}</th>
           <th>{% trans "Original" %}</th>
+          <th>{% trans "Current" %}</th>
           <th>{% trans "Changed" %}</th>
         </tr>
       </thead>
       <tbody>
         {% for key, data in diff.items %}
-          <tr>
+          <tr{% if data.conflicts %} class="table-danger"{% endif %}>
             <td>{{ key }}</td>
             <td>
               {% if data.object %}
                 {{ data.object|linkify }}
               {% else %}
                 {{ data.object_repr }}
-              {% endif %}</td>
+              {% endif %}
+            </td>
             <td>
-              {% for k, v in data.current.items %}
+              {# TODO: Clean this up #}
+              {% if data.action == 'create' %}
+                <span class="badge bg-green text-green-fg">Created</span>
+              {% elif data.action == 'update' %}
+                <span class="badge bg-blue text-blue-fg">Updated</span>
+              {% elif data.action == 'delete' %}
+                <span class="badge bg-red text-red-fg">Deleted</span>
+              {% endif %}
+            </td>
+            <td>
+              {% for k, v in data.before.items %}
                 <div class="font-monospace">
                   {{ k }}: {{ v|placeholder }}
                 </div>
@@ -39,26 +51,21 @@
               {% endfor %}
             </td>
             <td>
-              {% for k, v in data.changed.pre.items %}
+              {% for k, v in data.current.items %}
                 <div class="font-monospace">
-                  {{ k }}: {{ v }}
+                  {{ k }}: {% if k in data.conflicts %}<span class="bg-red text-red-fg">{{ v|placeholder }}</span>{% else %}{{ v|placeholder }}{% endif %}
                 </div>
               {% empty %}
                 {{ ''|placeholder }}
               {% endfor %}
             </td>
             <td>
-              {% for k, v in data.changed.post.items %}
+              {% for k, v in data.after.items %}
                 <div class="font-monospace">
-                  {{ k }}: {{ v }}
-                  {% if data.changed.pre|get_item:k != data.current|get_item:k %}
-                    <span class="badge bg-red text-red-fg" style="font-family: sans-serif">
-                      <i class="mdi mdi-alert"></i> Conflict
-                    </span>
-                  {% endif %}
+                  {{ k }}: {% if k in data.conflicts %}<span class="bg-red text-red-fg">{{ v|placeholder }}</span>{% else %}{{ v|placeholder }}{% endif %}
                 </div>
               {% empty %}
-                {{ ''|placeholder }}
+                <span class="text-muted">Deleted</span>
               {% endfor %}
             </td>
           </tr>
