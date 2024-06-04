@@ -13,7 +13,7 @@ from mptt.models import MPTTModel
 
 from extras.choices import ObjectChangeActionChoices
 from extras.models import ObjectChange as ObjectChange_
-from netbox.models import ChangeLoggedModel
+from netbox.models import NetBoxModel
 from utilities.exceptions import AbortTransaction
 from utilities.serialization import deserialize_object, serialize_object
 from .constants import SCHEMA_PREFIX
@@ -27,7 +27,7 @@ __all__ = (
 )
 
 
-class Context(ChangeLoggedModel):
+class Context(NetBoxModel):
     name = models.CharField(
         verbose_name=_('name'),
         max_length=100,

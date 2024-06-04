@@ -1,6 +1,9 @@
 import django.db.models.deletion
 from django.conf import settings
 from django.db import migrations, models
+import taggit.managers
+
+import utilities.json
 
 
 class Migration(migrations.Migration):
@@ -23,6 +26,8 @@ class Migration(migrations.Migration):
                 ('schema_id', models.CharField(editable=False, max_length=8)),
                 ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='contexts', to=settings.AUTH_USER_MODEL)),
                 ('rebase_time', models.DateTimeField(blank=True, null=True, editable=False)),
+                ('custom_field_data', models.JSONField(blank=True, default=dict, encoder=utilities.json.CustomFieldJSONEncoder)),
+                ('tags', taggit.managers.TaggableManager(through='extras.TaggedItem', to='extras.Tag')),
             ],
             options={
                 'verbose_name': 'context',
