@@ -17,11 +17,23 @@
           </tr>
           <tr>
             <th scope="row">{% trans "Active" %}</th>
-            <td>
+            <td class="d-flex justify-content-between">
               {% if object.is_active %}
-                Yes <a href="?_context=">Deactivate</a>
+                <span class="text-green">
+                  {% checkmark True %}
+                  {% trans "Active" %}
+                </span>
+                <a href="?_context=" class="btn btn-sm btn-danger">
+                  <i class="mdi mdi-source-branch-remove"></i> {% trans "Deactivate" %}
+                </a>
               {% else %}
-                No <a href="?_context={{ object.schema_id }}">Activate</a>
+                <span>
+                  {% checkmark False %}
+                  {% trans "Inactive" %}
+                </span>
+                <a href="?_context={{ object.schema_id }}" class="btn btn-sm btn-primary">
+                  <i class="mdi mdi-source-branch-check"></i> {% trans "Activate" %}
+                </a>
               {% endif %}
             </td>
           </tr>

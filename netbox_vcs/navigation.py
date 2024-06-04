@@ -15,5 +15,5 @@ menu = PluginMenu(
             ),
         )),
     ),
-    icon_class='mdi mdi-router'
+    icon_class='mdi mdi-source-branch'
 )

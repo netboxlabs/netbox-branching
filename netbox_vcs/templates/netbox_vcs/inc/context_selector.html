@@ -1,21 +1,25 @@
+{% load i18n %}
 {% if active_context %}
-  <div class="align-items-center me-3">
-    Context: {{ active_context|linkify }}
+  <div class="align-items-center">
+    <i class="mdi mdi-source-branch"></i>
+    <a href="{{ active_context.get_absolute_url }}" title="{{ active_context.description }}">{{ active_context.name }}</a>
     <a href="?_context=" class="btn btn-sm btn-danger">
-      <i class="mdi mdi-close" title="Deactivate"></i>
+      <i class="mdi mdi-source-branch-remove" title="{% trans "Deactivate" %}"></i>
     </a>
   </div>
 {% else %}
-  <form method="get" class="row align-items-center me-3">
+  <form method="get" class="row align-items-center">
     <div class="col-auto">
-      <select name="_context" id="context_selector" class="form-select form-select-sm">
-        {% for context in contexts %}
-          <option value="{{ context.schema_id }}">{{ context.name }}</option>
-        {% endfor %}
-      </select>
-    </div>
-    <div class="col-auto">
-      <input type="submit" value="Activate" class="btn btn-sm btn-primary" />
+      <div class="input-group">
+        <select name="_context" id="context_selector" class="form-select form-select-sm">
+          {% for context in contexts %}
+            <option value="{{ context.schema_id }}">{{ context.name }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit" value="Activate" class="btn btn-sm btn-primary" >
+          <i class="mdi mdi-source-branch-check"></i> {% trans "Activate" %}
+        </button>
+      </div>
     </div>
   </form>
 {% endif %}
