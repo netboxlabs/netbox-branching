@@ -17,10 +17,17 @@ class ContextTable(NetBoxTable):
     is_active = columns.BooleanColumn(
         verbose_name=_('Active')
     )
+    status = columns.ChoiceFieldColumn(
+        verbose_name=_('Status'),
+    )
+    schema_id = tables.TemplateColumn(
+        template_code='<span class="font-monospace">{{ value }}</code>'
+    )
 
     class Meta(NetBoxTable.Meta):
         model = Context
         fields = (
-            'pk', 'id', 'name', 'is_active', 'description', 'user', 'tags', 'created', 'last_updated',
+            'pk', 'id', 'name', 'is_active', 'status', 'schema_id', 'description', 'user', 'tags', 'created',
+            'last_updated',
         )
-        default_columns = ('pk', 'name', 'is_active', 'description', 'user')
+        default_columns = ('pk', 'name', 'is_active', 'status', 'schema_id', 'description', 'user')

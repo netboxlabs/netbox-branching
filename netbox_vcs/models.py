@@ -8,14 +8,18 @@ from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 from mptt.models import MPTTModel
 
+from core.models import Job
 from extras.choices import ObjectChangeActionChoices
 from extras.models import ObjectChange as ObjectChange_
 from netbox.models import NetBoxModel
+from netbox.models.features import JobsMixin
 from utilities.exceptions import AbortTransaction
 from utilities.serialization import deserialize_object, serialize_object
+from .choices import ContextStatusChoices
 from .constants import SCHEMA_PREFIX
 from .contextvars import active_context
 from .todo import get_relevant_content_types, get_tables_to_replicate
@@ -27,7 +31,7 @@ __all__ = (
 )
 
 
-class Context(NetBoxModel):
+class Context(JobsMixin, NetBoxModel):
     name = models.CharField(
         verbose_name=_('name'),
         max_length=100,
@@ -48,6 +52,13 @@ class Context(NetBoxModel):
     schema_id = models.CharField(
         max_length=8,
         verbose_name=_('schema ID'),
+        editable=False
+    )
+    status = models.CharField(
+        verbose_name=_('status'),
+        max_length=50,
+        choices=ContextStatusChoices,
+        default=ContextStatusChoices.NEW,
         editable=False
     )
     rebase_time = models.DateTimeField(
@@ -74,6 +85,9 @@ class Context(NetBoxModel):
     def get_absolute_url(self):
         return reverse('plugins:netbox_vcs:context', args=[self.pk])
 
+    def get_status_color(self):
+        return ContextStatusChoices.colors.get(self.status)
+
     @cached_property
     def is_active(self):
         return self == active_context.get()
@@ -92,7 +106,12 @@ class Context(NetBoxModel):
         super().save(*args, **kwargs)
 
         if _provision:
-            self.provision()
+            # Enqueue a background job to provision the Context
+            Job.enqueue(
+                import_string('netbox_vcs.jobs.provision_context'),
+                instance=self,
+                name='Provision context'
+            )
 
     def delete(self, *args, **kwargs):
         ret = super().delete(*args, **kwargs)
@@ -197,6 +216,8 @@ class Context(NetBoxModel):
         """
         Create the schema & replicate main tables.
         """
+        Context.objects.filter(pk=self.pk).update(status=ContextStatusChoices.PROVISIONING)
+
         with connection.cursor() as cursor:
             schema = self.schema_name
 
@@ -224,6 +245,8 @@ class Context(NetBoxModel):
                 cursor.execute(
                     f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
                 )
+
+        Context.objects.filter(pk=self.pk).update(status=ContextStatusChoices.READY)
 
     def deprovision(self):
         """

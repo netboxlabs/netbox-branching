@@ -16,6 +16,10 @@
             <td>{{ object.name }}</td>
           </tr>
           <tr>
+            <th scope="row">{% trans "Status" %}</th>
+            <td>{% badge object.get_status_display object.get_status_color %}</td>
+          </tr>
+          <tr>
             <th scope="row">{% trans "Active" %}</th>
             <td class="d-flex justify-content-between">
               {% if object.is_active %}
@@ -42,8 +46,8 @@
             <td>{{ object.description|placeholder }}</td>
           </tr>
           <tr>
-            <th scope="row">{% trans "Schema ID" %}</th>
-            <td class="font-monospace">{{ object.schema_id }}</td>
+            <th scope="row">{% trans "Schema" %}</th>
+            <td class="font-monospace">{{ object.schema_name }}</td>
           </tr>
           <tr>
             <th scope="row">{% trans "Last Rebased" %}</th>
