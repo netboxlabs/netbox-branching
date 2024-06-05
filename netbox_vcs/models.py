@@ -22,8 +22,7 @@ from utilities.serialization import deserialize_object, serialize_object
 from .choices import ContextStatusChoices
 from .constants import SCHEMA_PREFIX
 from .contextvars import active_context
-from .todo import get_relevant_content_types, get_tables_to_replicate
-from .utilities import ChangeDiff, deactivate_context
+from .utilities import ChangeDiff, deactivate_context, get_context_aware_object_types, get_tables_to_replicate
 
 __all__ = (
     'Context',
@@ -184,7 +183,7 @@ class Context(JobsMixin, NetBoxModel):
         """
         start_time = self.rebase_time or self.created
         changes = ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
-            changed_object_type__in=get_relevant_content_types(),
+            changed_object_type__in=get_context_aware_object_types(),
             time__gt=start_time
         ).order_by('time')
 
