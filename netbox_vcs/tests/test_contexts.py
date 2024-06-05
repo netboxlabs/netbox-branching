@@ -6,7 +6,7 @@ from django.test import TestCase
 from dcim.models import Site
 from netbox_vcs.constants import PRIMARY_SCHEMA
 from netbox_vcs.models import Context
-from netbox_vcs.todo import get_tables_to_replicate
+from netbox_vcs.utilities import get_tables_to_replicate
 from .utils import fetchall, fetchone
 
 
@@ -24,6 +24,7 @@ class ContextTestCase(TestCase):
     def test_create_context(self):
         context = Context(name='Context1')
         context.save()
+        context.provision()
 
         tables_to_replicate = get_tables_to_replicate()
 
@@ -61,6 +62,7 @@ class ContextTestCase(TestCase):
     def test_delete_context(self):
         context = Context(name='Context1')
         context.save()
+        context.provision()
         context.delete()
 
         with connection.cursor() as cursor:
