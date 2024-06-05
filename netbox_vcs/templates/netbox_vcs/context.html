@@ -51,7 +51,7 @@
           </tr>
           <tr>
             <th scope="row">{% trans "Last Rebased" %}</th>
-            <td>{{ object.rebase_time|placeholder }}</td>
+            <td>{{ object.rebase_time|isodatetime|placeholder }}</td>
           </tr>
         </table>
       </div>

@@ -22,7 +22,9 @@ from utilities.serialization import deserialize_object, serialize_object
 from .choices import ContextStatusChoices
 from .constants import SCHEMA_PREFIX
 from .contextvars import active_context
-from .utilities import ChangeDiff, deactivate_context, get_context_aware_object_types, get_tables_to_replicate
+from .utilities import (
+    ChangeDiff, activate_context, deactivate_context, get_context_aware_object_types, get_tables_to_replicate,
+)
 
 __all__ = (
     'Context',
@@ -187,13 +189,16 @@ class Context(JobsMixin, NetBoxModel):
             time__gt=start_time
         ).order_by('time')
 
-        with transaction.atomic():
-            for change in changes:
-                change.apply(using=self.connection_name)
-            if not commit:
-                raise AbortTransaction()
+        with activate_context(self):
+            with transaction.atomic():
+                Context.objects.filter(pk=self.pk).update(status=ContextStatusChoices.REBASING)
+                for change in changes:
+                    change.apply(using=self.connection_name)
+                if not commit:
+                    raise AbortTransaction()
 
         self.rebase_time = timezone.now()
+        self.status = ContextStatusChoices.READY
         self.save()
 
     def apply(self, commit=True):
@@ -202,11 +207,12 @@ class Context(JobsMixin, NetBoxModel):
         chronological order.
         """
         try:
-            with transaction.atomic():
-                for change in ObjectChange.objects.using(self.connection_name).order_by('time'):
-                    change.apply()
-                if not commit:
-                    raise AbortTransaction()
+            with activate_context(self):
+                with transaction.atomic():
+                    for change in ObjectChange.objects.order_by('time'):
+                        change.apply()
+                    if not commit:
+                        raise AbortTransaction()
         except ValidationError as e:
             messages = ', '.join(e.messages)
             raise ValidationError(f'{change.changed_object}: {messages}')

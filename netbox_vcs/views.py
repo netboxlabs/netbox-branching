@@ -1,10 +1,10 @@
 from django.contrib import messages
 from django.core.exceptions import ValidationError
-from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.shortcuts import redirect
+from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
-from extras.signals import handle_changed_object, handle_deleted_object
+from core.models import Job
 from netbox.views import generic
 from utilities.exceptions import AbortTransaction
 from utilities.views import ViewTab, register_model_view
@@ -95,24 +95,14 @@ class ContextRebaseView(generic.ObjectView):
         form = forms.RebaseContextForm(request.POST)
 
         if form.is_valid():
-            try:
-                # Disconnect changelog handlers
-                post_save.disconnect(handle_changed_object)
-                m2m_changed.disconnect(handle_changed_object)
-                pre_delete.disconnect(handle_deleted_object)
-
-                # Rebase the Context
-                context.rebase(form.cleaned_data['commit'])
-                messages.success(request, f"Rebased context {context}!")
-
-            except AbortTransaction:
-                messages.info(request, f"Rebased context {context} & rolled back")
-
-            finally:
-                # Reconnect signal handlers
-                post_save.connect(handle_changed_object)
-                m2m_changed.connect(handle_changed_object)
-                pre_delete.connect(handle_deleted_object)
+            # Enqueue a background job to rebase the Context
+            Job.enqueue(
+                import_string('netbox_vcs.jobs.rebase_context'),
+                instance=context,
+                name='Rebase context',
+                commit=form.cleaned_data['commit']
+            )
+            messages.success(request, f"Rebasing of context {context} in progress")
 
         return redirect(context.get_absolute_url())
 

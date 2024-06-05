@@ -88,7 +88,7 @@ def get_context_aware_object_types():
     Return all object types which are context aware; i.e. those which support change logging.
     """
     from core.models import ObjectType
-    return ObjectType.objects.with_feature('change_logging')
+    return ObjectType.objects.with_feature('change_logging').exclude(app_label='netbox_vcs')
 
 
 def get_tables_to_replicate():
