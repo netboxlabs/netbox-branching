@@ -8,12 +8,14 @@ class ContextStatusChoices(ChoiceSet):
     PROVISIONING = 'provisioning'
     REBASING = 'rebasing'
     READY = 'ready'
+    APPLIED = 'applied'
     FAILED = 'failed'
 
     CHOICES = (
-        (NEW, _('New'), 'blue'),
+        (NEW, _('New'), 'cyan'),
         (PROVISIONING, _('Provisioning'), 'orange'),
-        (REBASING, _('Rebasing'), 'cyan'),
+        (REBASING, _('Rebasing'), 'orange'),
         (READY, _('Ready'), 'green'),
+        (APPLIED, _('Applied'), 'blue'),
         (FAILED, _('Failed'), 'red'),
     )

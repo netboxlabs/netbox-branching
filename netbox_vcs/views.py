@@ -119,8 +119,7 @@ class ContextApplyView(generic.ObjectView):
             try:
                 context.apply(form.cleaned_data['commit'])
                 messages.success(request, f"Applied context {context}!")
-                context.delete()
-                return redirect('plugins:netbox_vcs:context_list')
+                return redirect(context.get_absolute_url())
             except ValidationError as e:
                 messages.error(self.request, ", ".join(e.messages))
             except AbortTransaction:

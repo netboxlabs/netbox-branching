@@ -55,11 +55,13 @@ class ContextMiddleware:
             if schema_id := request.GET.get(QUERY_PARAM):
                 context = Context.objects.get(schema_id=schema_id)
                 if context.ready:
+                    messages.success(request, f"Activated context {context}")
                     return context
                 else:
                     messages.error(request, f"Context {context} is not ready for use (status: {context.status})")
                     return None
             else:
+                messages.success(request, f"Deactivated context")
                 request.COOKIES.pop(COOKIE_NAME, None)  # Delete cookie if set
                 return None
 

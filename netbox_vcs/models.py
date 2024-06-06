@@ -15,6 +15,7 @@ from mptt.models import MPTTModel
 from core.models import Job
 from extras.choices import ObjectChangeActionChoices
 from extras.models import ObjectChange as ObjectChange_
+from netbox.context import current_request
 from netbox.models import NetBoxModel
 from netbox.models.features import JobsMixin
 from utilities.exceptions import AbortTransaction
@@ -66,6 +67,10 @@ class Context(JobsMixin, NetBoxModel):
         blank=True,
         null=True,
         editable=False
+    )
+    application_id = models.UUIDField(
+        blank=True,
+        null=True
     )
 
     class Meta:
@@ -212,10 +217,18 @@ class Context(JobsMixin, NetBoxModel):
         """
         try:
             with transaction.atomic():
+
+                # Apply each change from the context
                 for change in ObjectChange.objects.using(self.connection_name).order_by('time'):
                     change.apply()
                 if not commit:
                     raise AbortTransaction()
+
+                # Update the Context's status to "applied"
+                self.status = ContextStatusChoices.APPLIED
+                self.application_id = current_request.get().id
+                self.save()
+
         except ValidationError as e:
             messages = ', '.join(e.messages)
             raise ValidationError(f'{change.changed_object}: {messages}')
