@@ -1,3 +1,4 @@
+from django.contrib import messages
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import HttpResponseBadRequest
 
@@ -44,16 +45,25 @@ class ContextMiddleware:
         """
         # The active Context is specified by HTTP header for REST API requests.
         if is_api_request(request) and (schema_id := request.headers.get(CONTEXT_HEADER)):
-            return Context.objects.get(schema_id=schema_id)
+            context = Context.objects.get(schema_id=schema_id)
+            if not context.ready:
+                return HttpResponseBadRequest(f"Context {context} is not ready for use (status: {context.status})")
+            return context
 
         # Context activated/deactivated by URL query parameter
         elif QUERY_PARAM in request.GET:
             if schema_id := request.GET.get(QUERY_PARAM):
-                return Context.objects.get(schema_id=schema_id)
+                context = Context.objects.get(schema_id=schema_id)
+                if context.ready:
+                    return context
+                else:
+                    messages.error(request, f"Context {context} is not ready for use (status: {context.status})")
+                    return None
             else:
                 request.COOKIES.pop(COOKIE_NAME, None)  # Delete cookie if set
                 return None
 
         # Context set by cookie
         elif schema_id := request.COOKIES.get('active_context'):
-            return Context.objects.filter(schema_id=schema_id).first()
+            context = Context.objects.filter(schema_id=schema_id).first()
+            return context if context.ready else None

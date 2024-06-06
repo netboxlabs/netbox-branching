@@ -93,6 +93,10 @@ class Context(JobsMixin, NetBoxModel):
     def is_active(self):
         return self == active_context.get()
 
+    @property
+    def ready(self):
+        return self.status == ContextStatusChoices.READY
+
     @cached_property
     def schema_name(self):
         return f'{SCHEMA_PREFIX}{self.schema_id}'
