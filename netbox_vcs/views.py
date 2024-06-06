@@ -5,6 +5,7 @@ from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
 from core.models import Job
+from netbox.context import current_request
 from netbox.views import generic
 from utilities.exceptions import AbortTransaction
 from utilities.views import ViewTab, register_model_view
@@ -116,13 +117,15 @@ class ContextApplyView(generic.ObjectView):
         form = forms.ApplyContextForm(request.POST)
 
         if form.is_valid():
-            try:
-                context.apply(form.cleaned_data['commit'])
-                messages.success(request, f"Applied context {context}!")
-                return redirect(context.get_absolute_url())
-            except ValidationError as e:
-                messages.error(self.request, ", ".join(e.messages))
-            except AbortTransaction:
-                messages.info(request, f"Applied & rolled back context {context}")
+            # Enqueue a background job to apply the Context
+            Job.enqueue(
+                import_string('netbox_vcs.jobs.apply_context'),
+                instance=context,
+                name='Apply context',
+                user=request.user,
+                commit=form.cleaned_data['commit'],
+                request_id=current_request.get().id
+            )
+            messages.success(request, f"Application of context {context} in progress")
 
         return redirect(context.get_absolute_url())
