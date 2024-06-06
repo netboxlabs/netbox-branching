@@ -28,16 +28,18 @@
                   {% trans "Active" %}
                 </span>
                 <a href="?_context=" class="btn btn-sm btn-danger">
-                  <i class="mdi mdi-source-branch-remove"></i> {% trans "Deactivate" %}
+                  <i class="mdi mdi-close-thick"></i> {% trans "Deactivate" %}
                 </a>
               {% else %}
                 <span>
                   {% checkmark False %}
                   {% trans "Inactive" %}
                 </span>
-                <a href="?_context={{ object.schema_id }}" class="btn btn-sm btn-primary">
-                  <i class="mdi mdi-source-branch-check"></i> {% trans "Activate" %}
-                </a>
+                {% if object.ready %}
+                  <a href="?_context={{ object.schema_id }}" class="btn btn-sm btn-primary">
+                    <i class="mdi mdi-check-bold"></i> {% trans "Activate" %}
+                  </a>
+                {% endif %}
               {% endif %}
             </td>
           </tr>

@@ -4,20 +4,24 @@
     <i class="mdi mdi-source-branch"></i>
     <a href="{{ active_context.get_absolute_url }}" title="{{ active_context.description }}">{{ active_context.name }}</a>
     <a href="?_context=" class="btn btn-sm btn-danger">
-      <i class="mdi mdi-source-branch-remove" title="{% trans "Deactivate" %}"></i>
+      <i class="mdi mdi-close-thick" title="{% trans "Deactivate" %}"></i>
     </a>
   </div>
-{% else %}
+{% elif contexts %}
   <form method="get" class="row align-items-center">
     <div class="col-auto">
       <div class="input-group">
         <select name="_context" id="context_selector" class="form-select form-select-sm">
+          <option></option>
           {% for context in contexts %}
-            <option value="{{ context.schema_id }}">{{ context.name }}</option>
+            <option value="{{ context.schema_id }}"{% if not context.ready %} disabled{% endif %}>
+              {{ context.name }}
+              {% if not context.ready %}({{ context.status }}){% endif %}
+            </option>
           {% endfor %}
         </select>
         <button type="submit" value="Activate" class="btn btn-sm btn-primary" >
-          <i class="mdi mdi-source-branch-check"></i> {% trans "Activate" %}
+          <i class="mdi mdi-check-bold"></i> {% trans "Activate" %}
         </button>
       </div>
     </div>
