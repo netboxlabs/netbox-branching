@@ -247,9 +247,16 @@ class Context(JobsMixin, NetBoxModel):
                 f"CREATE SCHEMA {schema}"
             )
 
-            # Create an empty copy of the global change log
+            # Create an empty copy of the global change log. Share the ID sequence from the main table to avoid
+            # reusing change record IDs.
+            table = ObjectChange_._meta.db_table
             cursor.execute(
-                f"CREATE TABLE {schema}.extras_objectchange ( LIKE public.extras_objectchange INCLUDING ALL )"
+                f"CREATE TABLE {schema}.{table} ( LIKE public.{table} INCLUDING INDEXES )"
+            )
+            # Set the default value for the ID column to the sequence associated with the source table
+            cursor.execute(
+                f"ALTER TABLE {schema}.{table} "
+                f"ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
             )
 
             # Replicate relevant tables from the primary schema
