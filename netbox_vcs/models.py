@@ -207,12 +207,11 @@ class Context(JobsMixin, NetBoxModel):
         chronological order.
         """
         try:
-            with activate_context(self):
-                with transaction.atomic():
-                    for change in ObjectChange.objects.order_by('time'):
-                        change.apply()
-                    if not commit:
-                        raise AbortTransaction()
+            with transaction.atomic():
+                for change in ObjectChange.objects.using(self.connection_name).order_by('time'):
+                    change.apply()
+                if not commit:
+                    raise AbortTransaction()
         except ValidationError as e:
             messages = ', '.join(e.messages)
             raise ValidationError(f'{change.changed_object}: {messages}')
