@@ -12,5 +12,9 @@ class NetBoxVCSConfig(PluginConfig):
         'netbox_vcs.middleware.ContextMiddleware'
     ]
 
+    def ready(self):
+        super().ready()
+        from . import signals
+
 
 config = NetBoxVCSConfig

@@ -11,7 +11,7 @@ from utilities.exceptions import AbortTransaction
 from utilities.views import ViewTab, register_model_view
 
 from . import forms, tables
-from .models import Context, ObjectChange
+from .models import ChangeDiff, Context, ObjectChange
 
 
 class ContextListView(generic.ObjectListView):
@@ -55,7 +55,7 @@ class ContextDiffView(generic.ObjectView):
 
     def get_extra_context(self, request, instance):
         return {
-            'diff': instance.diff()
+            'diffs': ChangeDiff.objects.filter(context=instance)
         }
 
 

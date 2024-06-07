@@ -1,9 +1,9 @@
 import random
 import string
-from collections import defaultdict
 from functools import cached_property
 
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.urls import reverse
@@ -19,15 +19,14 @@ from netbox.context import current_request
 from netbox.models import NetBoxModel
 from netbox.models.features import JobsMixin
 from utilities.exceptions import AbortTransaction
-from utilities.serialization import deserialize_object, serialize_object
+from utilities.serialization import deserialize_object
 from .choices import ContextStatusChoices
 from .constants import SCHEMA_PREFIX
 from .contextvars import active_context
-from .utilities import (
-    ChangeDiff, activate_context, deactivate_context, get_context_aware_object_types, get_tables_to_replicate,
-)
+from .utilities import activate_context, get_context_aware_object_types, get_tables_to_replicate
 
 __all__ = (
+    'ChangeDiff',
     'Context',
     'ObjectChange',
 )
@@ -137,56 +136,6 @@ class Context(JobsMixin, NetBoxModel):
         """
         chars = [*string.ascii_lowercase, *string.digits]
         return ''.join(random.choices(chars, k=length))
-
-    def diff(self):
-        """
-        Return a summary of changes made within this Context relative to the primary schema.
-        """
-        entries = defaultdict(ChangeDiff)
-
-        # Retrieve all ObjectChanges for the Context, in chronological order
-        for change in ObjectChange.objects.using(self.connection_name).order_by('time'):
-            ct = change.changed_object_type
-            key = f'{ct.app_label}.{ct.model}:{change.changed_object_id}'
-            model = change.changed_object_type.model_class()
-            change_diff = change.diff()
-
-            # Retrieve the object in its current form (outside the Context)
-            if change.action != ObjectChangeActionChoices.ACTION_CREATE:
-                with deactivate_context():
-                    try:
-                        # TODO: Optimize object retrieval
-                        instance = model.objects.get(pk=change.changed_object_id)
-                        instance_serialized = serialize_object(instance, exclude=['last_updated'])
-                        current_data = {
-                            k: v for k, v in sorted(instance_serialized.items())
-                            if k in change_diff['post']
-                        }
-                        entries[key].current.update(current_data)
-                    except model.DoesNotExist:
-                        # The object has since been deleted from the primary schema
-                        instance = change.changed_object
-            else:
-                instance = change.changed_object
-
-            if entries[key].action != ObjectChangeActionChoices.ACTION_CREATE:
-                entries[key].action = change.action
-            entries[key].object = instance
-            entries[key].object_repr = change.object_repr
-
-            if change.action == ObjectChangeActionChoices.ACTION_DELETE:
-                entries[key].after = {}
-            else:
-                entries[key].after.update(change_diff['post'])
-
-            if change.action != ObjectChangeActionChoices.ACTION_CREATE:
-                # Skip updating "before" data if this object was created in the context
-                if entries[key].action != ObjectChangeActionChoices.ACTION_CREATE:
-                    for k, v in change_diff['pre'].items():
-                        if k not in entries[key].before:
-                            entries[key].before[k] = v
-
-        return dict(entries)
 
     def rebase(self, commit=True):
         """
@@ -336,3 +285,58 @@ class ObjectChange(ObjectChange_):
             model.objects.rebuild()
 
     apply.alters_data = True
+
+
+class ChangeDiff(models.Model):
+    context = models.ForeignKey(
+        to=Context,
+        on_delete=models.CASCADE
+    )
+    last_updated = models.DateTimeField(
+        auto_now_add=True
+    )
+    object_type = models.ForeignKey(
+        to='contenttypes.ContentType',
+        on_delete=models.PROTECT,
+        related_name='+'
+    )
+    object_id = models.PositiveBigIntegerField()
+    object = GenericForeignKey(
+        ct_field='object_type',
+        fk_field='object_id'
+    )
+    action = models.CharField(
+        verbose_name=_('action'),
+        max_length=50,
+        choices=ObjectChangeActionChoices
+    )
+    original = models.JSONField(
+        blank=True,
+        null=True
+    )
+    modified = models.JSONField(
+        blank=True,
+        null=True
+    )
+    current = models.JSONField(
+        blank=True,
+        null=True
+    )
+
+    class Meta:
+        ordering = ('-last_updated',)
+        indexes = (
+            models.Index(fields=('object_type', 'object_id')),
+        )
+        verbose_name = _('change diff')
+        verbose_name_plural = _('change diffs')
+
+    @cached_property
+    def conflicts(self):
+        if self.action == ObjectChangeActionChoices.ACTION_CREATE:
+            # Newly created objects cannot have change conflicts
+            return []
+        return [
+            k for k in self.modified.keys()
+            if self.modified[k] != self.original[k] and self.current[k] != self.original[k]
+        ]
