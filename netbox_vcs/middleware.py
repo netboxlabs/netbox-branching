@@ -1,6 +1,7 @@
 from django.contrib import messages
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import HttpResponseBadRequest
+from django.urls import reverse
 
 from utilities.api import is_api_request
 
@@ -44,7 +45,7 @@ class ContextMiddleware:
         Return the active Context (if any).
         """
         # The active Context is specified by HTTP header for REST API requests.
-        if is_api_request(request) and (schema_id := request.headers.get(CONTEXT_HEADER)):
+        if request.path_info.startswith(reverse('api-root')) and (schema_id := request.headers.get(CONTEXT_HEADER)):
             context = Context.objects.get(schema_id=schema_id)
             if not context.ready:
                 return HttpResponseBadRequest(f"Context {context} is not ready for use (status: {context.status})")

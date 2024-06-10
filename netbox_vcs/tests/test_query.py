@@ -1,3 +1,4 @@
+from django.db import connections
 from django.test import TransactionTestCase
 
 from dcim.models import DeviceRole, Site
@@ -7,6 +8,12 @@ from netbox_vcs.utilities import activate_context
 
 
 class QueryTestCase(TransactionTestCase):
+    serialized_rollback = True
+
+    def tearDown(self):
+        # Manually tear down the dynamic connection created for the Context
+        context = Context.objects.first()
+        connections[context.connection_name].close()
 
     def test_query(self):
         Site.objects.create(name='Site 1', slug='site-1')
