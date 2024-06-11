@@ -28,10 +28,10 @@ def record_change_diff(instance, **kwargs):
             return
 
         print(f"Updating change diff for global change to {instance.changed_object}")
-        ChangeDiff.objects.filter(object_type=object_type, object_id=object_id).update(
-            last_updated=timezone.now(),
-            current=instance.postchange_data
-        )
+        if diff := ChangeDiff.objects.filter(object_type=object_type, object_id=object_id).first():
+            diff.last_updated = timezone.now()
+            diff.current = instance.postchange_data
+            diff.save()
 
     # If this is a context-aware change, create or update ChangeDiff for this object.
     else:
@@ -54,7 +54,7 @@ def record_change_diff(instance, **kwargs):
                 model = instance.changed_object_type.model_class()
                 obj = model.objects.using(DEFAULT_DB_ALIAS).get(pk=instance.changed_object_id)
                 current_data = serialize_object(obj)
-            ChangeDiff.objects.create(
+            diff = ChangeDiff(
                 context=context,
                 object_type=instance.changed_object_type,
                 object_id=instance.changed_object_id,
@@ -64,3 +64,4 @@ def record_change_diff(instance, **kwargs):
                 current=current_data,
                 last_updated=timezone.now(),
             )
+            diff.save()

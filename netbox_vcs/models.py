@@ -4,6 +4,7 @@ from functools import cached_property
 
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.urls import reverse
@@ -322,6 +323,12 @@ class ChangeDiff(models.Model):
         blank=True,
         null=True
     )
+    conflicts = ArrayField(
+        base_field=models.CharField(max_length=100),
+        editable=False,
+        blank=True,
+        null=True
+    )
 
     class Meta:
         ordering = ('-last_updated',)
@@ -331,19 +338,24 @@ class ChangeDiff(models.Model):
         verbose_name = _('change diff')
         verbose_name_plural = _('change diffs')
 
+    def save(self, *args, **kwargs):
+        self._update_conflicts()
+
+        super().save(*args, **kwargs)
+
     def get_action_color(self):
         return ObjectChangeActionChoices.colors.get(self.action)
 
-    @staticmethod
-    def _diff(a, b):
+    def _update_conflicts(self):
         """
-        Return a dictionary of attributes which have been modified from their original values.
+        Record any conflicting changes between the modified and current object data.
         """
-        return {
-            k: v
-            for k, v in b.items()
-            if v != a[k]
-        }
+        if self.action != ObjectChangeActionChoices.ACTION_CREATE:
+            conflicts = [
+                k for k, v in self.original.items()
+                if v != self.modified[k] and v != self.current[k] and self.modified[k] != self.current[k]
+            ]
+            self.conflicts = conflicts
 
     @cached_property
     def altered_in_modified(self):
@@ -401,13 +413,3 @@ class ChangeDiff(models.Model):
             k: v for k, v in self.current.items()
             if k in self.altered_fields
         }
-
-    @cached_property
-    def conflicts(self):
-        if self.action == ObjectChangeActionChoices.ACTION_CREATE:
-            # Newly created objects cannot have change conflicts
-            return []
-        return [
-            k for k, v in self.original.items()
-            if v != self.modified[k] and v != self.current[k]
-        ]
