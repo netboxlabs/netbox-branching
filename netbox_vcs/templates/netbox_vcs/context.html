@@ -48,6 +48,16 @@
             <td>{{ object.description|placeholder }}</td>
           </tr>
           <tr>
+            <th scope="row">{% trans "Conflicts" %}</th>
+            <td>
+              {% if conflict_count %}
+                <span class="text-red">{{ conflict_count }} {% trans "conflicts found" %}</span>
+              {% else %}
+                <span class="text-green">{% trans "None found" %}</span>
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
             <th scope="row">{% trans "Schema" %}</th>
             <td class="font-monospace">{{ object.schema_name }}</td>
           </tr>

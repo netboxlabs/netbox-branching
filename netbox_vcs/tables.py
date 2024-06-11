@@ -46,6 +46,10 @@ class ContextTable(NetBoxTable):
     status = columns.ChoiceFieldColumn(
         verbose_name=_('Status'),
     )
+    # TODO: Invert checkmark condition
+    conflicts = columns.BooleanColumn(
+        verbose_name=_('Conflicts')
+    )
     schema_id = tables.TemplateColumn(
         template_code='<span class="font-monospace">{{ value }}</code>'
     )
@@ -53,10 +57,10 @@ class ContextTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = Context
         fields = (
-            'pk', 'id', 'name', 'is_active', 'status', 'schema_id', 'description', 'user', 'tags', 'created',
-            'last_updated',
+            'pk', 'id', 'name', 'is_active', 'status', 'conflicts', 'schema_id', 'description', 'user', 'tags',
+            'created', 'last_updated',
         )
-        default_columns = ('pk', 'name', 'is_active', 'status', 'schema_id', 'description', 'user')
+        default_columns = ('pk', 'name', 'is_active', 'status', 'conflicts', 'schema_id', 'description', 'user')
 
 
 class ChangeDiffTable(NetBoxTable):

@@ -1,4 +1,5 @@
 from django.contrib import messages
+from django.db.models import Count, Q
 from django.shortcuts import redirect
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
@@ -13,7 +14,10 @@ from .models import ChangeDiff, Context, ObjectChange
 
 
 class ContextListView(generic.ObjectListView):
-    queryset = Context.objects.all()
+    queryset = Context.objects.annotate(
+        # Annotate the number of associated ChangeDiffs with conflicts
+        conflicts=Count('changediff', filter=Q(changediff__conflicts__isnull=False))
+    )
     # filterset = filtersets.ContextFilterSet
     # filterset_form = forms.ContextFilterForm
     table = tables.ContextTable
@@ -25,6 +29,7 @@ class ContextView(generic.ObjectView):
 
     def get_extra_context(self, request, instance):
         return {
+            'conflict_count': ChangeDiff.objects.filter(context=instance, conflicts__isnull=False).count(),
             'rebase_form': forms.RebaseContextForm(),
             'apply_form': forms.ApplyContextForm(),
         }
@@ -42,6 +47,10 @@ class ContextDeleteView(generic.ObjectDeleteView):
     default_return_url = 'plugins:netbox_vcs:context_list'
 
 
+def _get_diff_count(obj):
+    return ChangeDiff.objects.filter(context=obj).count()
+
+
 @register_model_view(Context, 'diff')
 class ContextDiffView(generic.ObjectChildrenView):
     queryset = Context.objects.all()
@@ -50,6 +59,7 @@ class ContextDiffView(generic.ObjectChildrenView):
     actions = {}
     tab = ViewTab(
         label=_('Diff'),
+        badge=_get_diff_count,
         permission='netbox_vcs.view_context'
     )
 
