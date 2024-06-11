@@ -331,12 +331,83 @@ class ChangeDiff(models.Model):
         verbose_name = _('change diff')
         verbose_name_plural = _('change diffs')
 
+    def get_action_color(self):
+        return ObjectChangeActionChoices.colors.get(self.action)
+
+    @staticmethod
+    def _diff(a, b):
+        """
+        Return a dictionary of attributes which have been modified from their original values.
+        """
+        return {
+            k: v
+            for k, v in b.items()
+            if v != a[k]
+        }
+
+    @cached_property
+    def altered_in_modified(self):
+        """
+        Return the set of attributes altered in the context schema.
+        """
+        return {
+            k for k, v in self.modified.items()
+            if v != self.original[k]
+        }
+
+    @cached_property
+    def altered_in_current(self):
+        """
+        Return the set of attributes altered in the primary schema.
+        """
+        return {
+            k for k, v in self.current.items()
+            if v != self.original[k]
+        }
+
+    @cached_property
+    def altered_fields(self):
+        """
+        Return an ordered list of attributes which have been modified in either the context or primary schema.
+        """
+        return sorted([*self.altered_in_modified, *self.altered_in_current])
+
+    @cached_property
+    def original_diff(self):
+        """
+        Return a key-value mapping of all attributes in the original state which have been modified.
+        """
+        return {
+            k: v for k, v in self.original.items()
+            if k in self.altered_fields
+        }
+
+    @cached_property
+    def modified_diff(self):
+        """
+        Return a key-value mapping of all attributes which have been modified within the context.
+        """
+        return {
+            k: v for k, v in self.modified.items()
+            if k in self.altered_fields
+        }
+
+    @cached_property
+    def current_diff(self):
+        """
+        Return a key-value mapping of all attributes which have been modified outside the context.
+        """
+        return {
+            k: v for k, v in self.current.items()
+            if k in self.altered_fields
+        }
+
     @cached_property
     def conflicts(self):
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
             # Newly created objects cannot have change conflicts
             return []
         return [
-            k for k in self.modified.keys()
-            if self.modified[k] != self.original[k] and self.current[k] != self.original[k]
+            k for k, v in self.original.items()
+            if v != self.modified[k] and v != self.current[k]
         ]

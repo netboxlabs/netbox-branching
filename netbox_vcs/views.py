@@ -1,5 +1,4 @@
 from django.contrib import messages
-from django.core.exceptions import ValidationError
 from django.shortcuts import redirect
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
@@ -7,7 +6,6 @@ from django.utils.translation import gettext_lazy as _
 from core.models import Job
 from netbox.context import current_request
 from netbox.views import generic
-from utilities.exceptions import AbortTransaction
 from utilities.views import ViewTab, register_model_view
 
 from . import forms, tables
@@ -45,18 +43,18 @@ class ContextDeleteView(generic.ObjectDeleteView):
 
 
 @register_model_view(Context, 'diff')
-class ContextDiffView(generic.ObjectView):
+class ContextDiffView(generic.ObjectChildrenView):
     queryset = Context.objects.all()
-    template_name = 'netbox_vcs/context_diff.html'
+    child_model = ChangeDiff
+    table = tables.ChangeDiffTable
+    actions = {}
     tab = ViewTab(
         label=_('Diff'),
         permission='netbox_vcs.view_context'
     )
 
-    def get_extra_context(self, request, instance):
-        return {
-            'diffs': ChangeDiff.objects.filter(context=instance)
-        }
+    def get_children(self, request, parent):
+        return ChangeDiff.objects.filter(context=parent)
 
 
 def _get_change_count(obj):
