@@ -364,7 +364,7 @@ class ChangeDiff(models.Model):
         """
         return {
             k for k, v in self.modified.items()
-            if v != self.original[k]
+            if k in self.original and v != self.original[k]
         }
 
     @cached_property
@@ -374,7 +374,7 @@ class ChangeDiff(models.Model):
         """
         return {
             k for k, v in self.current.items()
-            if v != self.original[k]
+            if k in self.original and v != self.original[k]
         }
 
     @cached_property
