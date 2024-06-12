@@ -19,7 +19,7 @@ from extras.models import ObjectChange as ObjectChange_
 from netbox.context import current_request
 from netbox.models import NetBoxModel
 from netbox.models.features import JobsMixin
-from utilities.exceptions import AbortTransaction
+from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
 from .choices import ContextStatusChoices
@@ -118,6 +118,9 @@ class Context(JobsMixin, NetBoxModel):
     def save(self, *args, **kwargs):
         _provision = self.pk is None
 
+        if active_context.get():
+            raise AbortRequest(_("Cannot create or modify a context while a context is active."))
+
         super().save(*args, **kwargs)
 
         if _provision:
@@ -129,6 +132,9 @@ class Context(JobsMixin, NetBoxModel):
             )
 
     def delete(self, *args, **kwargs):
+        if active_context.get():
+            raise AbortRequest(_("Cannot delete a context while a context is active."))
+
         ret = super().delete(*args, **kwargs)
 
         self.deprovision()
