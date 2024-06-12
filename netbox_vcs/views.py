@@ -30,7 +30,7 @@ class ContextView(generic.ObjectView):
     queryset = Context.objects.all()
 
     def get_extra_context(self, request, instance):
-        qs = ObjectChange.objects.using(instance.connection_name).values_list('changed_object_type').annotate(count=Count('pk'))
+        qs = instance.get_changes().values_list('changed_object_type').annotate(count=Count('pk'))
         stats = {
             'created': {
                 ContentType.objects.get(pk=ct).model_class(): count
@@ -88,7 +88,7 @@ class ContextDiffView(generic.ObjectChildrenView):
 
 
 def _get_change_count(obj):
-    return ObjectChange.objects.using(obj.connection_name).count()
+    return obj.get_changes().count()
 
 
 @register_model_view(Context, 'replay')
@@ -103,7 +103,7 @@ class ContextReplayView(generic.ObjectView):
 
     def get_extra_context(self, request, instance):
         replay = []
-        for change in ObjectChange.objects.using(instance.connection_name).order_by('time'):
+        for change in instance.get_changes():
             replay.append({
                 'model': change.changed_object_type.model_class(),
                 'change': change,

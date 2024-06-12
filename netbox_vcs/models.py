@@ -142,6 +142,14 @@ class Context(JobsMixin, NetBoxModel):
         chars = [*string.ascii_lowercase, *string.digits]
         return ''.join(random.choices(chars, k=length))
 
+    def get_changes(self):
+        """
+        Return a queryset of all ObjectChange records created within the Context.
+        """
+        if not self.ready:
+            return ObjectChange.objects.none()
+        return ObjectChange.objects.using(self.connection_name)
+
     def get_unsynced_changes(self):
         """
         Return a queryset of all ObjectChange records created since the Context
@@ -150,18 +158,16 @@ class Context(JobsMixin, NetBoxModel):
         return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
             changed_object_type__in=get_context_aware_object_types(),
             time__gt=self.synced_time
-        ).order_by('time')
+        )
 
     def sync(self, commit=True):
         """
         Replay changes from the primary schema onto the Context's schema.
         """
-        changes = self.get_unsynced_changes()
-
         with activate_context(self):
             with transaction.atomic():
                 Context.objects.filter(pk=self.pk).update(status=ContextStatusChoices.REBASING)
-                for change in changes:
+                for change in self.get_unsynced_changes().order_by('time'):
                     change.apply(using=self.connection_name)
                 if not commit:
                     raise AbortTransaction()
@@ -179,7 +185,7 @@ class Context(JobsMixin, NetBoxModel):
             with transaction.atomic():
 
                 # Apply each change from the context
-                for change in ObjectChange.objects.using(self.connection_name).order_by('time'):
+                for change in self.get_changes().order_by('time'):
                     change.apply()
                 if not commit:
                     raise AbortTransaction()
