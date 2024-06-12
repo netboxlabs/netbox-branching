@@ -68,6 +68,10 @@ class ChangeDiffTable(NetBoxTable):
         verbose_name=_('Name'),
         linkify=True
     )
+    context = tables.Column(
+        verbose_name=_('Context'),
+        linkify=True
+    )
     object = tables.Column(
         verbose_name=_('Object'),
         linkify=True
@@ -99,7 +103,7 @@ class ChangeDiffTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = ChangeDiff
         fields = (
-            'context', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff',
+            'context', 'object_type', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff',
             'last_updated', 'actions',
         )
-        default_columns = ('object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff')
+        default_columns = ('context', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff')

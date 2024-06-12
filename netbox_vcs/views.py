@@ -10,18 +10,21 @@ from extras.choices import ObjectChangeActionChoices
 from netbox.context import current_request
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
+from . import filtersets, forms, tables
+from .models import ChangeDiff, Context
 
-from . import forms, tables
-from .models import ChangeDiff, Context, ObjectChange
 
+#
+# Contexts
+#
 
 class ContextListView(generic.ObjectListView):
     queryset = Context.objects.annotate(
         # Annotate the number of associated ChangeDiffs with conflicts
         conflicts=Count('changediff', filter=Q(changediff__conflicts__isnull=False))
     )
-    # filterset = filtersets.ContextFilterSet
-    # filterset_form = forms.ContextFilterForm
+    filterset = filtersets.ContextFilterSet
+    filterset_form = forms.ContextFilterForm
     table = tables.ContextTable
 
 
@@ -157,3 +160,14 @@ class ContextApplyView(generic.ObjectView):
             messages.success(request, f"Application of context {context} in progress")
 
         return redirect(context.get_absolute_url())
+
+
+#
+# Change diffs
+#
+
+class ChangeDiffListView(generic.ObjectListView):
+    queryset = ChangeDiff.objects.all()
+    filterset = filtersets.ChangeDiffFilterSet
+    filterset_form = forms.ChangeDiffFilterForm
+    table = tables.ChangeDiffTable

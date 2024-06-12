@@ -20,6 +20,7 @@ from netbox.context import current_request
 from netbox.models import NetBoxModel
 from netbox.models.features import JobsMixin
 from utilities.exceptions import AbortTransaction
+from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
 from .choices import ContextStatusChoices
 from .constants import SCHEMA_PREFIX
@@ -345,6 +346,8 @@ class ChangeDiff(models.Model):
         blank=True,
         null=True
     )
+
+    objects = RestrictedQuerySet.as_manager()
 
     class Meta:
         ordering = ('-last_updated',)
