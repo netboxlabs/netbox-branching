@@ -63,7 +63,7 @@ class Context(JobsMixin, NetBoxModel):
         default=ContextStatusChoices.NEW,
         editable=False
     )
-    rebase_time = models.DateTimeField(
+    last_sync = models.DateTimeField(
         blank=True,
         null=True,
         editable=False
@@ -112,7 +112,7 @@ class Context(JobsMixin, NetBoxModel):
 
     @cached_property
     def synced_time(self):
-        return self.rebase_time or self.created
+        return self.last_sync or self.created
 
     def save(self, *args, **kwargs):
         _provision = self.pk is None
@@ -145,14 +145,14 @@ class Context(JobsMixin, NetBoxModel):
     def get_unsynced_changes(self):
         """
         Return a queryset of all ObjectChange records created since the Context
-        was last rebased or created.
+        was last synced or created.
         """
         return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
             changed_object_type__in=get_context_aware_object_types(),
             time__gt=self.synced_time
         ).order_by('time')
 
-    def rebase(self, commit=True):
+    def sync(self, commit=True):
         """
         Replay changes from the primary schema onto the Context's schema.
         """
@@ -166,7 +166,7 @@ class Context(JobsMixin, NetBoxModel):
                 if not commit:
                     raise AbortTransaction()
 
-        self.rebase_time = timezone.now()
+        self.last_sync = timezone.now()
         self.status = ContextStatusChoices.READY
         self.save()
 

@@ -19,7 +19,7 @@ class ContextForm(NetBoxModelForm):
         )
 
 
-class RebaseContextForm(ConfirmationForm):
+class SyncContextForm(ConfirmationForm):
     commit = forms.BooleanField(
         required=False
     )

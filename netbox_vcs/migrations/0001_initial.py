@@ -26,7 +26,7 @@ class Migration(migrations.Migration):
                 ('schema_id', models.CharField(editable=False, max_length=8)),
                 ('status', models.CharField(default='new', editable=False, max_length=50)),
                 ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='contexts', to=settings.AUTH_USER_MODEL)),
-                ('rebase_time', models.DateTimeField(blank=True, null=True, editable=False)),
+                ('last_sync', models.DateTimeField(blank=True, null=True, editable=False)),
                 ('application_id', models.UUIDField(blank=True, null=True)),
                 ('custom_field_data', models.JSONField(blank=True, default=dict, encoder=utilities.json.CustomFieldJSONEncoder)),
                 ('tags', taggit.managers.TaggableManager(through='extras.TaggedItem', to='extras.Tag')),

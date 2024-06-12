@@ -17,7 +17,7 @@ from .models import Context
 __all__ = (
     'apply_context',
     'provision_context',
-    'rebase_context',
+    'sync_context',
 )
 
 
@@ -70,7 +70,7 @@ def apply_context(job, commit=True, request_id=None):
             raise e
 
 
-def rebase_context(job, commit=True):
+def sync_context(job, commit=True):
     context = Context.objects.get(pk=job.object_id)
 
     try:
@@ -82,7 +82,7 @@ def rebase_context(job, commit=True):
         m2m_changed.disconnect(handle_changed_object)
         pre_delete.disconnect(handle_deleted_object)
 
-        context.rebase(commit=commit)
+        context.sync(commit=commit)
 
         job.terminate()
 

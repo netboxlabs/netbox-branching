@@ -50,7 +50,7 @@ class ContextView(generic.ObjectView):
             'stats': stats,
             'unsynced_changes_count': instance.get_unsynced_changes().count(),
             'conflicts_count': ChangeDiff.objects.filter(context=instance, conflicts__isnull=False).count(),
-            'rebase_form': forms.RebaseContextForm(),
+            'sync_form': forms.SyncContextForm(),
             'apply_form': forms.ApplyContextForm(),
         }
 
@@ -115,23 +115,23 @@ class ContextReplayView(generic.ObjectView):
         }
 
 
-@register_model_view(Context, 'rebase')
-class ContextRebaseView(generic.ObjectView):
+@register_model_view(Context, 'sync')
+class ContextSyncView(generic.ObjectView):
     queryset = Context.objects.all()
 
     def post(self, request, **kwargs):
         context = self.get_object(**kwargs)
-        form = forms.RebaseContextForm(request.POST)
+        form = forms.SyncContextForm(request.POST)
 
         if form.is_valid():
-            # Enqueue a background job to rebase the Context
+            # Enqueue a background job to sync the Context
             Job.enqueue(
-                import_string('netbox_vcs.jobs.rebase_context'),
+                import_string('netbox_vcs.jobs.sync_context'),
                 instance=context,
-                name='Rebase context',
+                name='Sync context',
                 commit=form.cleaned_data['commit']
             )
-            messages.success(request, f"Rebasing of context {context} in progress")
+            messages.success(request, f"Syncing of context {context} in progress")
 
         return redirect(context.get_absolute_url())
 
