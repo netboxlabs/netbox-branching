@@ -7,6 +7,7 @@ from django.utils.translation import gettext_lazy as _
 
 from core.models import Job
 from extras.choices import ObjectChangeActionChoices
+from extras.models import ObjectChange
 from netbox.context import current_request
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
@@ -95,27 +96,19 @@ def _get_change_count(obj):
 
 
 @register_model_view(Context, 'replay')
-class ContextReplayView(generic.ObjectView):
+class ContextReplayView(generic.ObjectChildrenView):
     queryset = Context.objects.all()
-    template_name = 'netbox_vcs/context_replay.html'
+    child_model = ObjectChange
+    table = tables.ReplayTable
+    actions = {}
     tab = ViewTab(
         label=_('Replay'),
         badge=_get_change_count,
         permission='netbox_vcs.view_context'
     )
 
-    def get_extra_context(self, request, instance):
-        replay = []
-        for change in instance.get_changes():
-            replay.append({
-                'model': change.changed_object_type.model_class(),
-                'change': change,
-                'data': change.diff(),
-            })
-
-        return {
-            'replay': replay
-        }
+    def get_children(self, request, parent):
+        return parent.get_changes().order_by('time')
 
 
 @register_model_view(Context, 'sync')
