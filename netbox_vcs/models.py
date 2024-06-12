@@ -110,6 +110,10 @@ class Context(JobsMixin, NetBoxModel):
     def connection_name(self):
         return f'schema_{self.schema_name}'
 
+    @cached_property
+    def synced_time(self):
+        return self.rebase_time or self.created
+
     def save(self, *args, **kwargs):
         _provision = self.pk is None
 
@@ -138,15 +142,21 @@ class Context(JobsMixin, NetBoxModel):
         chars = [*string.ascii_lowercase, *string.digits]
         return ''.join(random.choices(chars, k=length))
 
+    def get_unsynced_changes(self):
+        """
+        Return a queryset of all ObjectChange records created since the Context
+        was last rebased or created.
+        """
+        return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
+            changed_object_type__in=get_context_aware_object_types(),
+            time__gt=self.synced_time
+        ).order_by('time')
+
     def rebase(self, commit=True):
         """
         Replay changes from the primary schema onto the Context's schema.
         """
-        start_time = self.rebase_time or self.created
-        changes = ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
-            changed_object_type__in=get_context_aware_object_types(),
-            time__gt=start_time
-        ).order_by('time')
+        changes = self.get_unsynced_changes()
 
         with activate_context(self):
             with transaction.atomic():
@@ -350,12 +360,18 @@ class ChangeDiff(models.Model):
         """
         Record any conflicting changes between the modified and current object data.
         """
-        if self.action != ObjectChangeActionChoices.ACTION_CREATE:
+        conflicts = None
+        if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             conflicts = [
                 k for k, v in self.original.items()
                 if v != self.modified[k] and v != self.current[k] and self.modified[k] != self.current[k]
             ]
-            self.conflicts = conflicts
+        elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
+            conflicts = [
+                k for k, v in self.original.items()
+                if v != self.current[k]
+            ]
+        self.conflicts = conflicts or None
 
     @cached_property
     def altered_in_modified(self):
