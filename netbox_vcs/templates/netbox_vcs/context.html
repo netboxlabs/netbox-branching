@@ -5,8 +5,26 @@
 {% load render_table from django_tables2 %}
 {% load i18n %}
 
+{% block extra_controls %}
+  {% if not object.is_active %}
+    {% if object.ready %}
+      <a href="?_context={{ object.schema_id }}" class="btn btn-primary" role="button">
+        <i class="mdi mdi-check-bold"></i> {% trans "Activate" %}
+      </a>
+    {% else %}
+      <a href="?_context={{ object.schema_id }}" class="btn btn-primary disabled" role="button" aria-disabled="true">
+        <i class="mdi mdi-check-bold"></i> {% trans "Activate" %}
+      </a>
+    {% endif %}
+  {% elif object.is_active %}
+    <a href="?_context=" class="btn btn-danger">
+      <i class="mdi mdi-close-thick"></i> {% trans "Deactivate" %}
+    </a>
+  {% endif %}
+{% endblock %}
+
 {% block content %}
-  <div class="row mb-3">
+  <div class="row">
 	  <div class="col col-md-6">
       <div class="card">
         <h5 class="card-header">{% trans "Context" %}</h5>
@@ -17,29 +35,12 @@
           </tr>
           <tr>
             <th scope="row">{% trans "Status" %}</th>
-            <td>{% badge object.get_status_display object.get_status_color %}</td>
-          </tr>
-          <tr>
-            <th scope="row">{% trans "Active" %}</th>
-            <td class="d-flex justify-content-between">
+            <td>
               {% if object.is_active %}
-                <span class="text-green">
-                  {% checkmark True %}
-                  {% trans "Active" %}
-                </span>
-                <a href="?_context=" class="btn btn-sm btn-danger">
-                  <i class="mdi mdi-close-thick"></i> {% trans "Deactivate" %}
-                </a>
+                {% trans "Active" as status %}
+                {% badge status "blue" %}
               {% else %}
-                <span>
-                  {% checkmark False %}
-                  {% trans "Inactive" %}
-                </span>
-                {% if object.ready %}
-                  <a href="?_context={{ object.schema_id }}" class="btn btn-sm btn-primary">
-                    <i class="mdi mdi-check-bold"></i> {% trans "Activate" %}
-                  </a>
-                {% endif %}
+                {% badge object.get_status_display object.get_status_color %}
               {% endif %}
             </td>
           </tr>
@@ -50,20 +51,19 @@
           <tr>
             <th scope="row">{% trans "Conflicts" %}</th>
             <td>
-              {% if conflict_count %}
-                <span class="text-red">{{ conflict_count }} {% trans "conflicts found" %}</span>
+              {% if conflicts_count %}
+                <span class="text-red">{{ conflicts_count }} {% trans "conflicts found" %}</span>
               {% else %}
-                <span class="text-green">{% trans "None found" %}</span>
+                <span class="text-green">
+                  <i class="mdi mdi-check-bold"></i>
+                  {% trans "None found" %}
+                </span>
               {% endif %}
             </td>
           </tr>
           <tr>
             <th scope="row">{% trans "Schema" %}</th>
             <td class="font-monospace">{{ object.schema_name }}</td>
-          </tr>
-          <tr>
-            <th scope="row">{% trans "Last Rebased" %}</th>
-            <td>{{ object.rebase_time|isodatetime|placeholder }}</td>
           </tr>
           <tr>
             <th scope="row">{% trans "Application ID" %}</th>
@@ -83,6 +83,25 @@
     <div class="col col-md-6">
       <div class="card">
         <h5 class="card-header">Rebase Context</h5>
+        <table class="table table-hover attr-table">
+          <tr>
+            <th scope="row">{% trans "Last synced" %}</th>
+            <td>{{ object.synced_time|isodatetime }}</td>
+          </tr>
+        <tr>
+          <th scope="row">{% trans "Unsynced changes" %}</th>
+          <td>
+            {% if unsynced_changes_count and not object.is_active %}
+              {# TODO: Fix timezone awareness #}
+              <a href="{% url 'extras:objectchange_list' %}?time_after={{ object.synced_time|date:"Y-m-d H:i:s" }}">{{ unsynced_changes_count }}</a>
+            {% elif unsynced_changes_count %}
+              {{ unsynced_changes_count }}
+            {% else %}
+              <span class="text-muted">{% trans "None" %}</span>
+            {% endif %}
+          </td>
+        </tr>
+        </table>
         {% if object.is_active %}
           <div class="card-body">
             Deactivate context to rebase
@@ -115,6 +134,47 @@
       </div>
       {% include 'inc/panels/custom_fields.html' %}
       {% plugin_right_page object %}
+    </div>
+  </div>
+  <div class="row">
+    <div class="col col-4">
+      <div class="card border-green">
+        <h5 class="card-header text-green">{% trans "Created" %}</h5>
+        <ul class="list-group list-group-flush">
+          {% for model, count in stats.created.items %}
+            <li class="list-group-item d-flex justify-content-between">
+              {{ model|meta:"verbose_name_plural"|bettertitle }}
+              <span class="badge">{{ count }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    <div class="col col-4">
+      <div class="card border-yellow">
+        <h5 class="card-header text-yellow">{% trans "Updated" %}</h5>
+        <ul class="list-group list-group-flush">
+          {% for model, count in stats.updated.items %}
+            <li class="list-group-item d-flex justify-content-between">
+              {{ model|meta:"verbose_name_plural"|bettertitle }}
+              <span class="badge">{{ count }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    <div class="col col-4">
+      <div class="card border-red">
+        <h5 class="card-header text-red">{% trans "Deleted" %}</h5>
+        <ul class="list-group list-group-flush">
+          {% for model, count in stats.deleted.items %}
+            <li class="list-group-item d-flex justify-content-between">
+              {{ model|meta:"verbose_name_plural"|bettertitle }}
+              <span class="badge">{{ count }}</span>
+            </li>
+          {% endfor %}
+        </ul>
+      </div>
     </div>
   </div>
   <div class="row mb-3">

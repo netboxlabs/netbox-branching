@@ -1,10 +1,12 @@
 from django.contrib import messages
+from django.contrib.contenttypes.models import ContentType
 from django.db.models import Count, Q
 from django.shortcuts import redirect
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
 from core.models import Job
+from extras.choices import ObjectChangeActionChoices
 from netbox.context import current_request
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
@@ -28,8 +30,26 @@ class ContextView(generic.ObjectView):
     queryset = Context.objects.all()
 
     def get_extra_context(self, request, instance):
+        qs = ObjectChange.objects.using(instance.connection_name).values_list('changed_object_type').annotate(count=Count('pk'))
+        stats = {
+            'created': {
+                ContentType.objects.get(pk=ct).model_class(): count
+                for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_CREATE)
+            },
+            'updated': {
+                ContentType.objects.get(pk=ct).model_class(): count
+                for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_UPDATE)
+            },
+            'deleted': {
+                ContentType.objects.get(pk=ct).model_class(): count
+                for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_DELETE)
+            },
+        }
+
         return {
-            'conflict_count': ChangeDiff.objects.filter(context=instance, conflicts__isnull=False).count(),
+            'stats': stats,
+            'unsynced_changes_count': instance.get_unsynced_changes().count(),
+            'conflicts_count': ChangeDiff.objects.filter(context=instance, conflicts__isnull=False).count(),
             'rebase_form': forms.RebaseContextForm(),
             'apply_form': forms.ApplyContextForm(),
         }
