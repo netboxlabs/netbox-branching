@@ -1,6 +1,9 @@
 from netbox.api.routers import NetBoxRouter
-from .views import ContextViewSet
+from . import views
 
 router = NetBoxRouter()
-router.register('context', ContextViewSet)
+router.APIRootView = views.VCSRootView
+router.register('contexts', views.ContextViewSet)
+router.register('changes', views.ChangeDiffViewSet)
+
 urlpatterns = router.urls

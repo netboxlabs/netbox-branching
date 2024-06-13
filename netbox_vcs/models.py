@@ -363,6 +363,9 @@ class ChangeDiff(models.Model):
         verbose_name = _('change diff')
         verbose_name_plural = _('change diffs')
 
+    def __str__(self):
+        return f'{self.get_action_display()} {self.object_type.name} {self.object_id}'
+
     def save(self, *args, **kwargs):
         self._update_conflicts()
 
