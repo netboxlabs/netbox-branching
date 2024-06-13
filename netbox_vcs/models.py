@@ -256,7 +256,7 @@ class Context(JobsMixin, NetBoxModel):
         with connection.cursor() as cursor:
             # Delete the schema and all its tables
             cursor.execute(
-                f"DROP SCHEMA {self.schema_name} CASCADE"
+                f"DROP SCHEMA IF EXISTS {self.schema_name} CASCADE"
             )
 
 
