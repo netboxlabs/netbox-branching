@@ -7,6 +7,7 @@ from django.utils.translation import gettext_lazy as _
 
 from core.models import Job
 from extras.choices import ObjectChangeActionChoices
+from extras.filtersets import ObjectChangeFilterSet
 from extras.models import ObjectChange
 from netbox.context import current_request
 from netbox.views import generic
@@ -37,15 +38,15 @@ class ContextView(generic.ObjectView):
         qs = instance.get_changes().values_list('changed_object_type').annotate(count=Count('pk'))
         stats = {
             'created': {
-                ContentType.objects.get(pk=ct).model_class(): count
+                ContentType.objects.get(pk=ct): count
                 for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_CREATE)
             },
             'updated': {
-                ContentType.objects.get(pk=ct).model_class(): count
+                ContentType.objects.get(pk=ct): count
                 for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_UPDATE)
             },
             'deleted': {
-                ContentType.objects.get(pk=ct).model_class(): count
+                ContentType.objects.get(pk=ct): count
                 for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_DELETE)
             },
         }
@@ -100,6 +101,7 @@ def _get_change_count(obj):
 class ContextReplayView(generic.ObjectChildrenView):
     queryset = Context.objects.all()
     child_model = ObjectChange
+    filterset = ObjectChangeFilterSet
     table = tables.ReplayTable
     actions = {}
     tab = ViewTab(
