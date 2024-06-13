@@ -56,7 +56,15 @@ class ChangeDiffFilterSet(BaseFilterSet):
         choices=ObjectChangeActionChoices,
         null_value=None
     )
+    has_conflicts = django_filters.BooleanFilter(
+        method='_has_conflicts'
+    )
 
     class Meta:
         model = ChangeDiff
         fields = ('id', 'object_type', 'object_id')
+
+    def _has_conflicts(self, queryset, name, value):
+        if value:
+            return queryset.filter(conflicts__isnull=False)
+        return queryset.filter(conflicts__isnull=True)

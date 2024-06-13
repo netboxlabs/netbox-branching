@@ -52,7 +52,7 @@
             <th scope="row">{% trans "Conflicts" %}</th>
             <td>
               {% if conflicts_count %}
-                <span class="text-red">{{ conflicts_count }} {% trans "conflicts found" %}</span>
+                <a href="{% url 'plugins:netbox_vcs:context_diff' pk=object.pk %}?has_conflicts=True" class="text-red">{{ conflicts_count }} {% trans "conflicts found" %}</a>
               {% else %}
                 <span class="text-green">
                   <i class="mdi mdi-check-bold"></i>

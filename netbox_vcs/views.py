@@ -79,6 +79,7 @@ def _get_diff_count(obj):
 class ContextDiffView(generic.ObjectChildrenView):
     queryset = Context.objects.all()
     child_model = ChangeDiff
+    filterset = filtersets.ChangeDiffFilterSet
     table = tables.ChangeDiffTable
     actions = {}
     tab = ViewTab(
