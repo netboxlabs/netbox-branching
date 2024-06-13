@@ -23,7 +23,7 @@ class ContextListView(generic.ObjectListView):
     queryset = Context.objects.annotate(
         # Annotate the number of associated ChangeDiffs with conflicts
         conflicts=Count('changediff', filter=Q(changediff__conflicts__isnull=False))
-    )
+    ).order_by('name')
     filterset = filtersets.ContextFilterSet
     filterset_form = forms.ContextFilterForm
     table = tables.ContextTable
