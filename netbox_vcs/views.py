@@ -155,6 +155,24 @@ class ContextApplyView(generic.ObjectView):
         return redirect(context.get_absolute_url())
 
 
+class ContextBulkImportView(generic.BulkImportView):
+    queryset = Context.objects.all()
+    model_form = forms.ContextImportForm
+
+
+class ContextBulkEditView(generic.BulkEditView):
+    queryset = Context.objects.all()
+    filterset = filtersets.ContextFilterSet
+    table = tables.ContextTable
+    form = forms.ContextBulkEditForm
+
+
+class ContextBulkDeleteView(generic.BulkDeleteView):
+    queryset = Context.objects.all()
+    filterset = filtersets.ContextFilterSet
+    table = tables.ContextTable
+
+
 #
 # Change diffs
 #

@@ -11,6 +11,7 @@ menu = PluginMenu(
                 link_text='Contexts',
                 buttons=(
                     PluginMenuButton('plugins:netbox_vcs:context_add', _('Add'), 'mdi mdi-plus-thick'),
+                    PluginMenuButton('plugins:netbox_vcs:context_import', _('Import'), 'mdi mdi-upload'),
                 )
             ),
             PluginMenuItem(

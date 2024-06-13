@@ -10,11 +10,9 @@ __all__ = (
 
 class ContextForm(NetBoxModelForm):
     fieldsets = (
-        FieldSet('name', 'description'),
+        FieldSet('name', 'description', 'tags'),
     )
 
     class Meta:
         model = Context
-        fields = (
-            'name', 'description',
-        )
+        fields = ('name', 'description', 'tags')
