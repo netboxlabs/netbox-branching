@@ -117,17 +117,17 @@
         {% endif %}
       </div>
       <div class="card">
-        <h5 class="card-header">{% trans "Apply Changes" %}</h5>
+        <h5 class="card-header">{% trans "Merge Changes" %}</h5>
         {% if object.is_active %}
           <div class="card-body">
-            Deactivate branch to apply
+            Deactivate branch to merge
           </div>
         {% else %}
           <div class="card-body">
-            <form method="post" action="{% url 'plugins:netbox_vcs:branch_apply' pk=object.pk %}">
+            <form method="post" action="{% url 'plugins:netbox_vcs:branch_merge' pk=object.pk %}">
               {% csrf_token %}
-              {{ apply_form }}
-              <input type="submit" class="btn btn-primary" value="Apply">
+              {{ merge_form }}
+              <input type="submit" class="btn btn-primary" value="Merge">
             </form>
           </div>
         {% endif %}

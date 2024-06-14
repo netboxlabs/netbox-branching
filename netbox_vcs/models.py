@@ -183,15 +183,17 @@ class Branch(JobsMixin, NetBoxModel):
         self.status = BranchStatusChoices.READY
         self.save()
 
-    def apply(self, commit=True):
+    sync.alters_data = True
+
+    def merge(self, commit=True):
         """
-        Apply all changes in the Branch to the primary schema by replaying them in
+        Apply all changes in the Branch to the main schema by replaying them in
         chronological order.
         """
         try:
             with transaction.atomic():
 
-                # Apply each change from the branch
+                # Apply each change from the Branch
                 for change in self.get_changes().order_by('time'):
                     change.apply()
                 if not commit:
@@ -205,6 +207,8 @@ class Branch(JobsMixin, NetBoxModel):
         except ValidationError as e:
             messages = ', '.join(e.messages)
             raise ValidationError(f'{change.changed_object}: {messages}')
+
+    merge.alters_data = True
 
     def provision(self):
         """
@@ -249,6 +253,8 @@ class Branch(JobsMixin, NetBoxModel):
 
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
 
+    provision.alters_data = True
+
     def deprovision(self):
         """
         Delete the Branch's schema and all its tables from the database.
@@ -258,6 +264,8 @@ class Branch(JobsMixin, NetBoxModel):
             cursor.execute(
                 f"DROP SCHEMA IF EXISTS {self.schema_name} CASCADE"
             )
+
+    deprovision.alters_data = True
 
 
 class ObjectChange(ObjectChange_):
@@ -269,7 +277,7 @@ class ObjectChange(ObjectChange_):
 
     def apply(self, using=DEFAULT_DB_ALIAS):
         """
-        Apply the change to the primary schema.
+        Apply the change using the specified database connection.
         """
         model = self.changed_object_type.model_class()
         print(f'Applying change {self} using {using}')

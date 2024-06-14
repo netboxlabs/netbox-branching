@@ -52,9 +52,9 @@ def merge_branch(job, commit=True, request_id=None):
 
     try:
         job.start()
-        logger.info(f"Applying branch {branch} ({branch.schema_name})")
+        logger.info(f"Merging branch {branch} ({branch.schema_name})")
         with event_tracking(request):
-            branch.apply(commit=commit)
+            branch.merge(commit=commit)
         job.terminate()
 
     except AbortTransaction:

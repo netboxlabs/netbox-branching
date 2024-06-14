@@ -56,7 +56,7 @@ class BranchView(generic.ObjectView):
             'unsynced_changes_count': instance.get_unsynced_changes().count(),
             'conflicts_count': ChangeDiff.objects.filter(branch=instance, conflicts__isnull=False).count(),
             'sync_form': forms.SyncBranchForm(),
-            'apply_form': forms.ApplyBranchForm(),
+            'merge_form': forms.MergeBranchForm(),
         }
 
 
@@ -135,25 +135,25 @@ class BranchSyncView(generic.ObjectView):
         return redirect(branch.get_absolute_url())
 
 
-@register_model_view(Branch, 'apply')
-class BranchApplyView(generic.ObjectView):
+@register_model_view(Branch, 'merge')
+class BranchMergeView(generic.ObjectView):
     queryset = Branch.objects.all()
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        form = forms.ApplyBranchForm(request.POST)
+        form = forms.MergeBranchForm(request.POST)
 
         if form.is_valid():
-            # Enqueue a background job to apply the Branch
+            # Enqueue a background job to merge the Branch
             Job.enqueue(
-                import_string('netbox_vcs.jobs.apply_branch'),
+                import_string('netbox_vcs.jobs.merge_branch'),
                 instance=branch,
-                name='Apply branch',
+                name='Merge branch',
                 user=request.user,
                 commit=form.cleaned_data['commit'],
                 request_id=current_request.get().id
             )
-            messages.success(request, f"Application of branch {branch} in progress")
+            messages.success(request, f"Merging of branch {branch} in progress")
 
         return redirect(branch.get_absolute_url())
 

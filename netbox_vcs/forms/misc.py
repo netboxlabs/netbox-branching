@@ -3,7 +3,7 @@ from django import forms
 from utilities.forms import ConfirmationForm
 
 __all__ = (
-    'ApplyBranchForm',
+    'MergeBranchForm',
     'SyncBranchForm',
 )
 
@@ -14,7 +14,7 @@ class SyncBranchForm(ConfirmationForm):
     )
 
 
-class ApplyBranchForm(ConfirmationForm):
+class MergeBranchForm(ConfirmationForm):
     commit = forms.BooleanField(
         required=False
     )
