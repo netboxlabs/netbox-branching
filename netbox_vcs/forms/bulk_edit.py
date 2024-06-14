@@ -3,6 +3,7 @@ from django.utils.translation import gettext_lazy as _
 from netbox_vcs.models import Branch
 
 from netbox.forms import NetBoxModelBulkEditForm
+from utilities.forms.fields import CommentField
 from utilities.forms.rendering import FieldSet
 
 __all__ = (
@@ -16,11 +17,10 @@ class BranchBulkEditForm(NetBoxModelBulkEditForm):
         max_length=200,
         required=False
     )
+    comments = CommentField()
 
     model = Branch
     fieldsets = (
         FieldSet('description',),
     )
-    nullable_fields = (
-        'description',
-    )
+    nullable_fields = ('description', 'comments')

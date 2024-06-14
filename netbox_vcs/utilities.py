@@ -6,7 +6,7 @@ __all__ = (
     'DynamicSchemaDict',
     'activate_branch',
     'deactivate_branch',
-    'get_brancheable_object_types',
+    'get_branchable_object_types',
     'get_tables_to_replicate',
 )
 

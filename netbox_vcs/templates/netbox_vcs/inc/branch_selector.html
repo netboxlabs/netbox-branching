@@ -7,13 +7,13 @@
       <i class="mdi mdi-close-thick" title="{% trans "Deactivate" %}"></i>
     </a>
   </div>
-{% elif branchs %}
+{% elif branches %}
   <form method="get" class="row align-items-center">
     <div class="col-auto">
       <div class="input-group">
         <select name="_branch" id="branch_selector" class="form-select form-select-sm">
           <option></option>
-          {% for branch in branchs %}
+          {% for branch in branches %}
             <option value="{{ branch.schema_id }}"{% if not branch.ready %} disabled{% endif %}>
               {{ branch.name }}
               {% if not branch.ready %}({{ branch.status }}){% endif %}

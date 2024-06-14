@@ -14,7 +14,7 @@ class NetBoxVCSConfig(PluginConfig):
 
     def ready(self):
         super().ready()
-        from . import signals
+        from . import search, signals
 
 
 config = NetBoxVCSConfig

@@ -17,7 +17,7 @@ from core.models import Job
 from extras.choices import ObjectChangeActionChoices
 from extras.models import ObjectChange as ObjectChange_
 from netbox.context import current_request
-from netbox.models import NetBoxModel
+from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet
@@ -34,16 +34,11 @@ __all__ = (
 )
 
 
-class Branch(JobsMixin, NetBoxModel):
+class Branch(JobsMixin, PrimaryModel):
     name = models.CharField(
         verbose_name=_('name'),
         max_length=100,
         unique=True
-    )
-    description = models.CharField(
-        verbose_name=_('description'),
-        max_length=200,
-        blank=True
     )
     user = models.ForeignKey(
         to=get_user_model(),
@@ -169,7 +164,7 @@ class Branch(JobsMixin, NetBoxModel):
 
     def sync(self, commit=True):
         """
-        Replay changes from the primary schema onto the Branch's schema.
+        Replay changes from the main schema onto the Branch's schema.
         """
         with activate_branch(self):
             with transaction.atomic():
@@ -236,7 +231,7 @@ class Branch(JobsMixin, NetBoxModel):
                 f"ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
             )
 
-            # Replicate relevant tables from the primary schema
+            # Replicate relevant tables from the main schema
             for table in get_tables_to_replicate():
                 # Create the table in the new schema
                 cursor.execute(
@@ -412,7 +407,7 @@ class ChangeDiff(models.Model):
     @cached_property
     def altered_in_current(self):
         """
-        Return the set of attributes altered in the primary schema.
+        Return the set of attributes altered in the main schema.
         """
         return {
             k for k, v in self.current.items()

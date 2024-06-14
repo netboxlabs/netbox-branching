@@ -12,5 +12,5 @@ class BranchImportForm(NetBoxModelImportForm):
     class Meta:
         model = Branch
         fields = (
-            'name', 'description', 'tags',
+            'name', 'description', 'comments', 'tags',
         )

@@ -22,5 +22,5 @@ class BranchAwareRouter:
         return None
 
     def allow_relation(self, obj1, obj2, **hints):
-        # Permit relations from the branch schema to the primary (public) schema
+        # Permit relations from the branch schema to the main (public) schema
         return True

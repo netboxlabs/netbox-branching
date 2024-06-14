@@ -1,5 +1,5 @@
-# Name of the primary (non-branch) PostgreSQL schema
-PRIMARY_SCHEMA = 'public'
+# Name of the main (non-branch) PostgreSQL schema
+MAIN_SCHEMA = 'public'
 
 # Prefix for schema names
 SCHEMA_PREFIX = 'branch_'

@@ -23,7 +23,7 @@ class QueryTestCase(TransactionTestCase):
         branch.schema_id = 'test1234'
         branch.save()
 
-        # Query for the objects in the primary schema
+        # Query for the objects in the main schema
         self.assertEqual(Site.objects.count(), 1)
         self.assertEqual(DeviceRole.objects.count(), 1)
 

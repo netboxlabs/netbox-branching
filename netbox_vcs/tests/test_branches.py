@@ -4,7 +4,7 @@ from django.db import connection
 from django.test import TestCase
 
 from dcim.models import Site
-from netbox_vcs.constants import PRIMARY_SCHEMA
+from netbox_vcs.constants import MAIN_SCHEMA
 from netbox_vcs.models import Branch
 from netbox_vcs.utilities import get_tables_to_replicate
 from .utils import fetchall, fetchone
@@ -47,16 +47,16 @@ class BranchTestCase(TestCase):
             tables_found = {row.table_name for row in fetchall(cursor)}
             self.assertSetEqual(tables_expected, tables_found)
 
-            # Check that object counts match the primary schema for each table
+            # Check that object counts match the main schema for each table
             for table_name in tables_to_replicate:
-                cursor.execute(f"SELECT COUNT(id) FROM {PRIMARY_SCHEMA}.{table_name}")
-                primary_count = fetchone(cursor).count
+                cursor.execute(f"SELECT COUNT(id) FROM {MAIN_SCHEMA}.{table_name}")
+                main_count = fetchone(cursor).count
                 cursor.execute(f"SELECT COUNT(id) FROM {branch.schema_name}.{table_name}")
                 branch_count = fetchone(cursor).count
                 self.assertEqual(
-                    primary_count,
+                    main_count,
                     branch_count,
-                    msg=f"Table {table_name} object count differs from primary schema"
+                    msg=f"Table {table_name} object count differs from main schema"
                 )
 
     def test_delete_branch(self):

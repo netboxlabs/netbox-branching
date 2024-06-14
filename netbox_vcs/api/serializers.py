@@ -21,7 +21,8 @@ class BranchSerializer(NetBoxModelSerializer):
     class Meta:
         model = Branch
         fields = [
-            'id', 'url', 'display', 'name', 'description', 'schema_id', 'custom_fields', 'created', 'last_updated',
+            'id', 'url', 'display', 'name', 'description', 'schema_id', 'comments', 'tags', 'custom_fields', 'created',
+            'last_updated',
         ]
         brief_fields = ('id', 'url', 'display', 'name', 'description')
 
