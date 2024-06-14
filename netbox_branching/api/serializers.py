@@ -6,7 +6,7 @@ from netbox.api.exceptions import SerializerNotFound
 from netbox.api.fields import ChoiceField, ContentTypeField
 from netbox.api.serializers import NetBoxModelSerializer
 from utilities.api import get_serializer_for_model
-from netbox_vcs.models import ChangeDiff, Branch
+from netbox_branching.models import ChangeDiff, Branch
 
 __all__ = (
     'ChangeDiffSerializer',
@@ -15,7 +15,7 @@ __all__ = (
 
 class BranchSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
-        view_name='plugins-api:netbox_vcs-api:branch-detail'
+        view_name='plugins-api:netbox_branching-api:branch-detail'
     )
 
     class Meta:
@@ -29,7 +29,7 @@ class BranchSerializer(NetBoxModelSerializer):
 
 class ChangeDiffSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
-        view_name='plugins-api:netbox_vcs-api:changediff-detail'
+        view_name='plugins-api:netbox_branching-api:changediff-detail'
     )
     branch = BranchSerializer(
         nested=True,

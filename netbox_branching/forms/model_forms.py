@@ -1,4 +1,4 @@
-from netbox_vcs.models import Branch
+from netbox_branching.models import Branch
 
 from netbox.forms import NetBoxModelForm
 from utilities.forms.fields import CommentField

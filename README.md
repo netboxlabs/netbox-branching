@@ -1,4 +1,4 @@
-# nbl-netbox-vcs
+# nbl-netbox-branching
 
 ### Internal Use Only
 
@@ -18,10 +18,19 @@ $ source /opt/netbox/venv/bin/activate
 $ pip install -e .
 ```
 
-3. Create `local_settings.py` to override the `DATABASES` setting. This enables dynamic schema support.
+3. Add `netbox_branching` to `PLUGINS` in `configuration.py`
 
 ```python
-from netbox_vcs.utilities import DynamicSchemaDict
+PLUGINS = [
+    # ...
+    'netbox_branching',
+]
+```
+
+4. Create `local_settings.py` to override the `DATABASES` setting. This enables dynamic schema support.
+
+```python
+from netbox_branching.utilities import DynamicSchemaDict
 from .configuration import DATABASE
 
 # Wrap DATABASES with DynamicSchemaDict for dynamic schema support
@@ -31,11 +40,11 @@ DATABASES = DynamicSchemaDict({
 
 # Employ our custom database router
 DATABASE_ROUTERS = [
-    'netbox_vcs.database.BranchAwareRouter',
+    'netbox_branching.database.BranchAwareRouter',
 ]
 ```
 
-4. Run NetBox migrations
+5. Run NetBox migrations
 
 ```
 $ ./manage.py migrate

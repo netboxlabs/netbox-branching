@@ -2,8 +2,8 @@ from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from netbox_vcs.constants import COOKIE_NAME, QUERY_PARAM
-from netbox_vcs.models import Branch
+from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
+from netbox_branching.models import Branch
 
 
 class RequestTestCase(TestCase):

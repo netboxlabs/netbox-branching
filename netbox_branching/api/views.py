@@ -2,14 +2,14 @@ from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet
 
 from netbox.api.viewsets import NetBoxReadOnlyModelViewSet
-from netbox_vcs import filtersets
-from netbox_vcs.models import ChangeDiff, Branch
+from netbox_branching import filtersets
+from netbox_branching.models import ChangeDiff, Branch
 from . import serializers
 
 
-class VCSRootView(APIRootView):
+class RootView(APIRootView):
     def get_view_name(self):
-        return 'VCS'
+        return 'Branches'
 
 
 class BranchViewSet(ModelViewSet):

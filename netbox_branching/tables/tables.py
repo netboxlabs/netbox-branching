@@ -3,7 +3,7 @@ from django.utils.translation import gettext_lazy as _
 
 from extras.models import ObjectChange
 from netbox.tables import NetBoxTable, columns
-from netbox_vcs.models import Branch, ChangeDiff
+from netbox_branching.models import Branch, ChangeDiff
 from .columns import ConflictsColumn, DiffColumn
 
 __all__ = (

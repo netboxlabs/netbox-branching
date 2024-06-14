@@ -2,9 +2,9 @@ from django.db import connections
 from django.test import TransactionTestCase
 
 from dcim.models import DeviceRole, Site
-from netbox_vcs.models import Branch
+from netbox_branching.models import Branch
 
-from netbox_vcs.utilities import activate_branch
+from netbox_branching.utilities import activate_branch
 
 
 class QueryTestCase(TransactionTestCase):

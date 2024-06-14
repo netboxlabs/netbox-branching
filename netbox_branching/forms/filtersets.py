@@ -6,8 +6,8 @@ from core.models import ObjectType
 from netbox.forms import NetBoxModelFilterSetForm
 from utilities.forms.fields import ContentTypeMultipleChoiceField, DynamicModelMultipleChoiceField, TagFilterField
 from utilities.forms.rendering import FieldSet
-from netbox_vcs.choices import BranchStatusChoices
-from netbox_vcs.models import ChangeDiff, Branch
+from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.models import ChangeDiff, Branch
 
 __all__ = (
     'ChangeDiffFilterForm',

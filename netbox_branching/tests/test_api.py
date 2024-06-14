@@ -9,7 +9,7 @@ from django.urls import reverse
 from dcim.models import Site
 from users.models import Token
 
-from netbox_vcs.models import Branch
+from netbox_branching.models import Branch
 
 
 class APITestCase(TransactionTestCase):

@@ -4,9 +4,9 @@ from django.db import connection
 from django.test import TestCase
 
 from dcim.models import Site
-from netbox_vcs.constants import MAIN_SCHEMA
-from netbox_vcs.models import Branch
-from netbox_vcs.utilities import get_tables_to_replicate
+from netbox_branching.constants import MAIN_SCHEMA
+from netbox_branching.models import Branch
+from netbox_branching.utilities import get_tables_to_replicate
 from .utils import fetchall, fetchone
 
 

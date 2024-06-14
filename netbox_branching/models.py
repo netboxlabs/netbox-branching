@@ -85,7 +85,7 @@ class Branch(JobsMixin, PrimaryModel):
         return self.name
 
     def get_absolute_url(self):
-        return reverse('plugins:netbox_vcs:branch', args=[self.pk])
+        return reverse('plugins:netbox_branching:branch', args=[self.pk])
 
     def get_status_color(self):
         return BranchStatusChoices.colors.get(self.status)
@@ -121,7 +121,7 @@ class Branch(JobsMixin, PrimaryModel):
         if _provision:
             # Enqueue a background job to provision the Branch
             Job.enqueue(
-                import_string('netbox_vcs.jobs.provision_branch'),
+                import_string('netbox_branching.jobs.provision_branch'),
                 instance=self,
                 name='Provision branch'
             )

@@ -1,4 +1,4 @@
-from netbox_vcs.models import Branch
+from netbox_branching.models import Branch
 from utilities.testing import ViewTestCases, create_tags
 
 

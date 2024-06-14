@@ -69,7 +69,7 @@ class BranchEditView(generic.ObjectEditView):
 @register_model_view(Branch, 'delete')
 class BranchDeleteView(generic.ObjectDeleteView):
     queryset = Branch.objects.all()
-    default_return_url = 'plugins:netbox_vcs:branch_list'
+    default_return_url = 'plugins:netbox_branching:branch_list'
 
 
 def _get_diff_count(obj):
@@ -86,7 +86,7 @@ class BranchDiffView(generic.ObjectChildrenView):
     tab = ViewTab(
         label=_('Diff'),
         badge=_get_diff_count,
-        permission='netbox_vcs.view_branch'
+        permission='netbox_branching.view_branch'
     )
 
     def get_children(self, request, parent):
@@ -107,7 +107,7 @@ class BranchReplayView(generic.ObjectChildrenView):
     tab = ViewTab(
         label=_('Replay'),
         badge=_get_change_count,
-        permission='netbox_vcs.view_branch'
+        permission='netbox_branching.view_branch'
     )
 
     def get_children(self, request, parent):
@@ -125,7 +125,7 @@ class BranchSyncView(generic.ObjectView):
         if form.is_valid():
             # Enqueue a background job to sync the Branch
             Job.enqueue(
-                import_string('netbox_vcs.jobs.sync_branch'),
+                import_string('netbox_branching.jobs.sync_branch'),
                 instance=branch,
                 name='Sync branch',
                 commit=form.cleaned_data['commit']
@@ -146,7 +146,7 @@ class BranchMergeView(generic.ObjectView):
         if form.is_valid():
             # Enqueue a background job to merge the Branch
             Job.enqueue(
-                import_string('netbox_vcs.jobs.merge_branch'),
+                import_string('netbox_branching.jobs.merge_branch'),
                 instance=branch,
                 name='Merge branch',
                 user=request.user,
