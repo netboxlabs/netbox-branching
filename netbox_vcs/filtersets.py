@@ -10,20 +10,20 @@ from .choices import *
 from .models import *
 
 __all__ = (
-    'ContextFilterSet',
+    'BranchFilterSet',
     'ChangeDiffFilterSet',
 )
 
 
-class ContextFilterSet(NetBoxModelFilterSet):
+class BranchFilterSet(NetBoxModelFilterSet):
     status = django_filters.MultipleChoiceFilter(
-        choices=ContextStatusChoices,
+        choices=BranchStatusChoices,
         null_value=None
     )
     last_sync = filters.MultiValueDateTimeFilter()
 
     class Meta:
-        model = Context
+        model = Branch
         fields = ('id', 'name', 'description')
 
     def search(self, queryset, name, value):
@@ -36,15 +36,15 @@ class ContextFilterSet(NetBoxModelFilterSet):
 
 
 class ChangeDiffFilterSet(BaseFilterSet):
-    context_id = django_filters.ModelMultipleChoiceFilter(
-        queryset=Context.objects.all(),
-        label=_('Context (ID)'),
+    branch_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=Branch.objects.all(),
+        label=_('Branch (ID)'),
     )
-    context = django_filters.ModelMultipleChoiceFilter(
-        field_name='context__schema_id',
-        queryset=Context.objects.all(),
+    branch = django_filters.ModelMultipleChoiceFilter(
+        field_name='branch__schema_id',
+        queryset=Branch.objects.all(),
         to_field_name='schema_id',
-        label=_('Context (schema ID)'),
+        label=_('Branch (schema ID)'),
     )
     last_updated = filters.MultiValueDateTimeFilter()
     object_type_id = django_filters.ModelMultipleChoiceFilter(

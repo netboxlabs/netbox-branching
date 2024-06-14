@@ -9,7 +9,7 @@ class NetBoxVCSConfig(PluginConfig):
     base_url = 'vcs'
     # min_version = '4.0'
     middleware = [
-        'netbox_vcs.middleware.ContextMiddleware'
+        'netbox_vcs.middleware.BranchMiddleware'
     ]
 
     def ready(self):

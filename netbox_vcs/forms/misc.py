@@ -3,18 +3,18 @@ from django import forms
 from utilities.forms import ConfirmationForm
 
 __all__ = (
-    'ApplyContextForm',
-    'SyncContextForm',
+    'ApplyBranchForm',
+    'SyncBranchForm',
 )
 
 
-class SyncContextForm(ConfirmationForm):
+class SyncBranchForm(ConfirmationForm):
     commit = forms.BooleanField(
         required=False
     )
 
 
-class ApplyContextForm(ConfirmationForm):
+class ApplyBranchForm(ConfirmationForm):
     commit = forms.BooleanField(
         required=False
     )

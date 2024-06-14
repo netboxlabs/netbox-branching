@@ -2,7 +2,7 @@
 
 ### Internal Use Only
 
-Initial proof of concept for multi-context/versioning support in NetBox.
+Initial proof of concept for multi-branch/versioning support in NetBox.
 
 ### Initial Setup
 
@@ -31,7 +31,7 @@ DATABASES = DynamicSchemaDict({
 
 # Employ our custom database router
 DATABASE_ROUTERS = [
-    'netbox_vcs.database.ContextAwareRouter',
+    'netbox_vcs.database.BranchAwareRouter',
 ]
 ```
 

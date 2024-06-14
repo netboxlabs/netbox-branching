@@ -6,24 +6,24 @@ from core.models import ObjectType
 from netbox.forms import NetBoxModelFilterSetForm
 from utilities.forms.fields import ContentTypeMultipleChoiceField, DynamicModelMultipleChoiceField, TagFilterField
 from utilities.forms.rendering import FieldSet
-from netbox_vcs.choices import ContextStatusChoices
-from netbox_vcs.models import ChangeDiff, Context
+from netbox_vcs.choices import BranchStatusChoices
+from netbox_vcs.models import ChangeDiff, Branch
 
 __all__ = (
     'ChangeDiffFilterForm',
-    'ContextFilterForm',
+    'BranchFilterForm',
 )
 
 
-class ContextFilterForm(NetBoxModelFilterSetForm):
-    model = Context
+class BranchFilterForm(NetBoxModelFilterSetForm):
+    model = Branch
     fieldsets = (
         FieldSet('q', 'filter_id', 'tag'),
-        FieldSet('status', 'last_sync', name=_('Context')),
+        FieldSet('status', 'last_sync', name=_('Branch')),
     )
     status = forms.MultipleChoiceField(
         label=_('Status'),
-        choices=ContextStatusChoices,
+        choices=BranchStatusChoices,
         required=False
     )
     tag = TagFilterField(model)
@@ -33,12 +33,12 @@ class ChangeDiffFilterForm(NetBoxModelFilterSetForm):
     model = ChangeDiff
     fieldsets = (
         FieldSet('filter_id',),
-        FieldSet('context_id', 'object_type_id', 'action', name=_('Change')),
+        FieldSet('branch_id', 'object_type_id', 'action', name=_('Change')),
     )
-    context_id = DynamicModelMultipleChoiceField(
-        queryset=Context.objects.all(),
+    branch_id = DynamicModelMultipleChoiceField(
+        queryset=Branch.objects.all(),
         required=False,
-        label=_('Context')
+        label=_('Branch')
     )
     object_type_id = ContentTypeMultipleChoiceField(
         queryset=ObjectType.objects.with_feature('change_logging'),

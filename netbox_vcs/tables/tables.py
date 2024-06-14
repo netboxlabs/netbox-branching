@@ -3,12 +3,12 @@ from django.utils.translation import gettext_lazy as _
 
 from extras.models import ObjectChange
 from netbox.tables import NetBoxTable, columns
-from netbox_vcs.models import Context, ChangeDiff
+from netbox_vcs.models import Branch, ChangeDiff
 from .columns import ConflictsColumn, DiffColumn
 
 __all__ = (
     'ChangeDiffTable',
-    'ContextTable',
+    'BranchTable',
     'ReplayTable',
 )
 
@@ -45,7 +45,7 @@ AFTER_DIFF = """
 """
 
 
-class ContextTable(NetBoxTable):
+class BranchTable(NetBoxTable):
     name = tables.Column(
         verbose_name=_('Name'),
         linkify=True
@@ -64,7 +64,7 @@ class ContextTable(NetBoxTable):
     )
 
     class Meta(NetBoxTable.Meta):
-        model = Context
+        model = Branch
         fields = (
             'pk', 'id', 'name', 'is_active', 'status', 'conflicts', 'schema_id', 'description', 'user', 'tags',
             'created', 'last_updated',
@@ -77,8 +77,8 @@ class ChangeDiffTable(NetBoxTable):
         verbose_name=_('Name'),
         linkify=True
     )
-    context = tables.Column(
-        verbose_name=_('Context'),
+    branch = tables.Column(
+        verbose_name=_('Branch'),
         linkify=True
     )
     object = tables.Column(
@@ -111,10 +111,10 @@ class ChangeDiffTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = ChangeDiff
         fields = (
-            'context', 'object_type', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff',
+            'branch', 'object_type', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff',
             'last_updated', 'actions',
         )
-        default_columns = ('context', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff')
+        default_columns = ('branch', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff')
 
 
 class ReplayTable(NetBoxTable):

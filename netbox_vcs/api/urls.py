@@ -3,7 +3,7 @@ from . import views
 
 router = NetBoxRouter()
 router.APIRootView = views.VCSRootView
-router.register('contexts', views.ContextViewSet)
+router.register('branches', views.BranchViewSet)
 router.register('changes', views.ChangeDiffViewSet)
 
 urlpatterns = router.urls

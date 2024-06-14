@@ -13,26 +13,26 @@ from netbox.context import current_request
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
-from .models import ChangeDiff, Context
+from .models import ChangeDiff, Branch
 
 
 #
-# Contexts
+# Branches
 #
 
-class ContextListView(generic.ObjectListView):
-    queryset = Context.objects.annotate(
+class BranchListView(generic.ObjectListView):
+    queryset = Branch.objects.annotate(
         # Annotate the number of associated ChangeDiffs with conflicts
         conflicts=Count('changediff', filter=Q(changediff__conflicts__isnull=False))
     ).order_by('name')
-    filterset = filtersets.ContextFilterSet
-    filterset_form = forms.ContextFilterForm
-    table = tables.ContextTable
+    filterset = filtersets.BranchFilterSet
+    filterset_form = forms.BranchFilterForm
+    table = tables.BranchTable
 
 
-@register_model_view(Context)
-class ContextView(generic.ObjectView):
-    queryset = Context.objects.all()
+@register_model_view(Branch)
+class BranchView(generic.ObjectView):
+    queryset = Branch.objects.all()
 
     def get_extra_context(self, request, instance):
         qs = instance.get_changes().values_list('changed_object_type').annotate(count=Count('pk'))
@@ -54,31 +54,31 @@ class ContextView(generic.ObjectView):
         return {
             'stats': stats,
             'unsynced_changes_count': instance.get_unsynced_changes().count(),
-            'conflicts_count': ChangeDiff.objects.filter(context=instance, conflicts__isnull=False).count(),
-            'sync_form': forms.SyncContextForm(),
-            'apply_form': forms.ApplyContextForm(),
+            'conflicts_count': ChangeDiff.objects.filter(branch=instance, conflicts__isnull=False).count(),
+            'sync_form': forms.SyncBranchForm(),
+            'apply_form': forms.ApplyBranchForm(),
         }
 
 
-@register_model_view(Context, 'edit')
-class ContextEditView(generic.ObjectEditView):
-    queryset = Context.objects.all()
-    form = forms.ContextForm
+@register_model_view(Branch, 'edit')
+class BranchEditView(generic.ObjectEditView):
+    queryset = Branch.objects.all()
+    form = forms.BranchForm
 
 
-@register_model_view(Context, 'delete')
-class ContextDeleteView(generic.ObjectDeleteView):
-    queryset = Context.objects.all()
-    default_return_url = 'plugins:netbox_vcs:context_list'
+@register_model_view(Branch, 'delete')
+class BranchDeleteView(generic.ObjectDeleteView):
+    queryset = Branch.objects.all()
+    default_return_url = 'plugins:netbox_vcs:branch_list'
 
 
 def _get_diff_count(obj):
-    return ChangeDiff.objects.filter(context=obj).count()
+    return ChangeDiff.objects.filter(branch=obj).count()
 
 
-@register_model_view(Context, 'diff')
-class ContextDiffView(generic.ObjectChildrenView):
-    queryset = Context.objects.all()
+@register_model_view(Branch, 'diff')
+class BranchDiffView(generic.ObjectChildrenView):
+    queryset = Branch.objects.all()
     child_model = ChangeDiff
     filterset = filtersets.ChangeDiffFilterSet
     table = tables.ChangeDiffTable
@@ -86,20 +86,20 @@ class ContextDiffView(generic.ObjectChildrenView):
     tab = ViewTab(
         label=_('Diff'),
         badge=_get_diff_count,
-        permission='netbox_vcs.view_context'
+        permission='netbox_vcs.view_branch'
     )
 
     def get_children(self, request, parent):
-        return ChangeDiff.objects.filter(context=parent)
+        return ChangeDiff.objects.filter(branch=parent)
 
 
 def _get_change_count(obj):
     return obj.get_changes().count()
 
 
-@register_model_view(Context, 'replay')
-class ContextReplayView(generic.ObjectChildrenView):
-    queryset = Context.objects.all()
+@register_model_view(Branch, 'replay')
+class BranchReplayView(generic.ObjectChildrenView):
+    queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
     table = tables.ReplayTable
@@ -107,73 +107,73 @@ class ContextReplayView(generic.ObjectChildrenView):
     tab = ViewTab(
         label=_('Replay'),
         badge=_get_change_count,
-        permission='netbox_vcs.view_context'
+        permission='netbox_vcs.view_branch'
     )
 
     def get_children(self, request, parent):
         return parent.get_changes().order_by('time')
 
 
-@register_model_view(Context, 'sync')
-class ContextSyncView(generic.ObjectView):
-    queryset = Context.objects.all()
+@register_model_view(Branch, 'sync')
+class BranchSyncView(generic.ObjectView):
+    queryset = Branch.objects.all()
 
     def post(self, request, **kwargs):
-        context = self.get_object(**kwargs)
-        form = forms.SyncContextForm(request.POST)
+        branch = self.get_object(**kwargs)
+        form = forms.SyncBranchForm(request.POST)
 
         if form.is_valid():
-            # Enqueue a background job to sync the Context
+            # Enqueue a background job to sync the Branch
             Job.enqueue(
-                import_string('netbox_vcs.jobs.sync_context'),
-                instance=context,
-                name='Sync context',
+                import_string('netbox_vcs.jobs.sync_branch'),
+                instance=branch,
+                name='Sync branch',
                 commit=form.cleaned_data['commit']
             )
-            messages.success(request, f"Syncing of context {context} in progress")
+            messages.success(request, f"Syncing of branch {branch} in progress")
 
-        return redirect(context.get_absolute_url())
+        return redirect(branch.get_absolute_url())
 
 
-@register_model_view(Context, 'apply')
-class ContextApplyView(generic.ObjectView):
-    queryset = Context.objects.all()
+@register_model_view(Branch, 'apply')
+class BranchApplyView(generic.ObjectView):
+    queryset = Branch.objects.all()
 
     def post(self, request, **kwargs):
-        context = self.get_object(**kwargs)
-        form = forms.ApplyContextForm(request.POST)
+        branch = self.get_object(**kwargs)
+        form = forms.ApplyBranchForm(request.POST)
 
         if form.is_valid():
-            # Enqueue a background job to apply the Context
+            # Enqueue a background job to apply the Branch
             Job.enqueue(
-                import_string('netbox_vcs.jobs.apply_context'),
-                instance=context,
-                name='Apply context',
+                import_string('netbox_vcs.jobs.apply_branch'),
+                instance=branch,
+                name='Apply branch',
                 user=request.user,
                 commit=form.cleaned_data['commit'],
                 request_id=current_request.get().id
             )
-            messages.success(request, f"Application of context {context} in progress")
+            messages.success(request, f"Application of branch {branch} in progress")
 
-        return redirect(context.get_absolute_url())
-
-
-class ContextBulkImportView(generic.BulkImportView):
-    queryset = Context.objects.all()
-    model_form = forms.ContextImportForm
+        return redirect(branch.get_absolute_url())
 
 
-class ContextBulkEditView(generic.BulkEditView):
-    queryset = Context.objects.all()
-    filterset = filtersets.ContextFilterSet
-    table = tables.ContextTable
-    form = forms.ContextBulkEditForm
+class BranchBulkImportView(generic.BulkImportView):
+    queryset = Branch.objects.all()
+    model_form = forms.BranchImportForm
 
 
-class ContextBulkDeleteView(generic.BulkDeleteView):
-    queryset = Context.objects.all()
-    filterset = filtersets.ContextFilterSet
-    table = tables.ContextTable
+class BranchBulkEditView(generic.BulkEditView):
+    queryset = Branch.objects.all()
+    filterset = filtersets.BranchFilterSet
+    table = tables.BranchTable
+    form = forms.BranchBulkEditForm
+
+
+class BranchBulkDeleteView(generic.BulkDeleteView):
+    queryset = Branch.objects.all()
+    filterset = filtersets.BranchFilterSet
+    table = tables.BranchTable
 
 
 #

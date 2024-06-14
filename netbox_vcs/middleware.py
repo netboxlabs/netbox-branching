@@ -5,68 +5,68 @@ from django.urls import reverse
 
 from utilities.api import is_api_request
 
-from .constants import COOKIE_NAME, CONTEXT_HEADER, QUERY_PARAM
-from .models import Context
-from .utilities import activate_context
+from .constants import COOKIE_NAME, BRANCH_HEADER, QUERY_PARAM
+from .models import Branch
+from .utilities import activate_branch
 
 __all__ = (
-    'ContextMiddleware',
+    'BranchMiddleware',
 )
 
 
-class ContextMiddleware:
+class BranchMiddleware:
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
 
-        # Set/clear the active Context on the request
+        # Set/clear the active Branch on the request
         try:
-            context = self.get_active_context(request)
+            branch = self.get_active_branch(request)
         except ObjectDoesNotExist:
-            return HttpResponseBadRequest("Invalid context identifier")
+            return HttpResponseBadRequest("Invalid branch identifier")
 
-        with activate_context(context):
+        with activate_branch(branch):
             response = self.get_response(request)
 
-        # Set/clear the context cookie (for non-API requests)
+        # Set/clear the branch cookie (for non-API requests)
         if not is_api_request(request):
-            if context:
-                response.set_cookie('active_context', context.schema_id)
-            elif '_context' in request.GET:
-                response.delete_cookie('active_context')
+            if branch:
+                response.set_cookie(COOKIE_NAME, branch.schema_id)
+            elif QUERY_PARAM in request.GET:
+                response.delete_cookie(COOKIE_NAME)
 
         return response
 
     @staticmethod
-    def get_active_context(request):
+    def get_active_branch(request):
         """
-        Return the active Context (if any).
+        Return the active Branch (if any).
         """
-        # The active Context is specified by HTTP header for REST API requests.
-        if request.path_info.startswith(reverse('api-root')) and (schema_id := request.headers.get(CONTEXT_HEADER)):
-            context = Context.objects.get(schema_id=schema_id)
-            if not context.ready:
-                return HttpResponseBadRequest(f"Context {context} is not ready for use (status: {context.status})")
-            return context
+        # The active Branch is specified by HTTP header for REST API requests.
+        if request.path_info.startswith(reverse('api-root')) and (schema_id := request.headers.get(BRANCH_HEADER)):
+            branch = Branch.objects.get(schema_id=schema_id)
+            if not branch.ready:
+                return HttpResponseBadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
+            return branch
 
-        # Context activated/deactivated by URL query parameter
+        # Branch activated/deactivated by URL query parameter
         elif QUERY_PARAM in request.GET:
             if schema_id := request.GET.get(QUERY_PARAM):
-                context = Context.objects.get(schema_id=schema_id)
-                if context.ready:
-                    messages.success(request, f"Activated context {context}")
-                    return context
+                branch = Branch.objects.get(schema_id=schema_id)
+                if branch.ready:
+                    messages.success(request, f"Activated branch {branch}")
+                    return branch
                 else:
-                    messages.error(request, f"Context {context} is not ready for use (status: {context.status})")
+                    messages.error(request, f"Branch {branch} is not ready for use (status: {branch.status})")
                     return None
             else:
-                messages.success(request, f"Deactivated context")
+                messages.success(request, f"Deactivated branch")
                 request.COOKIES.pop(COOKIE_NAME, None)  # Delete cookie if set
                 return None
 
-        # Context set by cookie
-        elif schema_id := request.COOKIES.get('active_context'):
-            context = Context.objects.filter(schema_id=schema_id).first()
-            return context if context.ready else None
+        # Branch set by cookie
+        elif schema_id := request.COOKIES.get(COOKIE_NAME):
+            branch = Branch.objects.filter(schema_id=schema_id).first()
+            return branch if branch.ready else None

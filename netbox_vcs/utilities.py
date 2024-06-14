@@ -1,12 +1,12 @@
 from contextlib import contextmanager
 
-from .contextvars import active_context
+from .contextvars import active_branch
 
 __all__ = (
     'DynamicSchemaDict',
-    'activate_context',
-    'deactivate_context',
-    'get_context_aware_object_types',
+    'activate_branch',
+    'deactivate_branch',
+    'get_brancheable_object_types',
     'get_tables_to_replicate',
 )
 
@@ -35,33 +35,33 @@ class DynamicSchemaDict(dict):
 
 
 @contextmanager
-def activate_context(context):
+def activate_branch(branch):
     """
-    A context manager for activating a Context.
+    A context manager for activating a Branch.
     """
-    token = active_context.set(context)
+    token = active_branch.set(branch)
 
     yield
 
-    active_context.reset(token)
+    active_branch.reset(token)
 
 
 @contextmanager
-def deactivate_context():
+def deactivate_branch():
     """
-    A context manager for temporarily deactivating the active Context (if any). This is a
-    convenience function for `activate_context(None)`.
+    A context manager for temporarily deactivating the active Branch (if any). This is a
+    convenience function for `activate_branch(None)`.
     """
-    token = active_context.set(None)
+    token = active_branch.set(None)
 
     yield
 
-    active_context.reset(token)
+    active_branch.reset(token)
 
 
-def get_context_aware_object_types():
+def get_branchable_object_types():
     """
-    Return all object types which are context aware; i.e. those which support change logging.
+    Return all object types which are branch-aware; i.e. those which support change logging.
     """
     from core.models import ObjectType
     return ObjectType.objects.with_feature('change_logging').exclude(app_label='netbox_vcs')
@@ -73,17 +73,17 @@ def get_tables_to_replicate():
     """
     tables = set()
 
-    context_aware_models = [
-        ot.model_class() for ot in get_context_aware_object_types()
+    branch_aware_models = [
+        ot.model_class() for ot in get_branchable_object_types()
     ]
-    for model in context_aware_models:
+    for model in branch_aware_models:
 
         # Capture the model's table
         tables.add(model._meta.db_table)
 
         # Capture any M2M fields which reference other replicated models
         for m2m_field in model._meta.local_many_to_many:
-            if m2m_field.related_model in context_aware_models:
+            if m2m_field.related_model in branch_aware_models:
                 if hasattr(m2m_field, 'through'):
                     # Field is actually a manager
                     m2m_table = m2m_field.through._meta.db_table

@@ -22,19 +22,19 @@ from netbox.models.features import JobsMixin
 from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
-from .choices import ContextStatusChoices
+from .choices import BranchStatusChoices
 from .constants import SCHEMA_PREFIX
-from .contextvars import active_context
-from .utilities import activate_context, get_context_aware_object_types, get_tables_to_replicate
+from .contextvars import active_branch
+from .utilities import activate_branch, get_branchable_object_types, get_tables_to_replicate
 
 __all__ = (
     'ChangeDiff',
-    'Context',
+    'Branch',
     'ObjectChange',
 )
 
 
-class Context(JobsMixin, NetBoxModel):
+class Branch(JobsMixin, NetBoxModel):
     name = models.CharField(
         verbose_name=_('name'),
         max_length=100,
@@ -50,7 +50,7 @@ class Context(JobsMixin, NetBoxModel):
         on_delete=models.SET_NULL,
         blank=True,
         null=True,
-        related_name='contexts'
+        related_name='branches'
     )
     schema_id = models.CharField(
         max_length=8,
@@ -60,8 +60,8 @@ class Context(JobsMixin, NetBoxModel):
     status = models.CharField(
         verbose_name=_('status'),
         max_length=50,
-        choices=ContextStatusChoices,
-        default=ContextStatusChoices.NEW,
+        choices=BranchStatusChoices,
+        default=BranchStatusChoices.NEW,
         editable=False
     )
     last_sync = models.DateTimeField(
@@ -76,13 +76,13 @@ class Context(JobsMixin, NetBoxModel):
 
     class Meta:
         ordering = ('name',)
-        verbose_name = _('context')
-        verbose_name_plural = _('contexts')
+        verbose_name = _('branch')
+        verbose_name_plural = _('branches')
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        # Generate a random schema ID if this is a new Context
+        # Generate a random schema ID if this is a new Branch
         if self.pk is None:
             self.schema_id = self._generate_schema_id()
 
@@ -90,18 +90,18 @@ class Context(JobsMixin, NetBoxModel):
         return self.name
 
     def get_absolute_url(self):
-        return reverse('plugins:netbox_vcs:context', args=[self.pk])
+        return reverse('plugins:netbox_vcs:branch', args=[self.pk])
 
     def get_status_color(self):
-        return ContextStatusChoices.colors.get(self.status)
+        return BranchStatusChoices.colors.get(self.status)
 
     @cached_property
     def is_active(self):
-        return self == active_context.get()
+        return self == active_branch.get()
 
     @property
     def ready(self):
-        return self.status == ContextStatusChoices.READY
+        return self.status == BranchStatusChoices.READY
 
     @cached_property
     def schema_name(self):
@@ -118,22 +118,22 @@ class Context(JobsMixin, NetBoxModel):
     def save(self, *args, **kwargs):
         _provision = self.pk is None
 
-        if active_context.get():
-            raise AbortRequest(_("Cannot create or modify a context while a context is active."))
+        if active_branch.get():
+            raise AbortRequest(_("Cannot create or modify a branch while a branch is active."))
 
         super().save(*args, **kwargs)
 
         if _provision:
-            # Enqueue a background job to provision the Context
+            # Enqueue a background job to provision the Branch
             Job.enqueue(
-                import_string('netbox_vcs.jobs.provision_context'),
+                import_string('netbox_vcs.jobs.provision_branch'),
                 instance=self,
-                name='Provision context'
+                name='Provision branch'
             )
 
     def delete(self, *args, **kwargs):
-        if active_context.get():
-            raise AbortRequest(_("Cannot delete a context while a context is active."))
+        if active_branch.get():
+            raise AbortRequest(_("Cannot delete a branch while a branch is active."))
 
         ret = super().delete(*args, **kwargs)
 
@@ -151,7 +151,7 @@ class Context(JobsMixin, NetBoxModel):
 
     def get_changes(self):
         """
-        Return a queryset of all ObjectChange records created within the Context.
+        Return a queryset of all ObjectChange records created within the Branch.
         """
         if not self.ready:
             return ObjectChange.objects.none()
@@ -159,46 +159,46 @@ class Context(JobsMixin, NetBoxModel):
 
     def get_unsynced_changes(self):
         """
-        Return a queryset of all ObjectChange records created since the Context
+        Return a queryset of all ObjectChange records created since the Branch
         was last synced or created.
         """
         return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
-            changed_object_type__in=get_context_aware_object_types(),
+            changed_object_type__in=get_branchable_object_types(),
             time__gt=self.synced_time
         )
 
     def sync(self, commit=True):
         """
-        Replay changes from the primary schema onto the Context's schema.
+        Replay changes from the primary schema onto the Branch's schema.
         """
-        with activate_context(self):
+        with activate_branch(self):
             with transaction.atomic():
-                Context.objects.filter(pk=self.pk).update(status=ContextStatusChoices.REBASING)
+                Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.REBASING)
                 for change in self.get_unsynced_changes().order_by('time'):
                     change.apply(using=self.connection_name)
                 if not commit:
                     raise AbortTransaction()
 
         self.last_sync = timezone.now()
-        self.status = ContextStatusChoices.READY
+        self.status = BranchStatusChoices.READY
         self.save()
 
     def apply(self, commit=True):
         """
-        Apply all changes in the Context to the primary schema by replaying them in
+        Apply all changes in the Branch to the primary schema by replaying them in
         chronological order.
         """
         try:
             with transaction.atomic():
 
-                # Apply each change from the context
+                # Apply each change from the branch
                 for change in self.get_changes().order_by('time'):
                     change.apply()
                 if not commit:
                     raise AbortTransaction()
 
-                # Update the Context's status to "applied"
-                self.status = ContextStatusChoices.APPLIED
+                # Update the Branch's status to "applied"
+                self.status = BranchStatusChoices.APPLIED
                 self.application_id = current_request.get().id
                 self.save()
 
@@ -210,7 +210,7 @@ class Context(JobsMixin, NetBoxModel):
         """
         Create the schema & replicate main tables.
         """
-        Context.objects.filter(pk=self.pk).update(status=ContextStatusChoices.PROVISIONING)
+        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.PROVISIONING)
 
         with connection.cursor() as cursor:
             schema = self.schema_name
@@ -247,11 +247,11 @@ class Context(JobsMixin, NetBoxModel):
                     f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
                 )
 
-        Context.objects.filter(pk=self.pk).update(status=ContextStatusChoices.READY)
+        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
 
     def deprovision(self):
         """
-        Delete the context's schema and all its tables from the database.
+        Delete the Branch's schema and all its tables from the database.
         """
         with connection.cursor() as cursor:
             # Delete the schema and all its tables
@@ -312,8 +312,8 @@ class ObjectChange(ObjectChange_):
 
 
 class ChangeDiff(models.Model):
-    context = models.ForeignKey(
-        to=Context,
+    branch = models.ForeignKey(
+        to=Branch,
         on_delete=models.CASCADE
     )
     last_updated = models.DateTimeField(
@@ -394,7 +394,7 @@ class ChangeDiff(models.Model):
     @cached_property
     def altered_in_modified(self):
         """
-        Return the set of attributes altered in the context schema.
+        Return the set of attributes altered in the branch schema.
         """
         return {
             k for k, v in self.modified.items()
@@ -414,7 +414,7 @@ class ChangeDiff(models.Model):
     @cached_property
     def altered_fields(self):
         """
-        Return an ordered list of attributes which have been modified in either the context or primary schema.
+        Return an ordered list of attributes which have been modified in either the branch or main schema.
         """
         return sorted([*self.altered_in_modified, *self.altered_in_current])
 
@@ -431,7 +431,7 @@ class ChangeDiff(models.Model):
     @cached_property
     def modified_diff(self):
         """
-        Return a key-value mapping of all attributes which have been modified within the context.
+        Return a key-value mapping of all attributes which have been modified within the branch.
         """
         return {
             k: v for k, v in self.modified.items()
@@ -441,7 +441,7 @@ class ChangeDiff(models.Model):
     @cached_property
     def current_diff(self):
         """
-        Return a key-value mapping of all attributes which have been modified outside the context.
+        Return a key-value mapping of all attributes which have been modified outside the branch.
         """
         return {
             k: v for k, v in self.current.items()

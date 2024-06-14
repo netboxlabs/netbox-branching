@@ -1,22 +1,22 @@
 {% load i18n %}
-{% if active_context %}
+{% if active_branch %}
   <div class="align-items-center">
     <i class="mdi mdi-source-branch"></i>
-    <a href="{{ active_context.get_absolute_url }}" title="{{ active_context.description }}">{{ active_context.name }}</a>
-    <a href="?_context=" class="btn btn-sm btn-danger">
+    <a href="{{ active_branch.get_absolute_url }}" title="{{ active_branch.description }}">{{ active_branch.name }}</a>
+    <a href="?_branch=" class="btn btn-sm btn-danger">
       <i class="mdi mdi-close-thick" title="{% trans "Deactivate" %}"></i>
     </a>
   </div>
-{% elif contexts %}
+{% elif branchs %}
   <form method="get" class="row align-items-center">
     <div class="col-auto">
       <div class="input-group">
-        <select name="_context" id="context_selector" class="form-select form-select-sm">
+        <select name="_branch" id="branch_selector" class="form-select form-select-sm">
           <option></option>
-          {% for context in contexts %}
-            <option value="{{ context.schema_id }}"{% if not context.ready %} disabled{% endif %}>
-              {{ context.name }}
-              {% if not context.ready %}({{ context.status }}){% endif %}
+          {% for branch in branchs %}
+            <option value="{{ branch.schema_id }}"{% if not branch.ready %} disabled{% endif %}>
+              {{ branch.name }}
+              {% if not branch.ready %}({{ branch.status }}){% endif %}
             </option>
           {% endfor %}
         </select>

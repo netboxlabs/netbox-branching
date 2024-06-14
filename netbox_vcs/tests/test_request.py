@@ -2,9 +2,8 @@ from django.contrib.auth import get_user_model
 from django.test import Client, TestCase
 from django.urls import reverse
 
-from netbox_vcs.choices import ContextStatusChoices
-from netbox_vcs.contextvars import active_context
-from netbox_vcs.models import Context
+from netbox_vcs.constants import COOKIE_NAME, QUERY_PARAM
+from netbox_vcs.models import Branch
 
 
 class RequestTestCase(TestCase):
@@ -13,37 +12,37 @@ class RequestTestCase(TestCase):
     def setUpTestData(cls):
         get_user_model().objects.create_user(username='testuser')
 
-        context = Context(name='Context1')
-        context.save()
-        context.provision()
+        branch = Branch(name='Branch 1')
+        branch.save()
+        branch.provision()
 
     def setUp(self):
         # Initialize the test client
         self.client = Client()
         self.client.force_login(get_user_model().objects.first())
 
-    def test_activate_context(self):
-        context = Context.objects.first()
+    def test_activate_branch(self):
+        branch = Branch.objects.first()
 
-        # Activate the context
+        # Activate the Branch
         url = reverse('home')
-        response = self.client.get(f'{url}?_context={context.schema_id}')
+        response = self.client.get(f'{url}?{QUERY_PARAM}={branch.schema_id}')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(
-            self.client.cookies['active_context'].value,
-            context.schema_id,
+            self.client.cookies[COOKIE_NAME].value,
+            branch.schema_id,
             msg="Cookie was not set on response"
         )
 
-    def test_deactivate_context(self):
-        # Attach active_context cookie to the test client
-        context = Context.objects.first()
+    def test_deactivate_branch(self):
+        # Attach the cookie to the test client
+        branch = Branch.objects.first()
         self.client.cookies.load({
-            'active_context': context.schema_id,
+            COOKIE_NAME: branch.schema_id,
         })
 
-        # Deactivate the context
+        # Deactivate the Branch
         url = reverse('home')
-        response = self.client.get(f'{url}?_context=')
+        response = self.client.get(f'{url}?{QUERY_PARAM}=')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.client.cookies['active_context'].value, '', msg="Cookie was not deleted")
+        self.assertEqual(self.client.cookies[COOKIE_NAME].value, '', msg="Cookie was not deleted")

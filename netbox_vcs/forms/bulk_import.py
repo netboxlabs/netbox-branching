@@ -1,16 +1,16 @@
-from netbox_vcs.models import Context
+from netbox_vcs.models import Branch
 
 from netbox.forms import NetBoxModelImportForm
 
 __all__ = (
-    'ContextImportForm',
+    'BranchImportForm',
 )
 
 
-class ContextImportForm(NetBoxModelImportForm):
+class BranchImportForm(NetBoxModelImportForm):
 
     class Meta:
-        model = Context
+        model = Branch
         fields = (
             'name', 'description', 'tags',
         )
