@@ -1,14 +1,10 @@
 import logging
-import uuid
 
 from django.db.models.signals import m2m_changed, post_save, pre_delete
-from django.test import RequestFactory
-from django.urls import reverse
 from rq.timeouts import JobTimeoutException
 
 from core.choices import JobStatusChoices
 from extras.signals import handle_changed_object, handle_deleted_object
-from netbox.context_managers import event_tracking
 from utilities.exceptions import AbortTransaction
 from .choices import BranchStatusChoices
 from .models import Branch
@@ -41,19 +37,13 @@ def provision_branch(job):
             raise e
 
 
-def merge_branch(job, commit=True, request_id=None):
+def merge_branch(job, commit=True):
     branch = Branch.objects.get(pk=job.object_id)
-
-    # Create a dummy request for the event_tracking() branch manager
-    request = RequestFactory().get(reverse('home'))
-    request.id = request_id or uuid.uuid4()
-    request.user = job.user
 
     try:
         job.start()
         logger.info(f"Merging branch {branch} ({branch.schema_name})")
-        with event_tracking(request):
-            branch.merge(commit=commit)
+        branch.merge(commit=commit)
         job.terminate()
 
     except AbortTransaction:

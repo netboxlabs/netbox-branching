@@ -65,16 +65,6 @@
             <th scope="row">{% trans "Schema" %}</th>
             <td class="font-monospace">{{ object.schema_name }}</td>
           </tr>
-          <tr>
-            <th scope="row">{% trans "Application ID" %}</th>
-            <td>
-              {% if object.application_id %}
-                <a href="{% url 'core:objectchange_list' %}?request_id={{ object.application_id|placeholder }}">{{ object.application_id|placeholder }}</a>
-              {% else %}
-                {{ ''|placeholder }}
-              {% endif %}
-            </td>
-          </tr>
         </table>
       </div>
       {% include 'inc/panels/tags.html' %}

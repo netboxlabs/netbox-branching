@@ -41,6 +41,7 @@ class ObjectChange(ObjectChange_):
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             instance = model.objects.using(using).get(pk=self.changed_object_id)
+            instance.snapshot()
             for k, v in self.diff()['post'].items():
                 # Assign FKs by integer
                 # TODO: Inspect model to determine proper way to assign value

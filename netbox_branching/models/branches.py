@@ -5,13 +5,14 @@ from functools import cached_property
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
+from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
 from core.models import Job, ObjectChange as ObjectChange_
-from netbox.context import current_request
+from netbox.context_managers import event_tracking
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox_branching.choices import BranchStatusChoices
@@ -55,10 +56,6 @@ class Branch(JobsMixin, PrimaryModel):
         blank=True,
         null=True,
         editable=False
-    )
-    application_id = models.UUIDField(
-        blank=True,
-        null=True
     )
 
     class Meta:
@@ -179,16 +176,20 @@ class Branch(JobsMixin, PrimaryModel):
         """
         try:
             with transaction.atomic():
+                # Create a dummy request for the event_tracking() context manager
+                request = RequestFactory().get(reverse('home'))
 
                 # Apply each change from the Branch
                 for change in self.get_changes().order_by('time'):
-                    change.apply()
+                    with event_tracking(request):
+                        request.id = change.request_id
+                        request.user = change.user
+                        change.apply()
                 if not commit:
                     raise AbortTransaction()
 
                 # Update the Branch's status to "applied"
                 self.status = BranchStatusChoices.APPLIED
-                self.application_id = current_request.get().id
                 self.save()
 
         except ValidationError as e:

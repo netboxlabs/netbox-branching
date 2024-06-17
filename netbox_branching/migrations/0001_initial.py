@@ -43,7 +43,6 @@ class Migration(migrations.Migration):
                 ('schema_id', models.CharField(editable=False, max_length=8)),
                 ('status', models.CharField(default='new', editable=False, max_length=50)),
                 ('last_sync', models.DateTimeField(blank=True, editable=False, null=True)),
-                ('application_id', models.UUIDField(blank=True, null=True)),
                 ('tags', taggit.managers.TaggableManager(through='extras.TaggedItem', to='extras.Tag')),
                 ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='branches', to=settings.AUTH_USER_MODEL)),
             ],
