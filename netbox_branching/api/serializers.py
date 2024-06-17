@@ -1,12 +1,12 @@
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from extras.choices import ObjectChangeActionChoices
+from core.choices import ObjectChangeActionChoices
 from netbox.api.exceptions import SerializerNotFound
 from netbox.api.fields import ChoiceField, ContentTypeField
 from netbox.api.serializers import NetBoxModelSerializer
-from utilities.api import get_serializer_for_model
 from netbox_branching.models import ChangeDiff, Branch
+from utilities.api import get_serializer_for_model
 
 __all__ = (
     'ChangeDiffSerializer',

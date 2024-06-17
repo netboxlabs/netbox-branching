@@ -5,10 +5,9 @@ from django.shortcuts import redirect
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
-from core.models import Job
-from extras.choices import ObjectChangeActionChoices
-from extras.filtersets import ObjectChangeFilterSet
-from extras.models import ObjectChange
+from core.choices import ObjectChangeActionChoices
+from core.filtersets import ObjectChangeFilterSet
+from core.models import Job, ObjectChange
 from netbox.context import current_request
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view

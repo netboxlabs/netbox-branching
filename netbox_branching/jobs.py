@@ -4,13 +4,12 @@ import uuid
 from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.test import RequestFactory
 from django.urls import reverse
+from rq.timeouts import JobTimeoutException
 
 from core.choices import JobStatusChoices
-from extras.context_managers import event_tracking
 from extras.signals import handle_changed_object, handle_deleted_object
-from rq.timeouts import JobTimeoutException
+from netbox.context_managers import event_tracking
 from utilities.exceptions import AbortTransaction
-
 from .choices import BranchStatusChoices
 from .models import Branch
 

@@ -3,10 +3,9 @@ from django.db.models.signals import post_save
 from django.dispatch import receiver
 from django.utils import timezone
 
-from extras.choices import ObjectChangeActionChoices
-from extras.models import ObjectChange
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectChange
 from utilities.serialization import serialize_object
-
 from .contextvars import active_branch
 from .models import ChangeDiff
 

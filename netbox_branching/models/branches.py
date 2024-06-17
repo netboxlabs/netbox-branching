@@ -10,16 +10,15 @@ from django.utils import timezone
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
-from core.models import Job
-from extras.models import ObjectChange as ObjectChange_
+from core.models import Job, ObjectChange as ObjectChange_
 from netbox.context import current_request
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
+from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.constants import SCHEMA_PREFIX
+from netbox_branching.contextvars import active_branch
+from netbox_branching.utilities import activate_branch, get_branchable_object_types, get_tables_to_replicate
 from utilities.exceptions import AbortRequest, AbortTransaction
-from ..choices import BranchStatusChoices
-from ..constants import SCHEMA_PREFIX
-from ..contextvars import active_branch
-from ..utilities import activate_branch, get_branchable_object_types, get_tables_to_replicate
 from .changes import ObjectChange
 
 __all__ = (

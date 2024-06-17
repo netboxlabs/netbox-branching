@@ -69,7 +69,7 @@
             <th scope="row">{% trans "Application ID" %}</th>
             <td>
               {% if object.application_id %}
-                <a href="{% url 'extras:objectchange_list' %}?request_id={{ object.application_id|placeholder }}">{{ object.application_id|placeholder }}</a>
+                <a href="{% url 'core:objectchange_list' %}?request_id={{ object.application_id|placeholder }}">{{ object.application_id|placeholder }}</a>
               {% else %}
                 {{ ''|placeholder }}
               {% endif %}
@@ -93,7 +93,7 @@
           <td>
             {% if unsynced_changes_count and not object.is_active %}
               {# TODO: Fix timezone awareness #}
-              <a href="{% url 'extras:objectchange_list' %}?time_after={{ object.synced_time|date:"Y-m-d H:i:s" }}">{{ unsynced_changes_count }}</a>
+              <a href="{% url 'core:objectchange_list' %}?time_after={{ object.synced_time|date:"Y-m-d H:i:s" }}">{{ unsynced_changes_count }}</a>
             {% elif unsynced_changes_count %}
               {{ unsynced_changes_count }}
             {% else %}

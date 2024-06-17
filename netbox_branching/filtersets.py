@@ -2,8 +2,8 @@ import django_filters
 from django.db.models import Q
 from django.utils.translation import gettext as _
 
+from core.choices import ObjectChangeActionChoices
 from core.models import ObjectType
-from extras.choices import ObjectChangeActionChoices
 from netbox.filtersets import BaseFilterSet, NetBoxModelFilterSet
 from utilities import filters
 from .choices import *

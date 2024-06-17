@@ -1,7 +1,7 @@
 import django_tables2 as tables
 from django.utils.translation import gettext_lazy as _
 
-from extras.models import ObjectChange
+from core.models import ObjectChange
 from netbox.tables import NetBoxTable, columns
 from netbox_branching.models import Branch, ChangeDiff
 from .columns import ConflictsColumn, DiffColumn
