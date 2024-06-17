@@ -49,7 +49,7 @@ class ObjectChange(ObjectChange_):
                 else:
                     setattr(instance, k, v)
             print(f'Updating {model._meta.verbose_name} {instance}')
-            instance.object.full_clean()
+            instance.full_clean()
             instance.save(using=using)
 
         # Deleting an object
