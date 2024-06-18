@@ -1,10 +1,11 @@
 import random
 import string
-from functools import cached_property
+from functools import cached_property, partial
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
+from django.db.models.signals import post_save
 from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
@@ -18,6 +19,7 @@ from netbox.models.features import JobsMixin
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import SCHEMA_PREFIX
 from netbox_branching.contextvars import active_branch
+from netbox_branching.signals import record_applied_change
 from netbox_branching.utilities import activate_branch, get_branchable_object_types, get_tables_to_replicate
 from utilities.exceptions import AbortRequest, AbortTransaction
 from .changes import ObjectChange
@@ -56,6 +58,18 @@ class Branch(JobsMixin, PrimaryModel):
         blank=True,
         null=True,
         editable=False
+    )
+    merged_time = models.DateTimeField(
+        verbose_name=_('merged time'),
+        blank=True,
+        null=True
+    )
+    merged_by = models.ForeignKey(
+        to=get_user_model(),
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='+'
     )
 
     class Meta:
@@ -137,8 +151,10 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all ObjectChange records created within the Branch.
         """
-        if not self.ready:
-            return ObjectChange.objects.none()
+        if self.status == BranchStatusChoices.MERGED:
+            return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
+                application__branch=self
+            )
         return ObjectChange.objects.using(self.connection_name)
 
     def get_unsynced_changes(self):
@@ -155,9 +171,10 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Replay changes from the main schema onto the Branch's schema.
         """
+        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.SYNCING)
+
         with activate_branch(self):
             with transaction.atomic():
-                Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.REBASING)
                 for change in self.get_unsynced_changes().order_by('time'):
                     change.apply(using=self.connection_name)
                 if not commit:
@@ -169,18 +186,29 @@ class Branch(JobsMixin, PrimaryModel):
 
     sync.alters_data = True
 
-    def merge(self, commit=True):
+    def merge(self, user, commit=True):
         """
         Apply all changes in the Branch to the main schema by replaying them in
         chronological order.
         """
         try:
             with transaction.atomic():
+                # Retrieve staged changes before we update the Branch's status
+                changes = self.get_changes().order_by('time')
+
+                # Update the Branch's status to "merging"
+                self.status = BranchStatusChoices.MERGING
+                self.save()
+
                 # Create a dummy request for the event_tracking() context manager
                 request = RequestFactory().get(reverse('home'))
 
+                # Prep & connect the signal receiver for recording AppliedChanges
+                handler = partial(record_applied_change, branch=self)
+                post_save.connect(handler, sender=ObjectChange_, weak=False)
+
                 # Apply each change from the Branch
-                for change in self.get_changes().order_by('time'):
+                for change in changes:
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
@@ -188,9 +216,15 @@ class Branch(JobsMixin, PrimaryModel):
                 if not commit:
                     raise AbortTransaction()
 
-                # Update the Branch's status to "applied"
-                self.status = BranchStatusChoices.APPLIED
+                # Update the Branch's status to "merged"
+                self.status = BranchStatusChoices.MERGED
+                self.merged_time = timezone.now()
+                self.merged_by = user
                 self.save()
+
+                # TODO: Ensure handler is disconnected even when exception is raised
+                # Disconnect the signal receiver
+                post_save.disconnect(handler, sender=ObjectChange_)
 
         except ValidationError as e:
             messages = ', '.join(e.messages)

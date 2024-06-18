@@ -43,6 +43,8 @@ class Migration(migrations.Migration):
                 ('schema_id', models.CharField(editable=False, max_length=8)),
                 ('status', models.CharField(default='new', editable=False, max_length=50)),
                 ('last_sync', models.DateTimeField(blank=True, editable=False, null=True)),
+                ('merged_time', models.DateTimeField(blank=True, null=True)),
+                ('merged_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL)),
                 ('tags', taggit.managers.TaggableManager(through='extras.TaggedItem', to='extras.Tag')),
                 ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='branches', to=settings.AUTH_USER_MODEL)),
             ],
@@ -50,6 +52,19 @@ class Migration(migrations.Migration):
                 'verbose_name': 'branch',
                 'verbose_name_plural': 'branches',
                 'ordering': ('name',),
+            },
+        ),
+        migrations.CreateModel(
+            name='AppliedChange',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False)),
+                ('change', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='application', to='core.objectchange')),
+                ('branch', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='applied_changes', to='netbox_branching.branch')),
+            ],
+            options={
+                'verbose_name': 'applied change',
+                'verbose_name_plural': 'applied changes',
+                'ordering': ('branch', 'change'),
             },
         ),
         migrations.CreateModel(

@@ -43,7 +43,7 @@ def merge_branch(job, commit=True):
     try:
         job.start()
         logger.info(f"Merging branch {branch} ({branch.schema_name})")
-        branch.merge(commit=commit)
+        branch.merge(job.user, commit=commit)
         job.terminate()
 
     except AbortTransaction:

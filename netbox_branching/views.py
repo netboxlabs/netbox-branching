@@ -8,7 +8,6 @@ from django.utils.translation import gettext_lazy as _
 from core.choices import ObjectChangeActionChoices
 from core.filtersets import ObjectChangeFilterSet
 from core.models import Job, ObjectChange
-from netbox.context import current_request
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
@@ -149,8 +148,7 @@ class BranchMergeView(generic.ObjectView):
                 instance=branch,
                 name='Merge branch',
                 user=request.user,
-                commit=form.cleaned_data['commit'],
-                request_id=current_request.get().id
+                commit=form.cleaned_data['commit']
             )
             messages.success(request, f"Merging of branch {branch} in progress")
 

@@ -1,2 +1,2 @@
-from .branches import *
 from .changes import *
+from .branches import *

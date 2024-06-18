@@ -10,7 +10,7 @@ class BranchSelector(PluginTemplateExtension):
     def navbar(self):
         return self.render('netbox_branching/inc/branch_selector.html', extra_context={
             'active_branch': active_branch.get(),
-            'branches': Branch.objects.exclude(status=BranchStatusChoices.APPLIED),
+            'branches': Branch.objects.exclude(status=BranchStatusChoices.MERGED),
         })
 
 

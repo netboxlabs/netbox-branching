@@ -12,6 +12,7 @@ from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
 
 __all__ = (
+    'AppliedChange',
     'ChangeDiff',
     'ObjectChange',
 )
@@ -205,3 +206,26 @@ class ChangeDiff(models.Model):
             k: v for k, v in self.current.items()
             if k in self.altered_fields
         }
+
+
+class AppliedChange(models.Model):
+    """
+    Maps an applied ObjectChange to a Branch.
+    """
+    change = models.OneToOneField(
+        to='core.ObjectChange',
+        on_delete=models.CASCADE,
+        related_name='application'
+    )
+    branch = models.ForeignKey(
+        to='netbox_branching.Branch',
+        on_delete=models.CASCADE,
+        related_name='applied_changes'
+    )
+
+    objects = RestrictedQuerySet.as_manager()
+
+    class Meta:
+        ordering = ('branch', 'change')
+        verbose_name = _('applied change')
+        verbose_name_plural = _('applied changes')

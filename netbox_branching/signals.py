@@ -6,8 +6,14 @@ from django.utils import timezone
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange
 from utilities.serialization import serialize_object
+from .choices import BranchStatusChoices
 from .contextvars import active_branch
-from .models import ChangeDiff
+from .models import AppliedChange, ChangeDiff
+
+__all__ = (
+    'record_applied_change',
+    'record_change_diff',
+)
 
 
 @receiver(post_save, sender=ObjectChange)
@@ -27,7 +33,7 @@ def record_change_diff(instance, **kwargs):
             return
 
         print(f"Updating change diff for global change to {instance.changed_object}")
-        if diff := ChangeDiff.objects.filter(object_type=object_type, object_id=object_id).first():
+        if diff := ChangeDiff.objects.filter(object_type=object_type, object_id=object_id, branch__status=BranchStatusChoices.READY).first():
             diff.last_updated = timezone.now()
             diff.current = instance.postchange_data_clean
             diff.save()
@@ -64,3 +70,10 @@ def record_change_diff(instance, **kwargs):
                 last_updated=timezone.now(),
             )
             diff.save()
+
+
+def record_applied_change(instance, branch, **kwargs):
+    """
+    Create a new AppliedChange instance mapping an applied ObjectChange to its Branch.
+    """
+    AppliedChange.objects.create(change=instance, branch=branch)
