@@ -3,7 +3,6 @@ import string
 from functools import cached_property, partial
 
 from django.contrib.auth import get_user_model
-from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.db.models.signals import post_save
 from django.test import RequestFactory
@@ -11,16 +10,16 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
-
-from core.models import Job, ObjectChange as ObjectChange_
-from netbox.context_managers import event_tracking
-from netbox.models import PrimaryModel
-from netbox.models.features import JobsMixin
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import SCHEMA_PREFIX
 from netbox_branching.contextvars import active_branch
 from netbox_branching.signals import record_applied_change
 from netbox_branching.utilities import activate_branch, get_branchable_object_types, get_tables_to_replicate
+
+from core.models import Job, ObjectChange as ObjectChange_
+from netbox.context_managers import event_tracking
+from netbox.models import PrimaryModel
+from netbox.models.features import JobsMixin
 from utilities.exceptions import AbortRequest, AbortTransaction
 from .changes import ObjectChange
 
@@ -173,15 +172,27 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Apply changes from the main schema onto the Branch's schema.
         """
+        if not self.ready:
+            raise Exception(f"Branch {self} is not ready to sync")
+
+        # Update Branch status
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.SYNCING)
 
-        with activate_branch(self):
-            with transaction.atomic():
-                for change in self.get_unsynced_changes().order_by('time'):
-                    change.apply(using=self.connection_name)
-                if not commit:
-                    raise AbortTransaction()
+        try:
+            with activate_branch(self):
+                with transaction.atomic():
+                    # Apply each change from the main schema
+                    for change in self.get_unsynced_changes().order_by('time'):
+                        change.apply(using=self.connection_name)
+                    if not commit:
+                        raise AbortTransaction()
 
+        except Exception as e:
+            # Restore original branch status
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
+            raise e
+
+        # Record the branch's last_synced time & update its status
         self.last_sync = timezone.now()
         self.status = BranchStatusChoices.READY
         self.save()
@@ -193,22 +204,24 @@ class Branch(JobsMixin, PrimaryModel):
         Apply all changes in the Branch to the main schema by replaying them in
         chronological order.
         """
+        if not self.ready:
+            raise Exception(f"Branch {self} is not ready to merge")
+
+        # Retrieve staged changes before we update the Branch's status
+        changes = self.get_changes().order_by('time')
+
+        # Update Branch status
+        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MERGING)
+
+        # Create a dummy request for the event_tracking() context manager
+        request = RequestFactory().get(reverse('home'))
+
+        # Prep & connect the signal receiver for recording AppliedChanges
+        handler = partial(record_applied_change, branch=self)
+        post_save.connect(handler, sender=ObjectChange_, weak=False)
+
         try:
             with transaction.atomic():
-                # Retrieve staged changes before we update the Branch's status
-                changes = self.get_changes().order_by('time')
-
-                # Update the Branch's status to "merging"
-                self.status = BranchStatusChoices.MERGING
-                self.save()
-
-                # Create a dummy request for the event_tracking() context manager
-                request = RequestFactory().get(reverse('home'))
-
-                # Prep & connect the signal receiver for recording AppliedChanges
-                handler = partial(record_applied_change, branch=self)
-                post_save.connect(handler, sender=ObjectChange_, weak=False)
-
                 # Apply each change from the Branch
                 for change in changes:
                     with event_tracking(request):
@@ -218,19 +231,20 @@ class Branch(JobsMixin, PrimaryModel):
                 if not commit:
                     raise AbortTransaction()
 
-                # Update the Branch's status to "merged"
-                self.status = BranchStatusChoices.MERGED
-                self.merged_time = timezone.now()
-                self.merged_by = user
-                self.save()
+        except Exception as e:
+            # Disconnect signal receiver & restore original branch status
+            post_save.disconnect(handler, sender=ObjectChange_)
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
+            raise e
 
-                # TODO: Ensure handler is disconnected even when exception is raised
-                # Disconnect the signal receiver
-                post_save.disconnect(handler, sender=ObjectChange_)
+        # Update the Branch's status to "merged"
+        self.status = BranchStatusChoices.MERGED
+        self.merged_time = timezone.now()
+        self.merged_by = user
+        self.save()
 
-        except ValidationError as e:
-            messages = ', '.join(e.messages)
-            raise ValidationError(f'{change.changed_object}: {messages}')
+        # Disconnect the signal receiver
+        post_save.disconnect(handler, sender=ObjectChange_)
 
     merge.alters_data = True
 
@@ -238,42 +252,48 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Create the schema & replicate main tables.
         """
+        # Update Branch status
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.PROVISIONING)
 
-        with connection.cursor() as cursor:
-            schema = self.schema_name
+        try:
+            with connection.cursor() as cursor:
+                schema = self.schema_name
 
-            # Create the new schema
-            cursor.execute(
-                f"CREATE SCHEMA {schema}"
-            )
+                # Create the new schema
+                cursor.execute(
+                    f"CREATE SCHEMA {schema}"
+                )
 
-            # Create an empty copy of the global change log. Share the ID sequence from the main table to avoid
-            # reusing change record IDs.
-            table = ObjectChange_._meta.db_table
-            cursor.execute(
-                f"CREATE TABLE {schema}.{table} ( LIKE public.{table} INCLUDING INDEXES )"
-            )
-            # Set the default value for the ID column to the sequence associated with the source table
-            cursor.execute(
-                f"ALTER TABLE {schema}.{table} "
-                f"ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
-            )
-
-            # Replicate relevant tables from the main schema
-            for table in get_tables_to_replicate():
-                # Create the table in the new schema
+                # Create an empty copy of the global change log. Share the ID sequence from the main table to avoid
+                # reusing change record IDs.
+                table = ObjectChange_._meta.db_table
                 cursor.execute(
                     f"CREATE TABLE {schema}.{table} ( LIKE public.{table} INCLUDING INDEXES )"
                 )
-                # Copy data from the source table
-                cursor.execute(
-                    f"INSERT INTO {schema}.{table} SELECT * FROM public.{table}"
-                )
                 # Set the default value for the ID column to the sequence associated with the source table
                 cursor.execute(
-                    f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
+                    f"ALTER TABLE {schema}.{table} "
+                    f"ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
                 )
+
+                # Replicate relevant tables from the main schema
+                for table in get_tables_to_replicate():
+                    # Create the table in the new schema
+                    cursor.execute(
+                        f"CREATE TABLE {schema}.{table} ( LIKE public.{table} INCLUDING INDEXES )"
+                    )
+                    # Copy data from the source table
+                    cursor.execute(
+                        f"INSERT INTO {schema}.{table} SELECT * FROM public.{table}"
+                    )
+                    # Set the default value for the ID column to the sequence associated with the source table
+                    cursor.execute(
+                        f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
+                    )
+
+        except Exception as e:
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
+            raise e
 
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
 
