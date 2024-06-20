@@ -171,7 +171,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     def sync(self, commit=True):
         """
-        Replay changes from the main schema onto the Branch's schema.
+        Apply changes from the main schema onto the Branch's schema.
         """
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.SYNCING)
 

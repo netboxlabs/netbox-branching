@@ -95,15 +95,15 @@ def _get_change_count(obj):
     return obj.get_changes().count()
 
 
-@register_model_view(Branch, 'replay')
-class BranchReplayView(generic.ObjectChildrenView):
+@register_model_view(Branch, 'changes')
+class BranchChangesView(generic.ObjectChildrenView):
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
-    table = tables.ReplayTable
+    table = tables.ChangesTable
     actions = {}
     tab = ViewTab(
-        label=_('Replay'),
+        label=_('Changes'),
         badge=_get_change_count,
         permission='netbox_branching.view_branch'
     )

@@ -9,7 +9,7 @@ from .columns import ConflictsColumn, DiffColumn
 __all__ = (
     'ChangeDiffTable',
     'BranchTable',
-    'ReplayTable',
+    'ChangesTable',
 )
 
 
@@ -42,6 +42,10 @@ AFTER_DIFF = """
     <pre class="p-0">{% for k, v in record.diff.post.items %}{{ k }}: {{ v }}
 {% endfor %}</pre>
 {% endif %}
+"""
+
+OBJECTCHANGE_REQUEST_ID = """
+<a href="?request_id={{ value }}">{{ value }}</a>
 """
 
 
@@ -117,7 +121,7 @@ class ChangeDiffTable(NetBoxTable):
         default_columns = ('branch', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff')
 
 
-class ReplayTable(NetBoxTable):
+class ChangesTable(NetBoxTable):
     time = columns.DateTimeColumn(
         verbose_name=_('Time'),
         timespec='minutes',
@@ -148,6 +152,10 @@ class ReplayTable(NetBoxTable):
         verbose_name=_('After'),
         orderable=False
     )
+    request_id = tables.TemplateColumn(
+        template_code=OBJECTCHANGE_REQUEST_ID,
+        verbose_name=_('Request ID')
+    )
     actions = columns.ActionsColumn(
         actions=()
     )
@@ -155,5 +163,5 @@ class ReplayTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = ObjectChange
         fields = (
-            'pk', 'time', 'action', 'model', 'changed_object_type', 'object_repr', 'before', 'after',
+            'pk', 'time', 'action', 'model', 'changed_object_type', 'object_repr', 'request_id', 'before', 'after',
         )
