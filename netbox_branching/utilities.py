@@ -1,9 +1,11 @@
+import logging
 from contextlib import contextmanager
 
 from .contextvars import active_branch
 
 __all__ = (
     'DynamicSchemaDict',
+    'ListHandler',
     'activate_branch',
     'deactivate_branch',
     'get_branchable_object_types',
@@ -92,3 +94,15 @@ def get_tables_to_replicate():
                 tables.add(m2m_table)
 
     return sorted(tables)
+
+
+class ListHandler(logging.Handler):
+    """
+    A logging handler which appends log messages to list passed on initialization.
+    """
+    def __init__(self, *args, queue, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.queue = queue
+
+    def emit(self, record):
+        self.queue.append(self.format(record))

@@ -1,3 +1,4 @@
+import logging
 import random
 import string
 from functools import cached_property, partial
@@ -172,6 +173,9 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Apply changes from the main schema onto the Branch's schema.
         """
+        logger = logging.getLogger('netbox_branching.branch.sync')
+        logger.info(f'Syncing branch {self} ({self.schema_name})')
+
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to sync")
 
@@ -183,11 +187,13 @@ class Branch(JobsMixin, PrimaryModel):
                 with transaction.atomic():
                     # Apply each change from the main schema
                     for change in self.get_unsynced_changes().order_by('time'):
+                        logger.debug(f'Applying change: {change}')
                         change.apply(using=self.connection_name)
                     if not commit:
                         raise AbortTransaction()
 
         except Exception as e:
+            logger.error(e)
             # Restore original branch status
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
             raise e
@@ -197,6 +203,8 @@ class Branch(JobsMixin, PrimaryModel):
         self.status = BranchStatusChoices.READY
         self.save()
 
+        logger.info('Syncing completed')
+
     sync.alters_data = True
 
     def merge(self, user, commit=True):
@@ -204,6 +212,9 @@ class Branch(JobsMixin, PrimaryModel):
         Apply all changes in the Branch to the main schema by replaying them in
         chronological order.
         """
+        logger = logging.getLogger('netbox_branching.branch.merge')
+        logger.info(f'Merging branch {self} ({self.schema_name})')
+
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to merge")
 
@@ -225,6 +236,7 @@ class Branch(JobsMixin, PrimaryModel):
                 # Apply each change from the Branch
                 for change in changes:
                     with event_tracking(request):
+                        logger.debug(f'Applying change: {change}')
                         request.id = change.request_id
                         request.user = change.user
                         change.apply()
@@ -232,6 +244,7 @@ class Branch(JobsMixin, PrimaryModel):
                     raise AbortTransaction()
 
         except Exception as e:
+            logger.error(e)
             # Disconnect signal receiver & restore original branch status
             post_save.disconnect(handler, sender=ObjectChange_)
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
@@ -243,6 +256,8 @@ class Branch(JobsMixin, PrimaryModel):
         self.merged_by = user
         self.save()
 
+        logger.info('Merging completed')
+
         # Disconnect the signal receiver
         post_save.disconnect(handler, sender=ObjectChange_)
 
@@ -252,6 +267,9 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Create the schema & replicate main tables.
         """
+        logger = logging.getLogger('netbox_branching.branch.provision')
+        logger.info(f'Provisioning branch {self} ({self.schema_name})')
+
         # Update Branch status
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.PROVISIONING)
 
@@ -260,6 +278,7 @@ class Branch(JobsMixin, PrimaryModel):
                 schema = self.schema_name
 
                 # Create the new schema
+                logger.debug(f'Creating schema {schema}')
                 cursor.execute(
                     f"CREATE SCHEMA {schema}"
                 )
@@ -267,6 +286,7 @@ class Branch(JobsMixin, PrimaryModel):
                 # Create an empty copy of the global change log. Share the ID sequence from the main table to avoid
                 # reusing change record IDs.
                 table = ObjectChange_._meta.db_table
+                logger.debug(f'Creating table {schema}.{table}')
                 cursor.execute(
                     f"CREATE TABLE {schema}.{table} ( LIKE public.{table} INCLUDING INDEXES )"
                 )
@@ -278,6 +298,7 @@ class Branch(JobsMixin, PrimaryModel):
 
                 # Replicate relevant tables from the main schema
                 for table in get_tables_to_replicate():
+                    logger.debug(f'Creating table {schema}.{table}')
                     # Create the table in the new schema
                     cursor.execute(
                         f"CREATE TABLE {schema}.{table} ( LIKE public.{table} INCLUDING INDEXES )"
@@ -292,8 +313,11 @@ class Branch(JobsMixin, PrimaryModel):
                     )
 
         except Exception as e:
+            logger.error(e)
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
             raise e
+
+        logger.info('Provisioning completed')
 
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
 
@@ -303,10 +327,15 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Delete the Branch's schema and all its tables from the database.
         """
+        logger = logging.getLogger('netbox_branching.branch.provision')
+        logger.info(f'Deprovisioning branch {self} ({self.schema_name})')
+
         with connection.cursor() as cursor:
             # Delete the schema and all its tables
             cursor.execute(
                 f"DROP SCHEMA IF EXISTS {self.schema_name} CASCADE"
             )
+
+        logger.info('Deprovisioning completed')
 
     deprovision.alters_data = True

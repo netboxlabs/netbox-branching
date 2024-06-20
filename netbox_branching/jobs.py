@@ -6,6 +6,7 @@ from core.choices import JobStatusChoices
 from extras.signals import handle_changed_object, handle_deleted_object
 from utilities.exceptions import AbortTransaction
 from .models import Branch
+from .utilities import ListHandler
 
 __all__ = (
     'merge_branch',
@@ -14,25 +15,36 @@ __all__ = (
 )
 
 
-logger = logging.getLogger(__name__)
+def get_job_log(job):
+    """
+    Initialize and return the job log.
+    """
+    job.data = {
+        'log': list()
+    }
+    return job.data['log']
 
 
 def provision_branch(job):
     branch = Branch.objects.get(pk=job.object_id)
+    logger = logging.getLogger('netbox_branching.branch.provision')
+    logger.setLevel(logging.DEBUG)
 
     try:
         job.start()
-        logger.info(f"Provisioning branch {branch} ({branch.schema_name})")
+        handler = ListHandler(queue=get_job_log(job))
+        logger.addHandler(handler)
         branch.provision()
         job.terminate()
 
     except Exception as e:
         job.terminate(status=JobStatusChoices.STATUS_ERRORED, error=repr(e))
-        logging.error(e)
 
 
 def sync_branch(job, commit=True):
     branch = Branch.objects.get(pk=job.object_id)
+    logger = logging.getLogger('netbox_branching.branch.sync')
+    logger.setLevel(logging.DEBUG)
 
     try:
         # Disconnect changelog handlers
@@ -41,7 +53,8 @@ def sync_branch(job, commit=True):
         pre_delete.disconnect(handle_deleted_object)
 
         job.start()
-        logger.info(f"Syncing branch {branch} ({branch.schema_id})")
+        handler = ListHandler(queue=get_job_log(job))
+        logger.addHandler(handler)
         branch.sync(commit=commit)
         job.terminate()
 
@@ -50,7 +63,6 @@ def sync_branch(job, commit=True):
 
     except Exception as e:
         job.terminate(status=JobStatusChoices.STATUS_ERRORED, error=repr(e))
-        logging.error(e)
 
     finally:
         # Reconnect signal handlers
@@ -61,10 +73,13 @@ def sync_branch(job, commit=True):
 
 def merge_branch(job, commit=True):
     branch = Branch.objects.get(pk=job.object_id)
+    logger = logging.getLogger('netbox_branching.branch.merge')
+    logger.setLevel(logging.DEBUG)
 
     try:
         job.start()
-        logger.info(f"Merging branch {branch} ({branch.schema_id})")
+        handler = ListHandler(queue=get_job_log(job))
+        logger.addHandler(handler)
         branch.merge(job.user, commit=commit)
         job.terminate()
 
@@ -73,4 +88,3 @@ def merge_branch(job, commit=True):
 
     except Exception as e:
         job.terminate(status=JobStatusChoices.STATUS_ERRORED, error=repr(e))
-        logging.error(e)
