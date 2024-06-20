@@ -151,6 +151,8 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all ObjectChange records created within the Branch.
         """
+        if self.status == BranchStatusChoices.NEW:
+            return ObjectChange.objects.none()
         if self.status == BranchStatusChoices.MERGED:
             return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
                 application__branch=self
