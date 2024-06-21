@@ -75,7 +75,10 @@
     <div class="col col-md-6">
       {% if object.status != 'merged' %}
         <div class="card">
-          <h5 class="card-header">{% trans "Sync Branch" %}</h5>
+          <h5 class="card-header d-flex justify-content-between">
+            {% trans "Sync Branch" %}
+            <i class="mdi mdi-information-outline" title="{% trans "Synchronize recent changes from main into this branch." %}"></i>
+          </h5>
           <table class="table table-hover attr-table">
             <tr>
               <th scope="row">{% trans "Last synced" %}</th>
@@ -110,7 +113,10 @@
           {% endif %}
         </div>
         <div class="card">
-          <h5 class="card-header">{% trans "Merge Changes" %}</h5>
+          <h5 class="card-header d-flex justify-content-between">
+            {% trans "Merge Changes" %}
+            <i class="mdi mdi-information-outline" title="{% trans "Merge changes from this branch into main and close the branch." %}"></i>
+          </h5>
           {% if object.is_active %}
             <div class="card-body">
               Deactivate branch to merge
