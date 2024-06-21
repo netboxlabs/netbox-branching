@@ -52,6 +52,8 @@ class BranchView(generic.ObjectView):
         else:
             stats = {}
 
+        latest_change = instance.get_changes().order_by('time').last()
+
         last_job = instance.jobs.order_by('created').last()
         if last_job.status == JobStatusChoices.STATUS_FAILED:
             failed_job = last_job
@@ -60,6 +62,7 @@ class BranchView(generic.ObjectView):
 
         return {
             'stats': stats,
+            'latest_change': latest_change,
             'failed_job': failed_job,
             'unsynced_changes_count': instance.get_unsynced_changes().count(),
             'conflicts_count': ChangeDiff.objects.filter(branch=instance, conflicts__isnull=False).count(),

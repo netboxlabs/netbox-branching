@@ -59,6 +59,10 @@
             <td>{{ object.description|placeholder }}</td>
           </tr>
           <tr>
+            <th scope="row">{% trans "Last Activity" %}</th>
+            <td>{{ latest_change.time|isodatetime|placeholder }}</td>
+          </tr>
+          <tr>
             <th scope="row">{% trans "Conflicts" %}</th>
             <td>
               {% if not object.ready %}
