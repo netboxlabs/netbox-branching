@@ -1,29 +1,28 @@
 {% load i18n %}
-{% if active_branch %}
-  <div class="align-items-center">
+<div class="dropdown">
+  <button class="btn btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
     <i class="mdi mdi-source-branch"></i>
-    <a href="{{ active_branch.get_absolute_url }}" title="{{ active_branch.description }}">{{ active_branch.name }}</a>
-    <a href="?_branch=" class="btn btn-sm btn-danger">
-      <i class="mdi mdi-close-thick" title="{% trans "Deactivate" %}"></i>
+    {{ active_branch|default:"Main" }}
+  </button>
+  <div class="dropdown-menu">
+    <a class="dropdown-item d-flex justify-content-between" href="?_branch=">
+      Main {% if not active_branch %}<span class="badge bg-green ms-auto"></span>{% endif %}
     </a>
+    {% for branch in branches %}
+      {% if branch.ready %}
+        <a class="dropdown-item d-flex justify-content-between" href="?_branch={{ branch.schema_id }}">
+          {{ branch.name }}
+          {% if branch.is_active %}<span class="badge bg-green ms-auto"></span>{% endif %}
+        </a>
+      {% else %}
+        <a class="dropdown-item disabled" aria-disabled="true">{{ branch.name }} ({{ branch.status }})</a>
+      {% endif %}
+    {% endfor %}
+    {% if perms.netbox_branching.add_branch %}
+      <hr class="dropdown-divider">
+      <a class="dropdown-item" href="{% url 'plugins:netbox_branching:branch_add' %}">
+        <i class="mdi mdi-plus-thick"></i> {% trans "Create a Branch" %}
+      </a>
+    {% endif %}
   </div>
-{% elif branches %}
-  <form method="get" class="row align-items-center">
-    <div class="col-auto">
-      <div class="input-group">
-        <select name="_branch" id="branch_selector" class="form-select form-select-sm">
-          <option></option>
-          {% for branch in branches %}
-            <option value="{{ branch.schema_id }}"{% if not branch.ready %} disabled{% endif %}>
-              {{ branch.name }}
-              {% if not branch.ready %}({{ branch.status }}){% endif %}
-            </option>
-          {% endfor %}
-        </select>
-        <button type="submit" value="Activate" class="btn btn-sm btn-primary" >
-          <i class="mdi mdi-check-bold"></i> {% trans "Activate" %}
-        </button>
-      </div>
-    </div>
-  </form>
-{% endif %}
+</div>
