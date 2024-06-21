@@ -16,7 +16,7 @@ menu = PluginMenu(
             ),
             PluginMenuItem(
                 link='plugins:netbox_branching:changediff_list',
-                link_text='Changes'
+                link_text=_('Change Diffs')
             ),
         )),
     ),
