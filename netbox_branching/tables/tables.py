@@ -1,9 +1,11 @@
 import django_tables2 as tables
+from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 
 from core.models import ObjectChange
 from netbox.tables import NetBoxTable, columns
 from netbox_branching.models import Branch, ChangeDiff
+from utilities.templatetags.builtins.filters import placeholder
 from .columns import ConflictsColumn, DiffColumn
 
 __all__ = (
@@ -54,9 +56,6 @@ class BranchTable(NetBoxTable):
         verbose_name=_('Name'),
         linkify=True
     )
-    is_active = columns.BooleanColumn(
-        verbose_name=_('Active')
-    )
     status = columns.ChoiceFieldColumn(
         verbose_name=_('Status'),
     )
@@ -76,6 +75,11 @@ class BranchTable(NetBoxTable):
         default_columns = (
             'pk', 'name', 'is_active', 'status', 'owner', 'conflicts', 'schema_id', 'description',
         )
+
+    def render_is_active(self, value):
+        if value:
+            return mark_safe('<span class="text-success"><i class="mdi mdi-check-bold"></i></span>')
+        return placeholder('')
 
 
 class ChangeDiffTable(NetBoxTable):
