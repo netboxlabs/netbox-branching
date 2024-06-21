@@ -35,12 +35,18 @@
           </tr>
           <tr>
             <th scope="row">{% trans "Status" %}</th>
-            <td>
+            <td class="d-flex justify-content-between">
               {% if object.is_active %}
                 {% trans "Active" as status %}
                 {% badge status "blue" %}
               {% else %}
                 {% badge object.get_status_display object.get_status_color %}
+              {% endif %}
+              {% if failed_job %}
+                <span class="text-red">
+                  <i class="mdi mdi-alert"></i>
+                  <a href="{% url 'plugins:netbox_branching:branch_jobs' pk=object.pk %}" class="text-red">{% trans "Job failed" %}</a>
+                </span>
               {% endif %}
             </td>
           </tr>

@@ -5,7 +5,7 @@ from django.shortcuts import redirect
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
-from core.choices import ObjectChangeActionChoices
+from core.choices import JobStatusChoices, ObjectChangeActionChoices
 from core.filtersets import ObjectChangeFilterSet
 from core.models import Job, ObjectChange
 from netbox.views import generic
@@ -52,8 +52,15 @@ class BranchView(generic.ObjectView):
         else:
             stats = {}
 
+        last_job = instance.jobs.order_by('created').last()
+        if last_job.status == JobStatusChoices.STATUS_FAILED:
+            failed_job = last_job
+        else:
+            failed_job = None
+
         return {
             'stats': stats,
+            'failed_job': failed_job,
             'unsynced_changes_count': instance.get_unsynced_changes().count(),
             'conflicts_count': ChangeDiff.objects.filter(branch=instance, conflicts__isnull=False).count(),
             'sync_form': forms.SyncBranchForm(),
