@@ -66,6 +66,11 @@ class BranchEditView(generic.ObjectEditView):
     queryset = Branch.objects.all()
     form = forms.BranchForm
 
+    def alter_object(self, obj, request, url_args, url_kwargs):
+        if not obj.pk:
+            obj.user = request.user
+        return obj
+
 
 @register_model_view(Branch, 'delete')
 class BranchDeleteView(generic.ObjectDeleteView):

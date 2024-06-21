@@ -35,6 +35,13 @@ class BranchSerializer(NetBoxModelSerializer):
         ]
         brief_fields = ('id', 'url', 'display', 'name', 'status', 'description')
 
+    def create(self, validated_data):
+        """
+        Record the user who created the Branch.
+        """
+        validated_data['user'] = self.context["request"].user
+        return super().create(validated_data)
+
 
 class ChangeDiffSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
