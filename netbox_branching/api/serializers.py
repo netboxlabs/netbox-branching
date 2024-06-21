@@ -6,6 +6,7 @@ from netbox.api.exceptions import SerializerNotFound
 from netbox.api.fields import ChoiceField, ContentTypeField
 from netbox.api.serializers import NetBoxModelSerializer
 from netbox_branching.models import ChangeDiff, Branch
+from users.api.serializers import UserSerializer
 from utilities.api import get_serializer_for_model
 
 __all__ = (
@@ -17,14 +18,22 @@ class BranchSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name='plugins-api:netbox_branching-api:branch-detail'
     )
+    user = UserSerializer(
+        nested=True,
+        read_only=True
+    )
+    merged_by = UserSerializer(
+        nested=True,
+        read_only=True
+    )
 
     class Meta:
         model = Branch
         fields = [
-            'id', 'url', 'display', 'name', 'description', 'schema_id', 'comments', 'tags', 'custom_fields', 'created',
-            'last_updated',
+            'id', 'url', 'display', 'name', 'status', 'user', 'description', 'schema_id', 'last_sync', 'merged_time',
+            'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated',
         ]
-        brief_fields = ('id', 'url', 'display', 'name', 'description')
+        brief_fields = ('id', 'url', 'display', 'name', 'status', 'description')
 
 
 class ChangeDiffSerializer(NetBoxModelSerializer):
@@ -64,8 +73,8 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
     class Meta:
         model = ChangeDiff
         fields = [
-            'id', 'url', 'display', 'branch', 'object_type', 'object_id', 'object', 'action', 'original_data',
-            'modified_data', 'current_data', 'last_updated',
+            'id', 'url', 'display', 'branch', 'object_type', 'object_id', 'object', 'action', 'conflicts',
+            'original_data', 'modified_data', 'current_data', 'last_updated',
         ]
         brief_fields = ('id', 'url', 'display', 'object_type', 'object_id', 'action')
 
