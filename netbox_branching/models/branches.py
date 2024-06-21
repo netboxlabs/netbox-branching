@@ -35,7 +35,7 @@ class Branch(JobsMixin, PrimaryModel):
         max_length=100,
         unique=True
     )
-    user = models.ForeignKey(
+    owner = models.ForeignKey(
         to=get_user_model(),
         on_delete=models.SET_NULL,
         blank=True,

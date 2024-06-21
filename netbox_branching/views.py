@@ -68,7 +68,7 @@ class BranchEditView(generic.ObjectEditView):
 
     def alter_object(self, obj, request, url_args, url_kwargs):
         if not obj.pk:
-            obj.user = request.user
+            obj.owner = request.user
         return obj
 
 

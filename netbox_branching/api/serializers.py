@@ -20,7 +20,7 @@ class BranchSerializer(NetBoxModelSerializer):
     url = serializers.HyperlinkedIdentityField(
         view_name='plugins-api:netbox_branching-api:branch-detail'
     )
-    user = UserSerializer(
+    owner = UserSerializer(
         nested=True,
         read_only=True
     )
@@ -32,16 +32,16 @@ class BranchSerializer(NetBoxModelSerializer):
     class Meta:
         model = Branch
         fields = [
-            'id', 'url', 'display', 'name', 'status', 'user', 'description', 'schema_id', 'last_sync', 'merged_time',
+            'id', 'url', 'display', 'name', 'status', 'owner', 'description', 'schema_id', 'last_sync', 'merged_time',
             'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated',
         ]
         brief_fields = ('id', 'url', 'display', 'name', 'status', 'description')
 
     def create(self, validated_data):
         """
-        Record the user who created the Branch.
+        Record the user who created the Branch as its owner.
         """
-        validated_data['user'] = self.context["request"].user
+        validated_data['owner'] = self.context['request'].user
         return super().create(validated_data)
 
 

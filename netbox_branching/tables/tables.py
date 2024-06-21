@@ -70,10 +70,12 @@ class BranchTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = Branch
         fields = (
-            'pk', 'id', 'name', 'is_active', 'status', 'conflicts', 'schema_id', 'description', 'user', 'tags',
+            'pk', 'id', 'name', 'is_active', 'status', 'conflicts', 'schema_id', 'description', 'owner', 'tags',
             'created', 'last_updated',
         )
-        default_columns = ('pk', 'name', 'is_active', 'status', 'conflicts', 'schema_id', 'description', 'user')
+        default_columns = (
+            'pk', 'name', 'is_active', 'status', 'owner', 'conflicts', 'schema_id', 'description',
+        )
 
 
 class ChangeDiffTable(NetBoxTable):
