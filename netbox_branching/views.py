@@ -34,20 +34,23 @@ class BranchView(generic.ObjectView):
 
     def get_extra_context(self, request, instance):
         qs = instance.get_changes().values_list('changed_object_type').annotate(count=Count('pk'))
-        stats = {
-            'created': {
-                ContentType.objects.get(pk=ct): count
-                for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_CREATE)
-            },
-            'updated': {
-                ContentType.objects.get(pk=ct): count
-                for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_UPDATE)
-            },
-            'deleted': {
-                ContentType.objects.get(pk=ct): count
-                for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_DELETE)
-            },
-        }
+        if instance.ready:
+            stats = {
+                'created': {
+                    ContentType.objects.get(pk=ct): count
+                    for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_CREATE)
+                },
+                'updated': {
+                    ContentType.objects.get(pk=ct): count
+                    for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_UPDATE)
+                },
+                'deleted': {
+                    ContentType.objects.get(pk=ct): count
+                    for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_DELETE)
+                },
+            }
+        else:
+            stats = {}
 
         return {
             'stats': stats,
