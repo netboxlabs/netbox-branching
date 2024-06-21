@@ -9,7 +9,7 @@ from . import serializers
 
 class RootView(APIRootView):
     def get_view_name(self):
-        return 'Branches'
+        return 'Branching'
 
 
 class BranchViewSet(ModelViewSet):
