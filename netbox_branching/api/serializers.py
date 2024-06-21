@@ -10,7 +10,9 @@ from users.api.serializers import UserSerializer
 from utilities.api import get_serializer_for_model
 
 __all__ = (
+    'BranchSerializer',
     'ChangeDiffSerializer',
+    'CommitSerializer',
 )
 
 
@@ -100,3 +102,7 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
         data = serializer(obj.object, nested=True, context={'request': self.context['request']}).data
 
         return data
+
+
+class CommitSerializer(serializers.Serializer):
+    commit = serializers.BooleanField(required=False)
