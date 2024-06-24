@@ -1,20 +1,20 @@
 from django import forms
 
-from utilities.forms import ConfirmationForm
-
 __all__ = (
     'MergeBranchForm',
     'SyncBranchForm',
 )
 
 
-class SyncBranchForm(ConfirmationForm):
+class SyncBranchForm(forms.Form):
     commit = forms.BooleanField(
-        required=False
+        required=False,
+        initial=True
     )
 
 
-class MergeBranchForm(ConfirmationForm):
+class MergeBranchForm(forms.Form):
     commit = forms.BooleanField(
-        required=False
+        required=False,
+        initial=True
     )

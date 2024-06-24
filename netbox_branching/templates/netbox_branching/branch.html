@@ -8,11 +8,11 @@
 {% block extra_controls %}
   {% if not object.is_active %}
     {% if object.ready %}
-      <a href="?_branch={{ object.schema_id }}" class="btn btn-primary" role="button">
+      <a href="?_branch={{ object.schema_id }}" class="btn btn-green" role="button">
         <i class="mdi mdi-check-bold"></i> {% trans "Activate" %}
       </a>
     {% else %}
-      <a href="?_branch={{ object.schema_id }}" class="btn btn-primary disabled" role="button" aria-disabled="true">
+      <a href="?_branch={{ object.schema_id }}" class="btn btn-green disabled" role="button" aria-disabled="true">
         <i class="mdi mdi-check-bold"></i> {% trans "Activate" %}
       </a>
     {% endif %}
@@ -20,6 +20,18 @@
     <a href="?_branch=" class="btn btn-danger">
       <i class="mdi mdi-close-thick"></i> {% trans "Deactivate" %}
     </a>
+  {% endif %}
+  <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#sync-modal">
+    <i class="mdi mdi-sync"></i> {% trans "Sync" %}
+  </button>
+  {% if object.is_active %}
+    <button type="button" class="btn btn-primary disabled" data-bs-toggle="modal" data-bs-target="#merge-modal" aria-disabled="true">
+      <i class="mdi mdi-merge"></i> {% trans "Merge" %}
+    </button>
+  {% else %}
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#merge-modal">
+      <i class="mdi mdi-merge"></i> {% trans "Merge" %}
+    </button>
   {% endif %}
 {% endblock %}
 
@@ -91,10 +103,7 @@
     <div class="col col-md-6">
       {% if object.status != 'merged' %}
         <div class="card">
-          <h5 class="card-header d-flex justify-content-between">
-            {% trans "Sync Branch" %}
-            <i class="mdi mdi-information-outline" title="{% trans "Synchronize recent changes from main into this branch." %}"></i>
-          </h5>
+          <h5 class="card-header d-flex justify-content-between">{% trans "Sync Branch" %}</h5>
           <table class="table table-hover attr-table">
             <tr>
               <th scope="row">{% trans "Last synced" %}</th>
@@ -114,38 +123,9 @@
               </td>
             </tr>
           </table>
-          {% if object.is_active %}
-            <div class="card-body">
-              Deactivate branch to sync
-            </div>
-          {% else %}
-            <div class="card-body">
-              <form method="post" action="{% url 'plugins:netbox_branching:branch_sync' pk=object.pk %}">
-                {% csrf_token %}
-                {{ sync_form }}
-                <input type="submit" class="btn btn-primary" value="{% trans "Sync" %}">
-              </form>
-            </div>
-          {% endif %}
         </div>
         <div class="card">
-          <h5 class="card-header d-flex justify-content-between">
-            {% trans "Merge Changes" %}
-            <i class="mdi mdi-information-outline" title="{% trans "Merge changes from this branch into main and close the branch." %}"></i>
-          </h5>
-          {% if object.is_active %}
-            <div class="card-body">
-              Deactivate branch to merge
-            </div>
-          {% else %}
-            <div class="card-body">
-              <form method="post" action="{% url 'plugins:netbox_branching:branch_merge' pk=object.pk %}">
-                {% csrf_token %}
-                {{ merge_form }}
-                <input type="submit" class="btn btn-primary" value="Merge">
-              </form>
-            </div>
-          {% endif %}
+          <h5 class="card-header d-flex justify-content-between">{% trans "Merge Changes" %}</h5>
         </div>
       {% else %}
         <div class="card">
@@ -221,6 +201,58 @@
   <div class="row mb-3">
     <div class="col col-md-12">
       {% plugin_full_width_page object %}
+    </div>
+  </div>
+{% endblock %}
+
+{% block modals %}
+  {# Sync modal #}
+  <div class="modal fade" id="sync-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <h3 class="modal-header mb-0">{% trans "Sync Branch" %}</h3>
+        <div class="modal-body">
+          <p>{% trans "Synchronize recent changes from main into this branch." %}</p>
+          <form method="post" action="{% url 'plugins:netbox_branching:branch_sync' pk=object.pk %}">
+            {% csrf_token %}
+            <div class="form-check mb-3">
+              {{ sync_form.commit }}
+              <label for="id_commit" class="form-check-label">Commit</label>
+              <span class="form-text">{% trans "Apply changes (uncheck to do a dry-run)" %}</span>
+            </div>
+            <div class="d-flex flex-row-reverse">
+              <button type="submit" class="btn btn-primary">
+                <i class="mdi mdi-sync"></i> {% trans "Sync" %}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# Merge modal #}
+  <div class="modal fade" id="merge-modal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+      <div class="modal-content">
+        <h3 class="modal-header mb-0">{% trans "Merge Branch" %}</h3>
+        <div class="modal-body">
+          <p>{% trans "Merge changes from this branch into main and close the branch." %}</p>
+          <form method="post" action="{% url 'plugins:netbox_branching:branch_merge' pk=object.pk %}">
+            {% csrf_token %}
+            <div class="form-check mb-3">
+              {{ merge_form.commit }}
+              <label for="id_commit" class="form-check-label">Commit</label>
+              <span class="form-text">{% trans "Apply changes (uncheck to do a dry-run)" %}</span>
+            </div>
+            <div class="d-flex flex-row-reverse">
+              <button type="submit" class="btn btn-primary">
+                <i class="mdi mdi-merge"></i> {% trans "Merge" %}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
     </div>
   </div>
 {% endblock %}

@@ -139,6 +139,7 @@ class BranchSyncView(generic.ObjectView):
         form = forms.SyncBranchForm(request.POST)
 
         if form.is_valid():
+            print('syncing')
             # Enqueue a background job to sync the Branch
             Job.enqueue(
                 import_string('netbox_branching.jobs.sync_branch'),
@@ -147,6 +148,8 @@ class BranchSyncView(generic.ObjectView):
                 commit=form.cleaned_data['commit']
             )
             messages.success(request, f"Syncing of branch {branch} in progress")
+        else:
+            print(form.errors)
 
         return redirect(branch.get_absolute_url())
 
@@ -159,7 +162,10 @@ class BranchMergeView(generic.ObjectView):
         branch = self.get_object(**kwargs)
         form = forms.MergeBranchForm(request.POST)
 
-        if form.is_valid():
+        if branch.is_active:
+            messages.error(request, "Cannot merge the active branch")
+
+        elif form.is_valid():
             # Enqueue a background job to merge the Branch
             Job.enqueue(
                 import_string('netbox_branching.jobs.merge_branch'),
