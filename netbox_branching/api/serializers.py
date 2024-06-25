@@ -82,10 +82,10 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
     class Meta:
         model = ChangeDiff
         fields = [
-            'id', 'url', 'display', 'branch', 'object_type', 'object_id', 'object', 'action', 'conflicts',
-            'original_data', 'modified_data', 'current_data', 'last_updated',
+            'id', 'url', 'display', 'branch', 'object_type', 'object_id', 'object', 'object_repr', 'action',
+            'conflicts', 'original_data', 'modified_data', 'current_data', 'last_updated',
         ]
-        brief_fields = ('id', 'url', 'display', 'object_type', 'object_id', 'action')
+        brief_fields = ('id', 'url', 'display', 'object_type', 'object_id', 'object_repr', 'action')
 
     @extend_schema_field(serializers.JSONField(allow_null=True))
     def get_object(self, obj):

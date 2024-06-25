@@ -91,9 +91,10 @@ class ChangeDiffTable(NetBoxTable):
         verbose_name=_('Branch'),
         linkify=True
     )
-    object = tables.Column(
+    object = tables.TemplateColumn(
+        template_code=OBJECTCHANGE_OBJECT,
         verbose_name=_('Object'),
-        linkify=True
+        orderable=False
     )
     action = columns.ChoiceFieldColumn(
         verbose_name=_('Action'),

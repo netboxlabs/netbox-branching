@@ -88,6 +88,10 @@ class ChangeDiff(models.Model):
         ct_field='object_type',
         fk_field='object_id'
     )
+    object_repr = models.CharField(
+        max_length=200,
+        editable=False
+    )
     action = models.CharField(
         verbose_name=_('action'),
         max_length=50,
@@ -123,10 +127,11 @@ class ChangeDiff(models.Model):
         verbose_name_plural = _('change diffs')
 
     def __str__(self):
-        return f'{self.get_action_display()} {self.object_type.name} {self.object_id}'
+        return f'{self.get_action_display()} {self.object_type.name} {self.object_repr} ({self.object_id})'
 
     def save(self, *args, **kwargs):
         self._update_conflicts()
+        self.object_repr = str(self.object)
 
         super().save(*args, **kwargs)
 
