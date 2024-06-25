@@ -21,15 +21,21 @@
       <i class="mdi mdi-close-thick"></i> {% trans "Deactivate" %}
     </a>
   {% endif %}
-  <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#sync-modal">
-    <i class="mdi mdi-sync"></i> {% trans "Sync" %}
-  </button>
-  {% if object.is_active %}
-    <button type="button" class="btn btn-primary disabled" data-bs-toggle="modal" data-bs-target="#merge-modal" aria-disabled="true">
+  {% if perms.netbox_branching.sync_branch %}
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#sync-modal">
+      <i class="mdi mdi-sync"></i> {% trans "Sync" %}
+    </button>
+  {% else %}
+    <button type="button" class="btn btn-primary disabled" aria-disabled="true">
+      <i class="mdi mdi-sync"></i> {% trans "Sync" %}
+    </button>
+  {% endif %}
+  {% if perms.netbox_branching.merge_branch and not object.is_active %}
+    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#merge-modal">
       <i class="mdi mdi-merge"></i> {% trans "Merge" %}
     </button>
   {% else %}
-    <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#merge-modal">
+    <button type="button" class="btn btn-primary disabled" aria-disabled="true">
       <i class="mdi mdi-merge"></i> {% trans "Merge" %}
     </button>
   {% endif %}

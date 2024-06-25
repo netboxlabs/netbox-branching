@@ -1,8 +1,8 @@
+from django.core.exceptions import PermissionDenied
 from django.utils.module_loading import import_string
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
-from rest_framework.status import HTTP_400_BAD_REQUEST
 from rest_framework.viewsets import ModelViewSet
 
 from core.api.serializers import JobSerializer
@@ -28,6 +28,9 @@ class BranchViewSet(ModelViewSet):
         """
         Enqueue a background job to run Branch.sync().
         """
+        if not request.user.has_perm('netbox_branching.sync_branch'):
+            raise PermissionDenied("This user does not have permission to sync branches.")
+
         serializer = serializers.CommitSerializer(data=request.data)
         commit = serializer.validated_data['commit'] if serializer.is_valid() else False
 
@@ -46,6 +49,9 @@ class BranchViewSet(ModelViewSet):
         """
         Enqueue a background job to run Branch.merge().
         """
+        if not request.user.has_perm('netbox_branching.merge_branch'):
+            raise PermissionDenied("This user does not have permission to merge branches.")
+
         serializer = serializers.CommitSerializer(data=request.data)
         commit = serializer.validated_data['commit'] if serializer.is_valid() else False
 

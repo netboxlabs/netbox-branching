@@ -134,6 +134,9 @@ class BranchChangesView(generic.ObjectChildrenView):
 class BranchSyncView(generic.ObjectView):
     queryset = Branch.objects.all()
 
+    def get_required_permission(self):
+        return 'netbox_branching.sync_branch'
+
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
         form = forms.SyncBranchForm(request.POST)
@@ -157,6 +160,9 @@ class BranchSyncView(generic.ObjectView):
 @register_model_view(Branch, 'merge')
 class BranchMergeView(generic.ObjectView):
     queryset = Branch.objects.all()
+
+    def get_required_permission(self):
+        return 'netbox_branching.merge_branch'
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
