@@ -21,7 +21,7 @@
       <i class="mdi mdi-close-thick"></i> {% trans "Deactivate" %}
     </a>
   {% endif %}
-  {% if perms.netbox_branching.sync_branch %}
+  {% if perms.netbox_branching.sync_branch and object.ready %}
     <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#sync-modal">
       <i class="mdi mdi-sync"></i> {% trans "Sync" %}
     </button>
@@ -30,7 +30,7 @@
       <i class="mdi mdi-sync"></i> {% trans "Sync" %}
     </button>
   {% endif %}
-  {% if perms.netbox_branching.merge_branch and not object.is_active %}
+  {% if perms.netbox_branching.merge_branch and object.ready %}
     <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#merge-modal">
       <i class="mdi mdi-merge"></i> {% trans "Merge" %}
     </button>

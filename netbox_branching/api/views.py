@@ -1,4 +1,5 @@
 from django.core.exceptions import PermissionDenied
+from django.http import HttpResponseBadRequest
 from django.utils.module_loading import import_string
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -31,13 +32,17 @@ class BranchViewSet(ModelViewSet):
         if not request.user.has_perm('netbox_branching.sync_branch'):
             raise PermissionDenied("This user does not have permission to sync branches.")
 
+        branch = self.get_object()
+        if not branch.ready:
+            return HttpResponseBadRequest("Branch is not ready to sync")
+
         serializer = serializers.CommitSerializer(data=request.data)
         commit = serializer.validated_data['commit'] if serializer.is_valid() else False
 
         # Enqueue a background job
         job = Job.enqueue(
             import_string('netbox_branching.jobs.sync_branch'),
-            instance=self.get_object(),
+            instance=branch,
             name='Sync branch',
             commit=commit
         )
@@ -52,13 +57,17 @@ class BranchViewSet(ModelViewSet):
         if not request.user.has_perm('netbox_branching.merge_branch'):
             raise PermissionDenied("This user does not have permission to merge branches.")
 
+        branch = self.get_object()
+        if not branch.ready:
+            return HttpResponseBadRequest("Branch is not ready to merge")
+
         serializer = serializers.CommitSerializer(data=request.data)
         commit = serializer.validated_data['commit'] if serializer.is_valid() else False
 
         # Enqueue a background job
         job = Job.enqueue(
             import_string('netbox_branching.jobs.merge_branch'),
-            instance=self.get_object(),
+            instance=branch,
             name='Merge branch',
             commit=commit
         )
