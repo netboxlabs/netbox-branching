@@ -55,7 +55,7 @@ class BranchView(generic.ObjectView):
         latest_change = instance.get_changes().order_by('time').last()
 
         last_job = instance.jobs.order_by('created').last()
-        if last_job.status == JobStatusChoices.STATUS_FAILED:
+        if last_job and last_job.status == JobStatusChoices.STATUS_FAILED:
             failed_job = last_job
         else:
             failed_job = None
