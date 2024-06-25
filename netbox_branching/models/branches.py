@@ -3,7 +3,9 @@ import random
 import string
 from functools import cached_property, partial
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db.utils import ProgrammingError
 from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.db.models.signals import post_save
 from django.test import RequestFactory
@@ -285,9 +287,17 @@ class Branch(JobsMixin, PrimaryModel):
 
                 # Create the new schema
                 logger.debug(f'Creating schema {schema}')
-                cursor.execute(
-                    f"CREATE SCHEMA {schema}"
-                )
+                try:
+                    cursor.execute(f"CREATE SCHEMA {schema}")
+                except ProgrammingError as e:
+                    if str(e).startswith('permission denied '):
+                        logger.critical(
+                            f"Provisioning failed due to insufficient database permissions. Ensure that the NetBox "
+                            f"role ({settings.DATABASE['USER']}) has permission to create new schemas on this "
+                            f"database ({settings.DATABASE['NAME']}). (Use the PostgreSQL command 'GRANT CREATE ON "
+                            f"DATABASE $database TO $role;' to grant the required permission.)"
+                        )
+                    raise e
 
                 # Create an empty copy of the global change log. Share the ID sequence from the main table to avoid
                 # reusing change record IDs.
