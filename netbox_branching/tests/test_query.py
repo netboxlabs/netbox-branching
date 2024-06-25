@@ -21,7 +21,8 @@ class QueryTestCase(TransactionTestCase):
 
         branch = Branch(name='Branch 1')
         branch.schema_id = 'test1234'
-        branch.save()
+        branch.save(provision=False)
+        branch.provision()
 
         # Query for the objects in the main schema
         self.assertEqual(Site.objects.count(), 1)
@@ -33,3 +34,5 @@ class QueryTestCase(TransactionTestCase):
         with activate_branch(branch):
             self.assertEqual(Site.objects.count(), 1)
             self.assertEqual(DeviceRole.objects.count(), 1)
+
+        branch.deprovision()

@@ -1,3 +1,5 @@
+from django_rq import get_queue
+
 from netbox_branching.models import Branch
 from utilities.testing import ViewTestCases, create_tags
 
@@ -44,3 +46,7 @@ class BranchTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         cls.bulk_edit_data = {
             'description': 'New description',
         }
+
+    def tearDown(self):
+        # Clear jobs queue
+        get_queue('default').connection.flushall()

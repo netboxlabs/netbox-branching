@@ -26,15 +26,17 @@ def get_job_log(job):
 
 
 def provision_branch(job):
-    branch = Branch.objects.get(pk=job.object_id)
     logger = logging.getLogger('netbox_branching.branch.provision')
     logger.setLevel(logging.DEBUG)
 
     try:
         job.start()
-        handler = ListHandler(queue=get_job_log(job))
-        logger.addHandler(handler)
+        logger.addHandler(ListHandler(queue=get_job_log(job)))
+
+        # Provision the Branch
+        branch = Branch.objects.get(pk=job.object_id)
         branch.provision()
+
         job.terminate()
 
     except Exception as e:
@@ -42,20 +44,22 @@ def provision_branch(job):
 
 
 def sync_branch(job, commit=True):
-    branch = Branch.objects.get(pk=job.object_id)
     logger = logging.getLogger('netbox_branching.branch.sync')
     logger.setLevel(logging.DEBUG)
 
     try:
+        job.start()
+        logger.addHandler(ListHandler(queue=get_job_log(job)))
+
         # Disconnect changelog handlers
         post_save.disconnect(handle_changed_object)
         m2m_changed.disconnect(handle_changed_object)
         pre_delete.disconnect(handle_deleted_object)
 
-        job.start()
-        handler = ListHandler(queue=get_job_log(job))
-        logger.addHandler(handler)
+        # Sync the Branch
+        branch = Branch.objects.get(pk=job.object_id)
         branch.sync(commit=commit)
+
         job.terminate()
 
     except AbortTransaction:
@@ -72,15 +76,17 @@ def sync_branch(job, commit=True):
 
 
 def merge_branch(job, commit=True):
-    branch = Branch.objects.get(pk=job.object_id)
     logger = logging.getLogger('netbox_branching.branch.merge')
     logger.setLevel(logging.DEBUG)
 
     try:
         job.start()
-        handler = ListHandler(queue=get_job_log(job))
-        logger.addHandler(handler)
+        logger.addHandler(ListHandler(queue=get_job_log(job)))
+
+        # Merge the Branch
+        branch = Branch.objects.get(pk=job.object_id)
         branch.merge(job.user, commit=commit)
+
         job.terminate()
 
     except AbortTransaction:

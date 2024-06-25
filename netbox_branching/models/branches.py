@@ -113,8 +113,13 @@ class Branch(JobsMixin, PrimaryModel):
     def synced_time(self):
         return self.last_sync or self.created
 
-    def save(self, *args, **kwargs):
-        _provision = self.pk is None
+    def save(self, provision=True, *args, **kwargs):
+        """
+        Args:
+            provision: If True, automatically enqueue a background Job to provision the Branch. (Set this
+                       to False if you will call provision() on the instance manually.)
+        """
+        _provision = provision and self.pk is None
 
         if active_branch.get():
             raise AbortRequest(_("Cannot create or modify a branch while a branch is active."))

@@ -30,7 +30,7 @@ class APITestCase(TransactionTestCase):
 
         # Create a Branch
         branch = Branch(name='Branch 1')
-        branch.save()
+        branch.save(provision=False)
         branch.provision()
 
         # Create sites

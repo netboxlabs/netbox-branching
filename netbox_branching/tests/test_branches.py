@@ -23,7 +23,7 @@ class BranchTestCase(TestCase):
 
     def test_create_branch(self):
         branch = Branch(name='Branch 1')
-        branch.save()
+        branch.save(provision=False)
         branch.provision()
 
         tables_to_replicate = get_tables_to_replicate()
@@ -61,7 +61,7 @@ class BranchTestCase(TestCase):
 
     def test_delete_branch(self):
         branch = Branch(name='Branch 1')
-        branch.save()
+        branch.save(provision=False)
         branch.provision()
         branch.delete()
 
@@ -81,6 +81,6 @@ class BranchTestCase(TestCase):
         self.assertIsNotNone(re.match(r'^[a-z0-9]{8}', branch.schema_id), msg="Schema ID does not conform")
         schema_id = branch.schema_id
 
-        branch.save()
+        branch.save(provision=False)
         branch.refresh_from_db()
         self.assertEqual(branch.schema_id, schema_id, msg="Schema ID was changed during save()")

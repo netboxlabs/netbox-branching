@@ -13,7 +13,7 @@ class RequestTestCase(TestCase):
         get_user_model().objects.create_user(username='testuser')
 
         branch = Branch(name='Branch 1')
-        branch.save()
+        branch.save(provision=False)
         branch.provision()
 
     def setUp(self):
