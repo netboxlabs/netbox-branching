@@ -206,6 +206,8 @@
 {% endblock %}
 
 {% block modals %}
+  {{ block.super }}
+
   {# Sync modal #}
   <div class="modal fade" id="sync-modal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog">
