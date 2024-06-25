@@ -11,6 +11,10 @@ class AppConfig(PluginConfig):
     middleware = [
         'netbox_branching.middleware.BranchMiddleware'
     ]
+    default_settings = {
+        # This string is prefixed to the name of each new branch schema during provisioning
+        'schema_prefix': 'branch_',
+    }
 
     def ready(self):
         super().ready()

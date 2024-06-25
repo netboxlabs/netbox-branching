@@ -1,9 +1,6 @@
 # Name of the main (non-branch) PostgreSQL schema
 MAIN_SCHEMA = 'public'
 
-# Prefix for schema names
-SCHEMA_PREFIX = 'branch_'
-
 # HTTP cookie
 COOKIE_NAME = 'active_branch'
 

@@ -12,7 +12,6 @@ from django.utils import timezone
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 from netbox_branching.choices import BranchStatusChoices
-from netbox_branching.constants import SCHEMA_PREFIX
 from netbox_branching.contextvars import active_branch
 from netbox_branching.signals import record_applied_change
 from netbox_branching.utilities import activate_branch, get_branchable_object_types, get_tables_to_replicate
@@ -21,6 +20,7 @@ from core.models import Job, ObjectChange as ObjectChange_
 from netbox.context_managers import event_tracking
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
+from netbox.plugins import get_plugin_config
 from utilities.exceptions import AbortRequest, AbortTransaction
 from .changes import ObjectChange
 
@@ -103,7 +103,8 @@ class Branch(JobsMixin, PrimaryModel):
 
     @cached_property
     def schema_name(self):
-        return f'{SCHEMA_PREFIX}{self.schema_id}'
+        schema_prefix = get_plugin_config('netbox_branching', 'schema_prefix')
+        return f'{schema_prefix}{self.schema_id}'
 
     @cached_property
     def connection_name(self):
