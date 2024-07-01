@@ -44,12 +44,13 @@ def provision_branch(job):
 
 
 def sync_branch(job, commit=True):
+    job_log = get_job_log(job)
     logger = logging.getLogger('netbox_branching.branch.sync')
     logger.setLevel(logging.DEBUG)
+    logger.addHandler(ListHandler(queue=job_log))
 
     try:
         job.start()
-        logger.addHandler(ListHandler(queue=get_job_log(job)))
 
         # Disconnect changelog handlers
         post_save.disconnect(handle_changed_object)
@@ -63,6 +64,7 @@ def sync_branch(job, commit=True):
         job.terminate()
 
     except AbortTransaction:
+        logger.info("Dry run completed; rolling back changes")
         job.terminate()
 
     except Exception as e:
@@ -76,12 +78,13 @@ def sync_branch(job, commit=True):
 
 
 def merge_branch(job, commit=True):
+    job_log = get_job_log(job)
     logger = logging.getLogger('netbox_branching.branch.merge')
     logger.setLevel(logging.DEBUG)
+    logger.addHandler(ListHandler(queue=job_log))
 
     try:
         job.start()
-        logger.addHandler(ListHandler(queue=get_job_log(job)))
 
         # Merge the Branch
         branch = Branch.objects.get(pk=job.object_id)
@@ -90,6 +93,7 @@ def merge_branch(job, commit=True):
         job.terminate()
 
     except AbortTransaction:
+        logger.info("Dry run completed; rolling back changes")
         job.terminate()
 
     except Exception as e:
