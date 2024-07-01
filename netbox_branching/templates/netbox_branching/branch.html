@@ -182,6 +182,8 @@
               {{ ct.model_class|meta:'verbose_name'|bettertitle }}
               <span class="badge">{{ count }}</span>
             </a>
+          {% empty %}
+            <li class="list-group-item text-muted">{% trans "No changes" %}</li>
           {% endfor %}
         </ul>
       </div>
@@ -195,6 +197,8 @@
               {{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}
               <span class="badge">{{ count }}</span>
             </a>
+          {% empty %}
+            <li class="list-group-item text-muted">{% trans "No changes" %}</li>
           {% endfor %}
         </ul>
       </div>
@@ -208,6 +212,8 @@
               {{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}
               <span class="badge">{{ count }}</span>
             </a>
+          {% empty %}
+            <li class="list-group-item text-muted">{% trans "No changes" %}</li>
           {% endfor %}
         </ul>
       </div>
