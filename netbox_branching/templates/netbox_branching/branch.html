@@ -86,6 +86,10 @@
             <td>{{ object.description|placeholder }}</td>
           </tr>
           <tr>
+            <th scope="row">{% trans "Last synced" %}</th>
+            <td>{{ object.synced_time|isodatetime }}</td>
+          </tr>
+          <tr>
             <th scope="row">{% trans "Last Activity" %}</th>
             <td>{{ latest_change.time|isodatetime|placeholder }}</td>
           </tr>
@@ -95,6 +99,7 @@
               {% if not object.ready %}
                 {{ ''|placeholder }}
               {% elif conflicts_count %}
+                <span class="text-red"><i class="mdi mdi-alert"></i></span>
                 <a href="{% url 'plugins:netbox_branching:branch_diff' pk=object.pk %}?has_conflicts=True" class="text-red">{{ conflicts_count }} {% trans "conflicts found" %}</a>
               {% else %}
                 <span class="text-green">
@@ -111,61 +116,11 @@
         </table>
       </div>
       {% include 'inc/panels/tags.html' %}
-      {% include 'inc/panels/custom_fields.html' %}
-      {% include 'inc/panels/comments.html' %}
       {% plugin_left_page object %}
     </div>
     <div class="col col-md-6">
-      {% if object.status != 'merged' %}
-        <div class="card">
-          <h5 class="card-header d-flex justify-content-between">{% trans "Sync Branch" %}</h5>
-          <table class="table table-hover attr-table">
-            <tr>
-              <th scope="row">{% trans "Last synced" %}</th>
-              <td>{{ object.synced_time|isodatetime }}</td>
-            </tr>
-            <tr>
-              <th scope="row">{% trans "Unsynced changes" %}</th>
-              <td>
-                {% if unsynced_changes_count %}
-                  <a href="{% url 'plugins:netbox_branching:branch_sync' pk=object.pk %}">{{ unsynced_changes_count }}</a>
-                {% else %}
-                  <span class="text-muted">{% trans "None" %}</span>
-                {% endif %}
-              </td>
-            </tr>
-          </table>
-        </div>
-        <div class="card">
-          <h5 class="card-header d-flex justify-content-between">{% trans "Merge Changes" %}</h5>
-        </div>
-      {% else %}
-        <div class="card">
-          <h5 class="card-header">{% trans "Merged" %}</h5>
-          <table class="table table-hover attr-table">
-            <tr>
-              <th scope="row">{% trans "Merged" %}</th>
-              <td>{{ object.merged_time|isodatetime }}</td>
-            </tr>
-            <tr>
-              <th scope="row">{% trans "User" %}</th>
-              <td>{{ object.merged_by }}</td>
-            </tr>
-            <tr>
-              <th scope="row">{% trans "Changes" %}</th>
-              <td>
-                {% with change_count=object.applied_changes.count %}
-                  {% if change_count %}
-                    <a href="{% url 'plugins:netbox_branching:branch_merge' pk=object.pk %}">{{ change_count }}</a>
-                  {% else %}
-                    {{ change_count }}
-                  {% endif %}
-                {% endwith %}
-              </td>
-            </tr>
-          </table>
-        </div>
-      {% endif %}
+      {% include 'inc/panels/custom_fields.html' %}
+      {% include 'inc/panels/comments.html' %}
       {% plugin_right_page object %}
     </div>
   </div>
