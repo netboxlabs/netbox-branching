@@ -127,11 +127,8 @@
             <tr>
               <th scope="row">{% trans "Unsynced changes" %}</th>
               <td>
-                {% if unsynced_changes_count and not object.is_active %}
-                  {# TODO: Fix timezone awareness #}
-                  <a href="{% url 'core:objectchange_list' %}?time_after={{ object.synced_time|date:"Y-m-d H:i:s" }}">{{ unsynced_changes_count }}</a>
-                {% elif unsynced_changes_count %}
-                  {{ unsynced_changes_count }}
+                {% if unsynced_changes_count %}
+                  <a href="{% url 'plugins:netbox_branching:branch_sync' pk=object.pk %}">{{ unsynced_changes_count }}</a>
                 {% else %}
                   <span class="text-muted">{% trans "None" %}</span>
                 {% endif %}
@@ -159,7 +156,7 @@
               <td>
                 {% with change_count=object.applied_changes.count %}
                   {% if change_count %}
-                    <a href="{% url 'plugins:netbox_branching:branch_changes' pk=object.pk %}">{{ change_count }}</a>
+                    <a href="{% url 'plugins:netbox_branching:branch_merge' pk=object.pk %}">{{ change_count }}</a>
                   {% else %}
                     {{ change_count }}
                   {% endif %}
@@ -178,7 +175,7 @@
         <h5 class="card-header text-green">{% trans "Created" %}</h5>
         <ul class="list-group list-group-flush">
           {% for ct, count in stats.created.items %}
-            <a href="{% url 'plugins:netbox_branching:branch_changes' pk=object.pk %}?action=create&changed_object_type_id={{ ct.pk }}" class="list-group-item list-group-item-action d-flex justify-content-between">
+            <a href="{% url 'plugins:netbox_branching:branch_merge' pk=object.pk %}?action=create&changed_object_type_id={{ ct.pk }}" class="list-group-item list-group-item-action d-flex justify-content-between">
               {{ ct.model_class|meta:'verbose_name'|bettertitle }}
               <span class="badge">{{ count }}</span>
             </a>
@@ -193,7 +190,7 @@
         <h5 class="card-header text-yellow">{% trans "Updated" %}</h5>
         <ul class="list-group list-group-flush">
           {% for ct, count in stats.updated.items %}
-            <a href="{% url 'plugins:netbox_branching:branch_changes' pk=object.pk %}?action=update&changed_object_type_id={{ ct.pk }}" class="list-group-item list-group-item-action d-flex justify-content-between">
+            <a href="{% url 'plugins:netbox_branching:branch_merge' pk=object.pk %}?action=update&changed_object_type_id={{ ct.pk }}" class="list-group-item list-group-item-action d-flex justify-content-between">
               {{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}
               <span class="badge">{{ count }}</span>
             </a>
@@ -208,7 +205,7 @@
         <h5 class="card-header text-red">{% trans "Deleted" %}</h5>
         <ul class="list-group list-group-flush">
           {% for ct, count in stats.deleted.items %}
-            <a href="{% url 'plugins:netbox_branching:branch_changes' pk=object.pk %}?action=delete&changed_object_type_id={{ ct.pk }}" class="list-group-item list-group-item-action d-flex justify-content-between">
+            <a href="{% url 'plugins:netbox_branching:branch_merge' pk=object.pk %}?action=delete&changed_object_type_id={{ ct.pk }}" class="list-group-item list-group-item-action d-flex justify-content-between">
               {{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}
               <span class="badge">{{ count }}</span>
             </a>

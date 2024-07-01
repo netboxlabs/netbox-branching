@@ -1,5 +1,6 @@
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import PermissionDenied
 from django.db.models import Count, Q
 from django.shortcuts import redirect
 from django.utils.module_loading import import_string
@@ -104,35 +105,30 @@ class BranchDiffView(generic.ObjectChildrenView):
         return ChangeDiff.objects.filter(branch=parent)
 
 
-def _get_change_count(obj):
-    return obj.get_changes().count()
+def _get_unsynced_count(obj):
+    return obj.get_unsynced_changes().count()
 
 
-@register_model_view(Branch, 'changes')
-class BranchChangesView(generic.ObjectChildrenView):
+@register_model_view(Branch, 'sync')
+class BranchSyncView(generic.ObjectChildrenView):
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
     table = tables.ChangesTable
     actions = {}
     tab = ViewTab(
-        label=_('Changes'),
-        badge=_get_change_count,
+        label=_('Unsynced'),
+        badge=_get_unsynced_count,
         permission='netbox_branching.view_branch'
     )
 
     def get_children(self, request, parent):
-        return parent.get_changes().order_by('time')
-
-
-@register_model_view(Branch, 'sync')
-class BranchSyncView(generic.ObjectView):
-    queryset = Branch.objects.all()
-
-    def get_required_permission(self):
-        return 'netbox_branching.sync_branch'
+        return parent.get_unsynced_changes().order_by('time')
 
     def post(self, request, **kwargs):
+        if not request.user.has_perm('netbox_branching.sync_branch'):
+            raise PermissionDenied("This user does not have permission to sync branches.")
+
         branch = self.get_object(**kwargs)
         form = forms.SyncBranchForm(request.POST)
 
@@ -152,14 +148,30 @@ class BranchSyncView(generic.ObjectView):
         return redirect(branch.get_absolute_url())
 
 
-@register_model_view(Branch, 'merge')
-class BranchMergeView(generic.ObjectView):
-    queryset = Branch.objects.all()
+def _get_change_count(obj):
+    return obj.get_changes().count()
 
-    def get_required_permission(self):
-        return 'netbox_branching.merge_branch'
+
+@register_model_view(Branch, 'merge')
+class BranchMergeView(generic.ObjectChildrenView):
+    queryset = Branch.objects.all()
+    child_model = ObjectChange
+    filterset = ObjectChangeFilterSet
+    table = tables.ChangesTable
+    actions = {}
+    tab = ViewTab(
+        label=_('Merge'),
+        badge=_get_change_count,
+        permission='netbox_branching.view_branch'
+    )
+
+    def get_children(self, request, parent):
+        return parent.get_changes().order_by('time')
 
     def post(self, request, **kwargs):
+        if not request.user.has_perm('netbox_branching.merge_branch'):
+            raise PermissionDenied("This user does not have permission to merge branches.")
+
         branch = self.get_object(**kwargs)
         form = forms.MergeBranchForm(request.POST)
 
