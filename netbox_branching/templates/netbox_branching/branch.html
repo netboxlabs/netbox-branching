@@ -42,6 +42,15 @@
 {% endblock %}
 
 {% block content %}
+  {% if last_job.status == 'errored' %}
+    <div class="alert alert-danger" role="alert">
+      <h4 class="alert-title">
+        <i class="mdi mdi-alert"></i>
+        The <a href="{{ last_job.get_absolute_url }}">last job</a> ({{ last_job.name }}) failed with an error:
+      </h4>
+      <div class="text-secondary">{{ last_job.error }}</div>
+    </div>
+  {% endif %}
   <div class="row">
 	  <div class="col col-md-6">
       <div class="card">
@@ -60,10 +69,10 @@
               {% else %}
                 {% badge object.get_status_display object.get_status_color %}
               {% endif %}
-              {% if failed_job %}
+              {% if last_job.status == 'failed' %}
                 <span class="text-red">
                   <i class="mdi mdi-alert"></i>
-                  <a href="{% url 'plugins:netbox_branching:branch_jobs' pk=object.pk %}" class="text-red">{% trans "Job failed" %}</a>
+                  <a href="{{ last_job.get_absolute_url }}" class="text-red">{% trans "Job failed" %}</a>
                 </span>
               {% endif %}
             </td>
