@@ -1,8 +1,15 @@
+from django.contrib.contenttypes.models import ContentType
 from netbox.plugins import PluginTemplateExtension
 
 from .choices import BranchStatusChoices
 from .contextvars import active_branch
-from .models import Branch
+from .models import Branch, ChangeDiff
+
+__all__ = (
+    'BranchNotification',
+    'BranchSelector',
+    'template_extensions',
+)
 
 
 class BranchSelector(PluginTemplateExtension):
@@ -14,4 +21,17 @@ class BranchSelector(PluginTemplateExtension):
         })
 
 
-template_extensions = [BranchSelector]
+class BranchNotification(PluginTemplateExtension):
+
+    def right_page(self):
+        instance = self.context['object']
+        ct = ContentType.objects.get_for_model(instance)
+        branches = [
+            diff.branch for diff in ChangeDiff.objects.filter(object_type=ct, object_id=instance.pk)
+        ]
+        return self.render('netbox_branching/inc/modified_notice.html', extra_context={
+            'branches': branches,
+        })
+
+
+template_extensions = [BranchSelector, BranchNotification]
