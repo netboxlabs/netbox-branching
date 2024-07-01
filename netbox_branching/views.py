@@ -61,8 +61,6 @@ class BranchView(generic.ObjectView):
             'latest_change': latest_change,
             'last_job': last_job,
             'conflicts_count': ChangeDiff.objects.filter(branch=instance, conflicts__isnull=False).count(),
-            'sync_form': forms.SyncBranchForm(),
-            'merge_form': forms.MergeBranchForm(),
         }
 
 

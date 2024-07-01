@@ -191,7 +191,7 @@
           <form method="post" action="{% url 'plugins:netbox_branching:branch_sync' pk=object.pk %}">
             {% csrf_token %}
             <div class="form-check mb-3">
-              {{ sync_form.commit }}
+              <input type="checkbox" name="commit" id="id_commit" checked="" class="form-check-input">
               <label for="id_commit" class="form-check-label">Commit</label>
               <span class="form-text">{% trans "Apply changes (uncheck to do a dry-run)" %}</span>
             </div>
@@ -216,7 +216,7 @@
           <form method="post" action="{% url 'plugins:netbox_branching:branch_merge' pk=object.pk %}">
             {% csrf_token %}
             <div class="form-check mb-3">
-              {{ merge_form.commit }}
+              <input type="checkbox" name="commit" id="id_commit" checked="" class="form-check-input">
               <label for="id_commit" class="form-check-label">Commit</label>
               <span class="form-text">{% trans "Apply changes (uncheck to do a dry-run)" %}</span>
             </div>
