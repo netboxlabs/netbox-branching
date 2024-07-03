@@ -2,15 +2,16 @@ from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseBadRequest
 from django.utils.module_loading import import_string
 from rest_framework.decorators import action
+from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet
 
 from core.api.serializers import JobSerializer
 from core.models import Job
-from netbox.api.viewsets import NetBoxReadOnlyModelViewSet
+from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
 from netbox_branching import filtersets
-from netbox_branching.models import ChangeDiff, Branch
+from netbox_branching.models import Branch, BranchEvent, ChangeDiff
 from . import serializers
 
 
@@ -73,6 +74,12 @@ class BranchViewSet(ModelViewSet):
         )
 
         return Response(JobSerializer(job, context={'request': request}).data)
+
+
+class BranchEventViewSet(ListModelMixin, RetrieveModelMixin, BaseViewSet):
+    queryset = BranchEvent.objects.all()
+    serializer_class = serializers.BranchEventSerializer
+    filterset_class = filtersets.BranchEventFilterSet
 
 
 class ChangeDiffViewSet(NetBoxReadOnlyModelViewSet):

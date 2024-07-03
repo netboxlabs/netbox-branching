@@ -116,11 +116,39 @@
         </table>
       </div>
       {% include 'inc/panels/tags.html' %}
+      {% include 'inc/panels/custom_fields.html' %}
       {% plugin_left_page object %}
     </div>
     <div class="col col-md-6">
-      {% include 'inc/panels/custom_fields.html' %}
       {% include 'inc/panels/comments.html' %}
+      <div class="card">
+        <h5 class="card-header">{% trans "Event History" %}</h5>
+        <div class="list-group list-group-flush">
+          {% for event in object.get_event_history %}
+            <div class="list-group-item">
+              <div class="row align-items-center">
+                {% if event.pk %}
+                  {# Event object #}
+                  <div class="col-3 text-end">
+                    {% badge event.get_type_display bg_color=event.get_type_color %}
+                  </div>
+                  <div class="col text-truncate">
+                    <span>{{ event.get_type_display }}{% if event.user %} by <strong>{{ event.user }}</strong>{% endif %}</span>
+                    <small class="d-block text-muted">{{ event.time|isodatetime }}</small>
+                  </div>
+                {% else %}
+                  {# Change summary #}
+                  <div class="col offset-3 text-truncate">
+                    <a href="{% url 'plugins:netbox_branching:branch_merge' pk=object.pk %}?time_after={{ event.start.isoformat }}&time_before={{ event.end.isoformat }}" class="text-muted">
+                      {{ event.count }} {% trans "changes" %}
+                    </a>
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
       {% plugin_right_page object %}
     </div>
   </div>

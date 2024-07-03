@@ -21,3 +21,15 @@ class BranchStatusChoices(ChoiceSet):
         (MERGED, _('Merged'), 'blue'),
         (FAILED, _('Failed'), 'red'),
     )
+
+
+class BranchEventTypeChoices(ChoiceSet):
+    PROVISIONED = 'provisioned'
+    SYNCED = 'synced'
+    MERGED = 'merged'
+
+    CHOICES = (
+        (PROVISIONED, _('Provisioned'), 'green'),
+        (SYNCED, _('Synced'), 'cyan'),
+        (MERGED, _('Merged'), 'blue'),
+    )

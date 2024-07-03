@@ -22,7 +22,7 @@ class QueryTestCase(TransactionTestCase):
         branch = Branch(name='Branch 1')
         branch.schema_id = 'test1234'
         branch.save(provision=False)
-        branch.provision()
+        branch.provision(user=None)
 
         # Query for the objects in the main schema
         self.assertEqual(Site.objects.count(), 1)

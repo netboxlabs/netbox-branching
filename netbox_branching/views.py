@@ -6,7 +6,7 @@ from django.shortcuts import redirect
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
-from core.choices import JobStatusChoices, ObjectChangeActionChoices
+from core.choices import ObjectChangeActionChoices
 from core.filtersets import ObjectChangeFilterSet
 from core.models import Job, ObjectChange
 from netbox.views import generic
@@ -138,6 +138,7 @@ class BranchSyncView(generic.ObjectChildrenView):
                 import_string('netbox_branching.jobs.sync_branch'),
                 instance=branch,
                 name='Sync branch',
+                user=request.user,
                 commit=form.cleaned_data['commit']
             )
             messages.success(request, f"Syncing of branch {branch} in progress")

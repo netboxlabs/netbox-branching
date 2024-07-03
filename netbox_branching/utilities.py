@@ -1,9 +1,12 @@
+import datetime
 import logging
 from contextlib import contextmanager
+from dataclasses import dataclass
 
 from .contextvars import active_branch
 
 __all__ = (
+    'ChangeSummary',
     'DynamicSchemaDict',
     'ListHandler',
     'activate_branch',
@@ -106,3 +109,13 @@ class ListHandler(logging.Handler):
 
     def emit(self, record):
         self.queue.append(self.format(record))
+
+
+@dataclass
+class ChangeSummary:
+    """
+    A record indicating the number of changes which were made between a start and end time.
+    """
+    start: datetime.datetime
+    end: datetime.datetime
+    count: int

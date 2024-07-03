@@ -10,6 +10,7 @@ from .choices import *
 from .models import *
 
 __all__ = (
+    'BranchEventFilterSet',
     'BranchFilterSet',
     'ChangeDiffFilterSet',
 )
@@ -33,6 +34,18 @@ class BranchFilterSet(NetBoxModelFilterSet):
             Q(name__icontains=value) |
             Q(description__icontains=value)
         )
+
+
+class BranchEventFilterSet(BaseFilterSet):
+    type = django_filters.MultipleChoiceFilter(
+        choices=BranchEventTypeChoices,
+        null_value=None
+    )
+    time = filters.MultiValueDateTimeFilter()
+
+    class Meta:
+        model = BranchEvent
+        fields = ('id',)
 
 
 class ChangeDiffFilterSet(BaseFilterSet):

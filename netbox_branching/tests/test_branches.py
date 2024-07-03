@@ -24,7 +24,7 @@ class BranchTestCase(TestCase):
     def test_create_branch(self):
         branch = Branch(name='Branch 1')
         branch.save(provision=False)
-        branch.provision()
+        branch.provision(user=None)
 
         tables_to_replicate = get_tables_to_replicate()
 
@@ -62,7 +62,7 @@ class BranchTestCase(TestCase):
     def test_delete_branch(self):
         branch = Branch(name='Branch 1')
         branch.save(provision=False)
-        branch.provision()
+        branch.provision(user=None)
         branch.delete()
 
         with connection.cursor() as cursor:

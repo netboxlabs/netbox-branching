@@ -13,21 +13,25 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
-from netbox_branching.choices import BranchStatusChoices
-from netbox_branching.contextvars import active_branch
-from netbox_branching.signals import record_applied_change
-from netbox_branching.utilities import activate_branch, get_branchable_object_types, get_tables_to_replicate
 
 from core.models import Job, ObjectChange as ObjectChange_
 from netbox.context_managers import event_tracking
+from netbox.context import current_request
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
+from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
+from netbox_branching.contextvars import active_branch
+from netbox_branching.signals import record_applied_change
+from netbox_branching.utilities import (
+    ChangeSummary, activate_branch, get_branchable_object_types, get_tables_to_replicate,
+)
 from utilities.exceptions import AbortRequest, AbortTransaction
 from .changes import ObjectChange
 
 __all__ = (
     'Branch',
+    'BranchEvent',
 )
 
 
@@ -131,10 +135,12 @@ class Branch(JobsMixin, PrimaryModel):
 
         if _provision:
             # Enqueue a background job to provision the Branch
+            request = current_request.get()
             Job.enqueue(
                 import_string('netbox_branching.jobs.provision_branch'),
                 instance=self,
-                name='Provision branch'
+                name='Provision branch',
+                user=request.user if request else None
             )
 
     def delete(self, *args, **kwargs):
@@ -177,7 +183,22 @@ class Branch(JobsMixin, PrimaryModel):
             time__gt=self.synced_time
         )
 
-    def sync(self, commit=True):
+    def get_event_history(self):
+        history = []
+        last_time = timezone.now()
+        for event in self.events.all():
+            if change_count := self.get_changes().filter(time__gte=event.time, time__lt=last_time).count():
+                summary = ChangeSummary(
+                    start=event.time,
+                    end=last_time,
+                    count=change_count
+                )
+                history.append(summary)
+            history.append(event)
+            last_time = event.time
+        return history
+
+    def sync(self, user, commit=True):
         """
         Apply changes from the main schema onto the Branch's schema.
         """
@@ -210,6 +231,7 @@ class Branch(JobsMixin, PrimaryModel):
         self.last_sync = timezone.now()
         self.status = BranchStatusChoices.READY
         self.save()
+        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.SYNCED)
 
         logger.info('Syncing completed')
 
@@ -263,6 +285,7 @@ class Branch(JobsMixin, PrimaryModel):
         self.merged_time = timezone.now()
         self.merged_by = user
         self.save()
+        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MERGED)
 
         logger.info('Merging completed')
 
@@ -271,7 +294,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     merge.alters_data = True
 
-    def provision(self):
+    def provision(self, user):
         """
         Create the schema & replicate main tables.
         """
@@ -336,6 +359,7 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info('Provisioning completed')
 
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
+        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.PROVISIONED)
 
     provision.alters_data = True
 
@@ -355,3 +379,36 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info('Deprovisioning completed')
 
     deprovision.alters_data = True
+
+
+class BranchEvent(models.Model):
+    time = models.DateTimeField(
+        auto_now_add=True,
+        editable=False
+    )
+    branch = models.ForeignKey(
+        to='netbox_branching.branch',
+        on_delete=models.CASCADE,
+        related_name='events'
+    )
+    user = models.ForeignKey(
+        to=get_user_model(),
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name='branch_events'
+    )
+    type = models.CharField(
+        verbose_name=_('type'),
+        max_length=50,
+        choices=BranchEventTypeChoices,
+        editable=False
+    )
+
+    class Meta:
+        ordering = ('-time',)
+        verbose_name = _('branch event')
+        verbose_name_plural = _('branch events')
+
+    def get_type_color(self):
+        return BranchEventTypeChoices.colors.get(self.type)

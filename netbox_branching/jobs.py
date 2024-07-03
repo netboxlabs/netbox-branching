@@ -35,7 +35,7 @@ def provision_branch(job):
 
         # Provision the Branch
         branch = Branch.objects.get(pk=job.object_id)
-        branch.provision()
+        branch.provision(job.user)
 
         job.terminate()
 
@@ -59,7 +59,7 @@ def sync_branch(job, commit=True):
 
         # Sync the Branch
         branch = Branch.objects.get(pk=job.object_id)
-        branch.sync(commit=commit)
+        branch.sync(job.user, commit=commit)
 
         job.terminate()
 
