@@ -69,7 +69,9 @@ def get_branchable_object_types():
     Return all object types which are branch-aware; i.e. those which support change logging.
     """
     from core.models import ObjectType
-    return ObjectType.objects.with_feature('change_logging').exclude(app_label='netbox_branching')
+    return ObjectType.objects.with_feature('change_logging').exclude(
+        app_label__in=['netbox_branching', 'netbox_changes']
+    )
 
 
 def get_tables_to_replicate():
