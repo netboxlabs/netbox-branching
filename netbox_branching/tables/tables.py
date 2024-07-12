@@ -105,15 +105,15 @@ class ChangeDiffTable(NetBoxTable):
     original_diff = DiffColumn(
         show_conflicts=False,
         orderable=False,
-        verbose_name=_('Original')
+        verbose_name=_('Main (original)')
     )
     modified_diff = DiffColumn(
         orderable=False,
-        verbose_name=_('Modified')
+        verbose_name=_('Branch (current)')
     )
     current_diff = DiffColumn(
         orderable=False,
-        verbose_name=_('Current')
+        verbose_name=_('Main (current)')
     )
     actions = columns.ActionsColumn(
         actions=()
