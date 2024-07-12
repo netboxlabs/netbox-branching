@@ -23,11 +23,11 @@ class BranchSelector(PluginTemplateExtension):
 
 class BranchNotification(PluginTemplateExtension):
 
-    def right_page(self):
+    def alerts(self):
         instance = self.context['object']
         ct = ContentType.objects.get_for_model(instance)
         branches = [
-            diff.branch for diff in ChangeDiff.objects.filter(object_type=ct, object_id=instance.pk)
+            diff.branch for diff in ChangeDiff.objects.filter(object_type=ct, object_id=instance.pk).only('branch')
         ]
         return self.render('netbox_branching/inc/modified_notice.html', extra_context={
             'branches': branches,

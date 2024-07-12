@@ -1,17 +1,10 @@
 {% load i18n %}
 {% if branches %}
-  <div class="alert alert-info" role="alert">
-    <div>
-      <h4 class="alert-title">
-        <i class="mdi mdi-alert"></i>
-        {% trans "Modified in a branch" %}
-      </h4>
-      <div class="text-secondary">{% trans "This object has been modified in the following branches:" %}</div>
-      <ul class="my-2">
-        {% for branch in branches %}
-          <li><a href="{{ branch.get_absolute_url }}">{{ branch }}</a></li>
-        {% endfor %}
-      </ul>
-    </div>
+  <div class="alert alert-warning" role="alert">
+    <i class="mdi mdi-alert"></i>
+    {% trans "This object has been modified in the following branches:" %}
+    {% for branch in branches %}
+      <a href="{{ branch.get_absolute_url }}">{{ branch }}</a>{% if not forloop.last %}, {% endif %}
+    {% endfor %}
   </div>
 {% endif %}
