@@ -114,7 +114,7 @@ class BranchSyncView(generic.ObjectChildrenView):
     table = tables.ChangesTable
     actions = {}
     tab = ViewTab(
-        label=_('Unsynced'),
+        label=_('Changes Behind'),
         badge=_get_unsynced_count,
         permission='netbox_branching.view_branch'
     )
@@ -158,7 +158,7 @@ class BranchMergeView(generic.ObjectChildrenView):
     table = tables.ChangesTable
     actions = {}
     tab = ViewTab(
-        label=_('Merge'),
+        label=_('Changes Ahead'),
         badge=_get_change_count,
         permission='netbox_branching.view_branch'
     )
