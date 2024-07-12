@@ -5,6 +5,7 @@ from django.urls import reverse
 
 from utilities.api import is_api_request
 
+from .choices import BranchStatusChoices
 from .constants import COOKIE_NAME, BRANCH_HEADER, QUERY_PARAM
 from .models import Branch
 from .utilities import activate_branch
@@ -68,5 +69,4 @@ class BranchMiddleware:
 
         # Branch set by cookie
         elif schema_id := request.COOKIES.get(COOKIE_NAME):
-            branch = Branch.objects.filter(schema_id=schema_id).first()
-            return branch if branch.ready else None
+            return Branch.objects.filter(schema_id=schema_id, status=BranchStatusChoices.READY).first()
