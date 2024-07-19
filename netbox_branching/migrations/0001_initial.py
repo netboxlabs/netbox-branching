@@ -1,10 +1,9 @@
 import django.contrib.postgres.fields
 import django.db.models.deletion
 import taggit.managers
+import utilities.json
 from django.conf import settings
 from django.db import migrations, models
-
-import utilities.json
 
 
 class Migration(migrations.Migration):
@@ -14,7 +13,7 @@ class Migration(migrations.Migration):
     dependencies = [
         ('contenttypes', '0002_remove_content_type_name'),
         ('core', '0011_move_objectchange'),
-        ('extras', '0116_move_objectchange'),
+        ('extras', '0118_notifications'),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
@@ -45,8 +44,8 @@ class Migration(migrations.Migration):
                 ('last_sync', models.DateTimeField(blank=True, editable=False, null=True)),
                 ('merged_time', models.DateTimeField(blank=True, null=True)),
                 ('merged_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL)),
+                ('owner', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='branches', to=settings.AUTH_USER_MODEL)),
                 ('tags', taggit.managers.TaggableManager(through='extras.TaggedItem', to='extras.Tag')),
-                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='branches', to=settings.AUTH_USER_MODEL)),
             ],
             options={
                 'verbose_name': 'branch',
@@ -68,11 +67,27 @@ class Migration(migrations.Migration):
             },
         ),
         migrations.CreateModel(
+            name='BranchEvent',
+            fields=[
+                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False)),
+                ('time', models.DateTimeField(auto_now_add=True)),
+                ('type', models.CharField(editable=False, max_length=50)),
+                ('branch', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='events', to='netbox_branching.branch')),
+                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='branch_events', to=settings.AUTH_USER_MODEL)),
+            ],
+            options={
+                'verbose_name': 'branch event',
+                'verbose_name_plural': 'branch events',
+                'ordering': ('-time',),
+            },
+        ),
+        migrations.CreateModel(
             name='ChangeDiff',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False)),
                 ('last_updated', models.DateTimeField(auto_now_add=True)),
                 ('object_id', models.PositiveBigIntegerField()),
+                ('object_repr', models.CharField(editable=False, max_length=200)),
                 ('action', models.CharField(max_length=50)),
                 ('original', models.JSONField(blank=True, null=True)),
                 ('modified', models.JSONField(blank=True, null=True)),
