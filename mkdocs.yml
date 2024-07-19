@@ -1,0 +1,7 @@
+site_name: NetBox Branching
+repo_name: netboxlabs/nbl-netbox-branching
+repo_url: https://github.com/netboxlabs/nbl-netbox-branching
+theme:
+  name: material
+  icon:
+    repo: fontawesome/brands/github
