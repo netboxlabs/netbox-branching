@@ -49,6 +49,10 @@ class BranchEventFilterSet(BaseFilterSet):
 
 
 class ChangeDiffFilterSet(BaseFilterSet):
+    q = django_filters.CharFilter(
+        method='search',
+        label=_('Search'),
+    )
     branch_id = django_filters.ModelMultipleChoiceFilter(
         queryset=Branch.objects.all(),
         label=_('Branch (ID)'),
@@ -76,6 +80,13 @@ class ChangeDiffFilterSet(BaseFilterSet):
     class Meta:
         model = ChangeDiff
         fields = ('id', 'object_type', 'object_id')
+
+    def search(self, queryset, name, value):
+        if not value.strip():
+            return queryset
+        return queryset.filter(
+            Q(object_repr__icontains=value)
+        )
 
     def _has_conflicts(self, queryset, name, value):
         if value:
