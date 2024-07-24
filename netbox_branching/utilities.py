@@ -3,6 +3,8 @@ import logging
 from contextlib import contextmanager
 from dataclasses import dataclass
 
+from django.db.models import ForeignKey, ManyToManyField
+
 from .contextvars import active_branch
 
 __all__ = (
@@ -13,6 +15,7 @@ __all__ = (
     'deactivate_branch',
     'get_branchable_object_types',
     'get_tables_to_replicate',
+    'update_object',
 )
 
 
@@ -121,3 +124,32 @@ class ChangeSummary:
     start: datetime.datetime
     end: datetime.datetime
     count: int
+
+
+def update_object(instance, data, using):
+    """
+    Set an attribute on an object depending on the type of model field.
+    """
+    # Avoid AppRegistryNotReady exception
+    from taggit.managers import TaggableManager
+    instance.snapshot()
+    m2m_assignments = {}
+
+    for attr, value in data.items():
+        model_field = instance._meta.get_field(attr)
+        field_cls = model_field.__class__
+
+        if issubclass(field_cls, ForeignKey):
+            # Direct value assignment for ForeignKeys must be done by the field's concrete name
+            setattr(instance, f'{attr}_id', value)
+        elif issubclass(field_cls, (ManyToManyField, TaggableManager)):
+            # Use M2M manager for ManyToMany assignments
+            m2m_manager = getattr(instance, attr)
+            m2m_assignments[m2m_manager] = value
+        else:
+            setattr(instance, attr, value)
+
+    instance.full_clean()
+    instance.save(using=using)
+    for m2m_manager, value in m2m_assignments.items():
+        m2m_manager.set(value)

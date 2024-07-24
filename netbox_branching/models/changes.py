@@ -10,6 +10,7 @@ from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
+from netbox_branching.utilities import update_object
 
 __all__ = (
     'AppliedChange',
@@ -42,17 +43,7 @@ class ObjectChange(ObjectChange_):
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             instance = model.objects.using(using).get(pk=self.changed_object_id)
-            instance.snapshot()
-            for k, v in self.diff()['post'].items():
-                # Assign FKs by integer
-                # TODO: Inspect model to determine proper way to assign value
-                if hasattr(instance, f'{k}_id'):
-                    setattr(instance, f'{k}_id', v)
-                else:
-                    setattr(instance, k, v)
-            print(f'Updating {model._meta.verbose_name} {instance}')
-            instance.full_clean()
-            instance.save(using=using)
+            update_object(instance, self.diff()['post'], using=using)
 
         # Deleting an object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:

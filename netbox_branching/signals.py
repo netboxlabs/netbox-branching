@@ -76,4 +76,4 @@ def record_applied_change(instance, branch, **kwargs):
     """
     Create a new AppliedChange instance mapping an applied ObjectChange to its Branch.
     """
-    AppliedChange.objects.create(change=instance, branch=branch)
+    AppliedChange.objects.update_or_create(change=instance, defaults={'branch': branch})
