@@ -137,12 +137,12 @@ class ChangeDiff(models.Model):
         if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             conflicts = [
                 k for k, v in self.original.items()
-                if v != self.modified[k] and v != self.current[k] and self.modified[k] != self.current[k]
+                if v != self.modified[k] and v != self.current.get(k) and self.modified[k] != self.current.get(k)
             ]
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
             conflicts = [
                 k for k, v in self.original.items()
-                if v != self.current[k]
+                if v != self.current.get(k)
             ]
         self.conflicts = conflicts or None
 
