@@ -3,7 +3,7 @@ import logging
 from django.db.models.signals import m2m_changed, post_save, pre_delete
 
 from core.choices import JobStatusChoices
-from extras.signals import handle_changed_object, handle_deleted_object
+from core.signals import handle_changed_object, handle_deleted_object
 from utilities.exceptions import AbortTransaction
 from .models import Branch
 from .utilities import ListHandler
