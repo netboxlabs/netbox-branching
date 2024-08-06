@@ -106,8 +106,8 @@ def _get_unsynced_count(obj):
     return obj.get_unsynced_changes().count()
 
 
-@register_model_view(Branch, 'sync')
-class BranchSyncView(generic.ObjectChildrenView):
+@register_model_view(Branch, 'changes-behind')
+class BranchChangesBehindView(generic.ObjectChildrenView):
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
@@ -121,6 +121,32 @@ class BranchSyncView(generic.ObjectChildrenView):
 
     def get_children(self, request, parent):
         return parent.get_unsynced_changes().order_by('time')
+
+
+def _get_change_count(obj):
+    return obj.get_changes().count()
+
+
+@register_model_view(Branch, 'changes-ahead')
+class BranchChangesAheadView(generic.ObjectChildrenView):
+    queryset = Branch.objects.all()
+    child_model = ObjectChange
+    filterset = ObjectChangeFilterSet
+    table = tables.ChangesTable
+    actions = {}
+    tab = ViewTab(
+        label=_('Changes Ahead'),
+        badge=_get_change_count,
+        permission='netbox_branching.view_branch'
+    )
+
+    def get_children(self, request, parent):
+        return parent.get_changes().order_by('time')
+
+
+@register_model_view(Branch, 'sync')
+class BranchSyncView(generic.ObjectView):
+    queryset = Branch.objects.all()
 
     def post(self, request, **kwargs):
         if not request.user.has_perm('netbox_branching.sync_branch'):
@@ -146,25 +172,9 @@ class BranchSyncView(generic.ObjectChildrenView):
         return redirect(branch.get_absolute_url())
 
 
-def _get_change_count(obj):
-    return obj.get_changes().count()
-
-
 @register_model_view(Branch, 'merge')
-class BranchMergeView(generic.ObjectChildrenView):
+class BranchMergeView(generic.ObjectView):
     queryset = Branch.objects.all()
-    child_model = ObjectChange
-    filterset = ObjectChangeFilterSet
-    table = tables.ChangesTable
-    actions = {}
-    tab = ViewTab(
-        label=_('Changes Ahead'),
-        badge=_get_change_count,
-        permission='netbox_branching.view_branch'
-    )
-
-    def get_children(self, request, parent):
-        return parent.get_changes().order_by('time')
 
     def post(self, request, **kwargs):
         if not request.user.has_perm('netbox_branching.merge_branch'):
