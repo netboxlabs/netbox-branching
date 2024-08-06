@@ -1,8 +1,7 @@
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import PermissionDenied
 from django.db.models import Count, Q
-from django.shortcuts import redirect
+from django.shortcuts import redirect, render
 from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
@@ -144,58 +143,89 @@ class BranchChangesAheadView(generic.ObjectChildrenView):
         return parent.get_changes().order_by('time')
 
 
-@register_model_view(Branch, 'sync')
-class BranchSyncView(generic.ObjectView):
+class BaseBranchActionView(generic.ObjectView):
+    """
+    Base view for syncing or merging a Branch.
+    """
     queryset = Branch.objects.all()
+    form = forms.BranchActionForm
+    template_name = 'netbox_branching/branch_action.html'
+    action = None
+
+    def get_required_permission(self):
+        return f'netbox_branching.{self.action}_branch'
+
+    @staticmethod
+    def _get_conflicts_table(branch):
+        conflicts = ChangeDiff.objects.filter(branch=branch, conflicts__isnull=False)
+        conflicts_table = tables.ChangeDiffTable(conflicts)
+        conflicts_table.columns.show('pk')
+
+        return conflicts_table
+
+    def do_action(self, branch, request, form):
+        raise NotImplementedError(f"{self.__class__} must implement action() method.")
+
+    def get(self, request, **kwargs):
+        branch = self.get_object(**kwargs)
+        form = forms.BranchActionForm(branch)
+
+        return render(request, self.template_name, {
+            'branch': branch,
+            'action': _(f'{self.action.title()} Branch'),
+            'form': form,
+            'conflicts_table': self._get_conflicts_table(branch),
+        })
 
     def post(self, request, **kwargs):
-        if not request.user.has_perm('netbox_branching.sync_branch'):
-            raise PermissionDenied("This user does not have permission to sync branches.")
-
         branch = self.get_object(**kwargs)
-        form = forms.SyncBranchForm(request.POST)
+        form = forms.BranchActionForm(branch, request.POST)
 
         if not branch.ready:
-            messages.error(request, _("Branch is not ready to sync"))
-
+            messages.error(request, _("The branch must be in the ready state to perform this action."))
         elif form.is_valid():
-            # Enqueue a background job to sync the Branch
-            Job.enqueue(
-                import_string('netbox_branching.jobs.sync_branch'),
-                instance=branch,
-                name='Sync branch',
-                user=request.user,
-                commit=form.cleaned_data['commit']
-            )
-            messages.success(request, f"Syncing of branch {branch} in progress")
+            return self.do_action(branch, request, form)
+
+        return render(request, self.template_name, {
+            'branch': branch,
+            'action': _(f'{self.action.title()} Branch'),
+            'form': form,
+            'conflicts_table': self._get_conflicts_table(branch),
+        })
+
+
+@register_model_view(Branch, 'sync')
+class BranchSyncView(BaseBranchActionView):
+    action = 'sync'
+
+    def do_action(self, branch, request, form):
+        # Enqueue a background job to sync the Branch
+        Job.enqueue(
+            import_string('netbox_branching.jobs.sync_branch'),
+            instance=branch,
+            name='Sync branch',
+            user=request.user,
+            commit=form.cleaned_data['commit']
+        )
+        messages.success(request, f"Syncing of branch {branch} in progress")
 
         return redirect(branch.get_absolute_url())
 
 
 @register_model_view(Branch, 'merge')
-class BranchMergeView(generic.ObjectView):
-    queryset = Branch.objects.all()
+class BranchMergeView(BaseBranchActionView):
+    action = 'merge'
 
-    def post(self, request, **kwargs):
-        if not request.user.has_perm('netbox_branching.merge_branch'):
-            raise PermissionDenied("This user does not have permission to merge branches.")
-
-        branch = self.get_object(**kwargs)
-        form = forms.MergeBranchForm(request.POST)
-
-        if not branch.ready:
-            messages.error(request, _("Branch is not ready to merge"))
-
-        elif form.is_valid():
-            # Enqueue a background job to merge the Branch
-            Job.enqueue(
-                import_string('netbox_branching.jobs.merge_branch'),
-                instance=branch,
-                name='Merge branch',
-                user=request.user,
-                commit=form.cleaned_data['commit']
-            )
-            messages.success(request, f"Merging of branch {branch} in progress")
+    def do_action(self, branch, request, form):
+        # Enqueue a background job to merge the Branch
+        Job.enqueue(
+            import_string('netbox_branching.jobs.merge_branch'),
+            instance=branch,
+            name='Merge branch',
+            user=request.user,
+            commit=form.cleaned_data['commit']
+        )
+        messages.success(request, f"Merging of branch {branch} in progress")
 
         return redirect(branch.get_absolute_url())
 
