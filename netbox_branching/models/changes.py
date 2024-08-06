@@ -174,6 +174,17 @@ class ChangeDiff(models.Model):
         return sorted([*self.altered_in_modified, *self.altered_in_current])
 
     @cached_property
+    def diff(self):
+        """
+        Provides a three-way summary of modified data, comparing the original, modified (branch), and current states.
+        """
+        return {
+            'original': self.original_diff,
+            'modified': self.modified_diff,
+            'current': self.current_diff,
+        }
+
+    @cached_property
     def original_diff(self):
         """
         Return a key-value mapping of all attributes in the original state which have been modified.

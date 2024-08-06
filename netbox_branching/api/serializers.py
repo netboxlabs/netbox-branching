@@ -90,6 +90,9 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
         choices=ObjectChangeActionChoices,
         read_only=True
     )
+    diff = serializers.JSONField(
+        read_only=True
+    )
     original_data = serializers.JSONField(
         source='original',
         read_only=True,
@@ -110,7 +113,7 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
         model = ChangeDiff
         fields = [
             'id', 'url', 'display', 'branch', 'object_type', 'object_id', 'object', 'object_repr', 'action',
-            'conflicts', 'original_data', 'modified_data', 'current_data', 'last_updated',
+            'conflicts', 'diff', 'original_data', 'modified_data', 'current_data', 'last_updated',
         ]
         brief_fields = ('id', 'url', 'display', 'object_type', 'object_id', 'object_repr', 'action')
 
