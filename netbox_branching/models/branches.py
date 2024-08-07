@@ -22,7 +22,7 @@ from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.contextvars import active_branch
-from netbox_branching.signals import record_applied_change
+from netbox_branching.signals import *
 from netbox_branching.utilities import (
     ChangeSummary, activate_branch, get_branchable_object_types, get_tables_to_replicate,
 )
@@ -147,11 +147,10 @@ class Branch(JobsMixin, PrimaryModel):
         if active_branch.get():
             raise AbortRequest(_("Cannot delete a branch while a branch is active."))
 
-        ret = super().delete(*args, **kwargs)
-
+        # Deprovision the schema
         self.deprovision()
 
-        return ret
+        return super().delete(*args, **kwargs)
 
     @staticmethod
     def _generate_schema_id(length=8):
@@ -233,6 +232,9 @@ class Branch(JobsMixin, PrimaryModel):
         self.save()
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.SYNCED)
 
+        # Emit branch_synced signal
+        branch_synced.send(sender=self.__class__, branch=self, user=user)
+
         logger.info('Syncing completed')
 
     sync.alters_data = True
@@ -286,6 +288,9 @@ class Branch(JobsMixin, PrimaryModel):
         self.merged_by = user
         self.save()
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MERGED)
+
+        # Emit branch_merged signal
+        branch_merged.send(sender=self.__class__, branch=self, user=user)
 
         logger.info('Merging completed')
 
@@ -356,6 +361,9 @@ class Branch(JobsMixin, PrimaryModel):
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
             raise e
 
+        # Emit branch_provisioned signal
+        branch_provisioned.send(sender=self.__class__, branch=self, user=user)
+
         logger.info('Provisioning completed')
 
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
@@ -375,6 +383,9 @@ class Branch(JobsMixin, PrimaryModel):
             cursor.execute(
                 f"DROP SCHEMA IF EXISTS {self.schema_name} CASCADE"
             )
+
+        # Emit branch_deprovisioned signal
+        branch_deprovisioned.send(sender=self.__class__, branch=self)
 
         logger.info('Deprovisioning completed')
 

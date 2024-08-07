@@ -1,20 +1,50 @@
+from functools import partial
+
 from django.db import DEFAULT_DB_ALIAS
 from django.db.models.signals import post_save
-from django.dispatch import receiver
+from django.dispatch import receiver, Signal
 from django.utils import timezone
 
 from core.choices import ObjectChangeActionChoices
-from core.models import ObjectChange
+from core.models import ObjectChange, ObjectType
+from extras.events import process_event_rules
+from extras.models import EventRule
 from utilities.serialization import serialize_object
 from .choices import BranchStatusChoices
 from .contextvars import active_branch
+from .events import *
 from .models import AppliedChange, ChangeDiff
 
 __all__ = (
+    'branch_deprovisioned',
+    'branch_merged',
+    'branch_provisioned',
+    'branch_synced',
     'record_applied_change',
     'record_change_diff',
 )
 
+
+#
+# Signals
+#
+
+branch_provisioned = Signal()
+branch_synced = Signal()
+branch_merged = Signal()
+branch_deprovisioned = Signal()
+
+branch_signals = {
+    branch_provisioned: BRANCH_PROVISIONED,
+    branch_synced: BRANCH_SYNCED,
+    branch_merged: BRANCH_MERGED,
+    branch_deprovisioned: BRANCH_DEPROVISIONED,
+}
+
+
+#
+# Receivers
+#
 
 @receiver(post_save, sender=ObjectChange)
 def record_change_diff(instance, **kwargs):
@@ -72,6 +102,39 @@ def record_change_diff(instance, **kwargs):
             diff.save()
 
 
+def handle_branch_event(event_type, branch, user=None, **kwargs):
+    """
+    Process any EventRules associated with branch events (e.g. syncing or merging).
+    """
+    # Find any EventRules for this event type
+    object_type = ObjectType.objects.get_by_natural_key('netbox_branching', 'branch')
+    event_rules = EventRule.objects.filter(
+        event_types__contains=[event_type],
+        enabled=True,
+        object_types=object_type
+    )
+
+    # Serialize the branch & process EventRules
+    username = user.username if user else None
+    data = serialize_object(branch)
+    data['id'] = branch.pk
+    process_event_rules(
+        event_rules=event_rules,
+        object_type=object_type,
+        event_type=event_type,
+        data=data,
+        username=username
+    )
+
+
+branch_provisioned.connect(partial(handle_branch_event, event_type=BRANCH_PROVISIONED))
+branch_synced.connect(partial(handle_branch_event, event_type=BRANCH_SYNCED))
+branch_merged.connect(partial(handle_branch_event, event_type=BRANCH_MERGED))
+branch_deprovisioned.connect(partial(handle_branch_event, event_type=BRANCH_DEPROVISIONED))
+
+
+# This receiver is wrapped with partial() and connected manually
+# under Branch.merge().
 def record_applied_change(instance, branch, **kwargs):
     """
     Create a new AppliedChange instance mapping an applied ObjectChange to its Branch.

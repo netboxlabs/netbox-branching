@@ -18,7 +18,7 @@ class AppConfig(PluginConfig):
 
     def ready(self):
         super().ready()
-        from . import search, signals
+        from . import events, search, signals
 
 
 config = AppConfig
