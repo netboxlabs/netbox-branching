@@ -49,6 +49,7 @@ class Branch(JobsMixin, PrimaryModel):
     )
     schema_id = models.CharField(
         max_length=8,
+        unique=True,
         verbose_name=_('schema ID'),
         editable=False
     )
