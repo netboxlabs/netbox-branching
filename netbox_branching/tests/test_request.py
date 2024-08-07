@@ -1,25 +1,22 @@
-from django.contrib.auth import get_user_model
-from django.test import Client, TransactionTestCase
+from django.test import override_settings
 from django.urls import reverse
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
 from netbox_branching.models import Branch
+from utilities.testing import TestCase
 
 
-class RequestTestCase(TransactionTestCase):
+class RequestTestCase(TestCase):
 
-    def setUp(self):
-        # Initialize the test client
-        user = get_user_model().objects.create_user(username='testuser')
-        self.client = Client()
-        self.client.force_login(user)
-
+    @classmethod
+    def setUpTestData(cls):
         # Create a Branch
         branch = Branch(name='Branch 1')
         branch.status = BranchStatusChoices.READY  # Fake provisioning
         branch.save(provision=False)
 
+    @override_settings(LOGIN_REQUIRED=False)
     def test_activate_branch(self):
         branch = Branch.objects.first()
 
@@ -34,6 +31,7 @@ class RequestTestCase(TransactionTestCase):
             msg="Branch ID set in cookie is incorrect"
         )
 
+    @override_settings(LOGIN_REQUIRED=False)
     def test_deactivate_branch(self):
         # Attach the cookie to the test client
         branch = Branch.objects.first()
