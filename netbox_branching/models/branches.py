@@ -5,18 +5,17 @@ from functools import cached_property, partial
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db.utils import ProgrammingError
 from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.db.models.signals import post_save
+from django.db.utils import ProgrammingError
 from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
-from core.models import Job, ObjectChange as ObjectChange_
-from netbox.context_managers import event_tracking
+from core.models import ObjectChange as ObjectChange_
 from netbox.context import current_request
+from netbox.context_managers import event_tracking
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
@@ -126,6 +125,8 @@ class Branch(JobsMixin, PrimaryModel):
             provision: If True, automatically enqueue a background Job to provision the Branch. (Set this
                        to False if you will call provision() on the instance manually.)
         """
+        from netbox_branching.jobs import ProvisionBranchJob
+
         _provision = provision and self.pk is None
 
         if active_branch.get():
@@ -136,10 +137,8 @@ class Branch(JobsMixin, PrimaryModel):
         if _provision:
             # Enqueue a background job to provision the Branch
             request = current_request.get()
-            Job.enqueue(
-                import_string('netbox_branching.jobs.provision_branch'),
+            ProvisionBranchJob.enqueue(
                 instance=self,
-                name='Provision branch',
                 user=request.user if request else None
             )
 

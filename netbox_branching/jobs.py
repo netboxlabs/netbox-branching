@@ -2,16 +2,14 @@ import logging
 
 from django.db.models.signals import m2m_changed, post_save, pre_delete
 
-from core.choices import JobStatusChoices
 from core.signals import handle_changed_object, handle_deleted_object
-from utilities.exceptions import AbortTransaction
-from .models import Branch
+from netbox.jobs import JobRunner
 from .utilities import ListHandler
 
 __all__ = (
-    'merge_branch',
-    'provision_branch',
-    'sync_branch',
+    'MergeBranchJob',
+    'ProvisionBranchJob',
+    'SyncBranchJob',
 )
 
 
@@ -25,76 +23,83 @@ def get_job_log(job):
     return job.data['log']
 
 
-def provision_branch(job):
-    logger = logging.getLogger('netbox_branching.branch.provision')
-    logger.setLevel(logging.DEBUG)
+class ProvisionBranchJob(JobRunner):
+    """
+    Provision a Branch in the database.
+    """
+    class Meta:
+        name = 'Provision branch'
 
-    try:
-        job.start()
-        logger.addHandler(ListHandler(queue=get_job_log(job)))
+    def run(self, *args, **kwargs):
+        # Initialize logging
+        logger = logging.getLogger('netbox_branching.branch.provision')
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(ListHandler(queue=get_job_log(self.job)))
 
         # Provision the Branch
-        branch = Branch.objects.get(pk=job.object_id)
-        branch.provision(job.user)
-
-        job.terminate()
-
-    except Exception as e:
-        job.terminate(status=JobStatusChoices.STATUS_ERRORED, error=repr(e))
+        branch = self.job.object
+        branch.provision(user=self.job.user)
 
 
-def sync_branch(job, commit=True):
-    job_log = get_job_log(job)
-    logger = logging.getLogger('netbox_branching.branch.sync')
-    logger.setLevel(logging.DEBUG)
-    logger.addHandler(ListHandler(queue=job_log))
+class SyncBranchJob(JobRunner):
+    """
+    Sync changes from main into a Branch.
+    """
+    class Meta:
+        name = 'Sync branch'
 
-    try:
-        job.start()
-
-        # Disconnect changelog handlers
+    def _disconnect_signal_receivers(self):
+        """
+        Disconnect object change handlers before syncing.
+        """
         post_save.disconnect(handle_changed_object)
         m2m_changed.disconnect(handle_changed_object)
         pre_delete.disconnect(handle_deleted_object)
 
-        # Sync the Branch
-        branch = Branch.objects.get(pk=job.object_id)
-        branch.sync(job.user, commit=commit)
-
-        job.terminate()
-
-    except AbortTransaction:
-        logger.info("Dry run completed; rolling back changes")
-        job.terminate()
-
-    except Exception as e:
-        job.terminate(status=JobStatusChoices.STATUS_ERRORED, error=repr(e))
-
-    finally:
-        # Reconnect signal handlers
+    def _reconnect_signal_receivers(self):
+        """
+        Reconnect object change handlers after syncing.
+        """
         post_save.connect(handle_changed_object)
         m2m_changed.connect(handle_changed_object)
         pre_delete.connect(handle_deleted_object)
 
+    def run(self, commit=True, *args, **kwargs):
+        # Initialize logging
+        logger = logging.getLogger('netbox_branching.branch.sync')
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(ListHandler(queue=get_job_log(self.job)))
 
-def merge_branch(job, commit=True):
-    job_log = get_job_log(job)
-    logger = logging.getLogger('netbox_branching.branch.merge')
-    logger.setLevel(logging.DEBUG)
-    logger.addHandler(ListHandler(queue=job_log))
+        # Disconnect changelog handlers
+        self._disconnect_signal_receivers()
 
-    try:
-        job.start()
+        # Sync the branch
+        try:
+            branch = self.job.object
+            branch.sync(user=self.job.user, commit=commit)
+        except Exception as e:
+            # TODO: Can JobRunner be extended to handle this more cleanly?
+            # Ensure that signal handlers are reconnected
+            self._reconnect_signal_receivers()
+            raise e
+
+        # Reconnect signal handlers
+        self._reconnect_signal_receivers()
+
+
+class MergeBranchJob(JobRunner):
+    """
+    Merge changes from a Branch into main.
+    """
+    class Meta:
+        name = 'Merge branch'
+
+    def run(self, commit=True, *args, **kwargs):
+        # Initialize logging
+        logger = logging.getLogger('netbox_branching.branch.merge')
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(ListHandler(queue=get_job_log(self.job)))
 
         # Merge the Branch
-        branch = Branch.objects.get(pk=job.object_id)
-        branch.merge(job.user, commit=commit)
-
-        job.terminate()
-
-    except AbortTransaction:
-        logger.info("Dry run completed; rolling back changes")
-        job.terminate()
-
-    except Exception as e:
-        job.terminate(status=JobStatusChoices.STATUS_ERRORED, error=repr(e))
+        branch = self.job.object
+        branch.merge(user=self.job.user, commit=commit)
