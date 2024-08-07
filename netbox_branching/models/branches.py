@@ -107,6 +107,10 @@ class Branch(JobsMixin, PrimaryModel):
     def ready(self):
         return self.status == BranchStatusChoices.READY
 
+    @property
+    def merged(self):
+        return self.status == BranchStatusChoices.MERGED
+
     @cached_property
     def schema_name(self):
         schema_prefix = get_plugin_config('netbox_branching', 'schema_prefix')
@@ -293,6 +297,67 @@ class Branch(JobsMixin, PrimaryModel):
         branch_merged.send(sender=self.__class__, branch=self, user=user)
 
         logger.info('Merging completed')
+
+        # Disconnect the signal receiver
+        post_save.disconnect(handler, sender=ObjectChange_)
+
+    merge.alters_data = True
+
+    def revert(self, user, commit=True):
+        """
+        Undo all changes associated with a previously merged Branch in the main schema by replaying them in
+        reverse order and calling undo() on each.
+        """
+        logger = logging.getLogger('netbox_branching.branch.revert')
+        logger.info(f'Reverting branch {self} ({self.schema_name})')
+
+        if not self.merged:
+            raise Exception(f"Only merged branches can be reverted.")
+
+        # Retrieve applied changes before we update the Branch's status
+        changes = self.get_changes().order_by('-time')
+
+        # Update Branch status
+        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.REVERTING)
+
+        # Create a dummy request for the event_tracking() context manager
+        request = RequestFactory().get(reverse('home'))
+
+        # Prep & connect the signal receiver for recording AppliedChanges
+        handler = partial(record_applied_change, branch=self)
+        post_save.connect(handler, sender=ObjectChange_, weak=False)
+
+        try:
+            with transaction.atomic():
+                # Undo each change from the Branch
+                for change in changes:
+                    with event_tracking(request):
+                        logger.debug(f'Undoing change: {change}')
+                        request.id = change.request_id
+                        request.user = change.user
+                        change.undo()
+                if not commit:
+                    raise AbortTransaction()
+
+        except Exception as e:
+            logger.error(e)
+            # Disconnect signal receiver & restore original branch status
+            post_save.disconnect(handler, sender=ObjectChange_)
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
+            raise e
+
+        # Update the Branch's status to "ready"
+        self.status = BranchStatusChoices.READY
+        self.merged_time = None
+        self.merged_by = None
+        self.save()
+        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.REVERTED)
+
+        # TODO: Introduce branch_reverted signal
+        # Emit branch_merged signal
+        # branch_merged.send(sender=self.__class__, branch=self, user=user)
+
+        logger.info('Reversion completed')
 
         # Disconnect the signal receiver
         post_save.disconnect(handler, sender=ObjectChange_)

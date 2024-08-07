@@ -10,7 +10,8 @@ from core.models import ObjectChange
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
-from .jobs import MergeBranchJob, SyncBranchJob
+from .choices import BranchStatusChoices
+from .jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
 from .models import ChangeDiff, Branch
 
 
@@ -151,6 +152,9 @@ class BaseBranchActionView(generic.ObjectView):
     form = forms.BranchActionForm
     template_name = 'netbox_branching/branch_action.html'
     action = None
+    valid_states = (
+        BranchStatusChoices.READY,
+    )
 
     def get_required_permission(self):
         return f'netbox_branching.{self.action}_branch'
@@ -181,8 +185,10 @@ class BaseBranchActionView(generic.ObjectView):
         branch = self.get_object(**kwargs)
         form = forms.BranchActionForm(branch, request.POST)
 
-        if not branch.ready:
-            messages.error(request, _("The branch must be in the ready state to perform this action."))
+        if branch.status not in self.valid_states:
+            messages.error(request, _(
+                "The branch must be in one of the following states to perform this action: {valid_states}"
+            ).format(valid_states=', '.join(self.valid_states)))
         elif form.is_valid():
             return self.do_action(branch, request, form)
 
@@ -222,6 +228,25 @@ class BranchMergeView(BaseBranchActionView):
             commit=form.cleaned_data['commit']
         )
         messages.success(request, f"Merging of branch {branch} in progress")
+
+        return redirect(branch.get_absolute_url())
+
+
+@register_model_view(Branch, 'revert')
+class BranchRevertView(BaseBranchActionView):
+    action = 'revert'
+    valid_states = (
+        BranchStatusChoices.MERGED,
+    )
+
+    def do_action(self, branch, request, form):
+        # Enqueue a background job to revert the Branch
+        RevertBranchJob.enqueue(
+            instance=branch,
+            user=request.user,
+            commit=form.cleaned_data['commit']
+        )
+        messages.success(request, f"Reverting branch {branch}")
 
         return redirect(branch.get_absolute_url())
 
