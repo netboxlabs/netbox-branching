@@ -10,12 +10,13 @@ __all__ = (
 
 class BranchActionForm(forms.Form):
     pk = forms.ModelMultipleChoiceField(
-        queryset=ChangeDiff.objects.all()
+        queryset=ChangeDiff.objects.all(),
+        required=False
     )
     commit = forms.BooleanField(
         required=False,
-        initial=True,
-        help_text=_('Apply changes (uncheck to do a dry-run)')
+        label=_('Commit changes'),
+        help_text=_('Leave unchecked to perform a dry run')
     )
 
     def __init__(self, branch, *args, **kwargs):

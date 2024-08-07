@@ -40,12 +40,16 @@
           </div>
         </div>
       {% endif %}
-      {% render_field form.commit %}
-      <div class="text-end my-3">
-        <a href="{{ branch.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
-        <button type="submit" name="_update" class="btn btn-primary">
-          {% trans action %}
-        </button>
+      <div class="row">
+        <div class="col col-6 offset-3">
+          {% render_field form.commit %}
+          <div class="text-center my-3">
+            <a href="{{ branch.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
+            <button type="submit" name="_update" class="btn btn-primary">
+              {% trans action %}
+            </button>
+          </div>
+        </div>
       </div>
     </form>
   </div>

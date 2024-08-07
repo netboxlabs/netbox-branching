@@ -6,6 +6,7 @@
 
 * [#3](https://github.com/netboxlabs/nbl-netbox-branching/issues/3) - Require review & acknowledgment of conflicts before syncing or merging a branch
 * [#4](https://github.com/netboxlabs/nbl-netbox-branching/issues/4) - Include a three-way diff summary in the REST API representation of a modified object
+* [#15](https://github.com/netboxlabs/nbl-netbox-branching/issues/15) - Default to performing a "dry run" for branch sync & merge
 
 ### Bug Fixes
 
