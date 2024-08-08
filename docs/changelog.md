@@ -4,6 +4,7 @@
 
 ### Enhancements
 
+* [#2](https://github.com/netboxlabs/nbl-netbox-branching/issues/2) - Enable the ability to revert a previously merged branch
 * [#3](https://github.com/netboxlabs/nbl-netbox-branching/issues/3) - Require review & acknowledgment of conflicts before syncing or merging a branch
 * [#4](https://github.com/netboxlabs/nbl-netbox-branching/issues/4) - Include a three-way diff summary in the REST API representation of a modified object
 * [#13](https://github.com/netboxlabs/nbl-netbox-branching/issues/13) - Add a link to the active branch in the branch selector dropdown
