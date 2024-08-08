@@ -60,6 +60,39 @@ class ObjectChange(ObjectChange_):
 
     apply.alters_data = True
 
+    def undo(self, using=DEFAULT_DB_ALIAS):
+        """
+        Revert a previously applied change using the specified database connection.
+        """
+        model = self.changed_object_type.model_class()
+
+        # Deleting a previously created object
+        if self.action == ObjectChangeActionChoices.ACTION_CREATE:
+            try:
+                instance = model.objects.get(pk=self.changed_object_id)
+                print(f'Undoing creation of {model._meta.verbose_name} {instance}')
+                instance.delete(using=using)
+            except model.DoesNotExist:
+                print(f'{model._meta.verbose_name} ID {self.changed_object_id} does not exist; skipping')
+
+        # Reverting a modification to an object
+        elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
+            instance = model.objects.using(using).get(pk=self.changed_object_id)
+            update_object(instance, self.diff()['pre'], using=using)
+
+        # Restoring a deleted object
+        elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
+            instance = deserialize_object(model, self.prechange_data, pk=self.changed_object_id)
+            print(f'Restoring {model._meta.verbose_name} {instance}')
+            instance.object.full_clean()
+            instance.save(using=using)
+
+        # Rebuild the MPTT tree where applicable
+        if issubclass(model, MPTTModel):
+            model.objects.rebuild()
+
+    undo.alters_data = True
+
 
 class ChangeDiff(models.Model):
     branch = models.ForeignKey(

@@ -107,6 +107,10 @@ class Branch(JobsMixin, PrimaryModel):
     def ready(self):
         return self.status == BranchStatusChoices.READY
 
+    @property
+    def merged(self):
+        return self.status == BranchStatusChoices.MERGED
+
     @cached_property
     def schema_name(self):
         schema_prefix = get_plugin_config('netbox_branching', 'schema_prefix')
@@ -166,20 +170,35 @@ class Branch(JobsMixin, PrimaryModel):
         """
         if self.status == BranchStatusChoices.NEW:
             return ObjectChange.objects.none()
-        if self.status == BranchStatusChoices.MERGED:
-            return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
-                application__branch=self
-            )
         return ObjectChange.objects.using(self.connection_name)
 
     def get_unsynced_changes(self):
         """
-        Return a queryset of all ObjectChange records created since the Branch
-        was last synced or created.
+        Return a queryset of all ObjectChange records created in main since the Branch was last synced or created.
         """
-        return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
+        return ObjectChange.objects.using(DEFAULT_DB_ALIAS).exclude(
+            application__branch=self
+        ).filter(
             changed_object_type__in=get_branchable_object_types(),
             time__gt=self.synced_time
+        )
+
+    def get_unmerged_changes(self):
+        """
+        Return a queryset of all unmerged ObjectChange records within the Branch schema.
+        """
+        if self.status == BranchStatusChoices.MERGED:
+            return ObjectChange.objects.none()
+        return ObjectChange.objects.using(self.connection_name)
+
+    def get_merged_changes(self):
+        """
+        Return a queryset of all merged ObjectChange records for the Branch.
+        """
+        if self.status != BranchStatusChoices.MERGED:
+            return ObjectChange.objects.none()
+        return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
+            application__branch=self
         )
 
     def get_event_history(self):
@@ -251,7 +270,7 @@ class Branch(JobsMixin, PrimaryModel):
             raise Exception(f"Branch {self} is not ready to merge")
 
         # Retrieve staged changes before we update the Branch's status
-        changes = self.get_changes().order_by('time')
+        changes = self.get_unmerged_changes().order_by('time')
 
         # Update Branch status
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MERGING)
@@ -271,7 +290,7 @@ class Branch(JobsMixin, PrimaryModel):
                         logger.debug(f'Applying change: {change}')
                         request.id = change.request_id
                         request.user = change.user
-                        change.apply()
+                        change.apply(using=DEFAULT_DB_ALIAS)
                 if not commit:
                     raise AbortTransaction()
 
@@ -293,6 +312,66 @@ class Branch(JobsMixin, PrimaryModel):
         branch_merged.send(sender=self.__class__, branch=self, user=user)
 
         logger.info('Merging completed')
+
+        # Disconnect the signal receiver
+        post_save.disconnect(handler, sender=ObjectChange_)
+
+    merge.alters_data = True
+
+    def revert(self, user, commit=True):
+        """
+        Undo all changes associated with a previously merged Branch in the main schema by replaying them in
+        reverse order and calling undo() on each.
+        """
+        logger = logging.getLogger('netbox_branching.branch.revert')
+        logger.info(f'Reverting branch {self} ({self.schema_name})')
+
+        if not self.merged:
+            raise Exception(f"Only merged branches can be reverted.")
+
+        # Retrieve applied changes before we update the Branch's status
+        changes = self.get_changes().order_by('-time')
+
+        # Update Branch status
+        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.REVERTING)
+
+        # Create a dummy request for the event_tracking() context manager
+        request = RequestFactory().get(reverse('home'))
+
+        # Prep & connect the signal receiver for recording AppliedChanges
+        handler = partial(record_applied_change, branch=self)
+        post_save.connect(handler, sender=ObjectChange_, weak=False)
+
+        try:
+            with transaction.atomic():
+                # Undo each change from the Branch
+                for change in changes:
+                    with event_tracking(request):
+                        logger.debug(f'Undoing change: {change}')
+                        request.id = change.request_id
+                        request.user = change.user
+                        change.undo()
+                if not commit:
+                    raise AbortTransaction()
+
+        except Exception as e:
+            logger.error(e)
+            # Disconnect signal receiver & restore original branch status
+            post_save.disconnect(handler, sender=ObjectChange_)
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
+            raise e
+
+        # Update the Branch's status to "ready"
+        self.status = BranchStatusChoices.READY
+        self.merged_time = None
+        self.merged_by = None
+        self.save()
+        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.REVERTED)
+
+        # Emit branch_reverted signal
+        branch_reverted.send(sender=self.__class__, branch=self, user=user)
+
+        logger.info('Reversion completed')
 
         # Disconnect the signal receiver
         post_save.disconnect(handler, sender=ObjectChange_)

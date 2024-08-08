@@ -10,7 +10,8 @@ from core.models import ObjectChange
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
-from .jobs import MergeBranchJob, SyncBranchJob
+from .choices import BranchStatusChoices
+from .jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
 from .models import ChangeDiff, Branch
 
 
@@ -34,7 +35,7 @@ class BranchView(generic.ObjectView):
 
     def get_extra_context(self, request, instance):
         qs = instance.get_changes().values_list('changed_object_type').annotate(count=Count('pk'))
-        if instance.ready:
+        if instance.ready or instance.merged:
             stats = {
                 'created': {
                     ContentType.objects.get(pk=ct): count
@@ -101,10 +102,6 @@ class BranchDiffView(generic.ObjectChildrenView):
         return ChangeDiff.objects.filter(branch=parent)
 
 
-def _get_unsynced_count(obj):
-    return obj.get_unsynced_changes().count()
-
-
 @register_model_view(Branch, 'changes-behind')
 class BranchChangesBehindView(generic.ObjectChildrenView):
     queryset = Branch.objects.all()
@@ -114,16 +111,12 @@ class BranchChangesBehindView(generic.ObjectChildrenView):
     actions = {}
     tab = ViewTab(
         label=_('Changes Behind'),
-        badge=_get_unsynced_count,
+        badge=lambda obj: obj.get_unsynced_changes().count(),
         permission='netbox_branching.view_branch'
     )
 
     def get_children(self, request, parent):
         return parent.get_unsynced_changes().order_by('time')
-
-
-def _get_change_count(obj):
-    return obj.get_changes().count()
 
 
 @register_model_view(Branch, 'changes-ahead')
@@ -135,12 +128,34 @@ class BranchChangesAheadView(generic.ObjectChildrenView):
     actions = {}
     tab = ViewTab(
         label=_('Changes Ahead'),
-        badge=_get_change_count,
+        badge=lambda obj: obj.get_unmerged_changes().count(),
         permission='netbox_branching.view_branch'
     )
 
     def get_children(self, request, parent):
-        return parent.get_changes().order_by('time')
+        return parent.get_unmerged_changes().order_by('time')
+
+
+def _get_change_count(obj):
+    return obj.get_unmerged_changes().count()
+
+
+@register_model_view(Branch, 'changes-merged')
+class BranchChangesAheadView(generic.ObjectChildrenView):
+    queryset = Branch.objects.all()
+    child_model = ObjectChange
+    filterset = ObjectChangeFilterSet
+    table = tables.ChangesTable
+    actions = {}
+    tab = ViewTab(
+        label=_('Changes Merged'),
+        badge=lambda obj: obj.get_merged_changes().count(),
+        permission='netbox_branching.view_branch',
+        hide_if_empty=True
+    )
+
+    def get_children(self, request, parent):
+        return parent.get_merged_changes().order_by('time')
 
 
 class BaseBranchActionView(generic.ObjectView):
@@ -151,6 +166,9 @@ class BaseBranchActionView(generic.ObjectView):
     form = forms.BranchActionForm
     template_name = 'netbox_branching/branch_action.html'
     action = None
+    valid_states = (
+        BranchStatusChoices.READY,
+    )
 
     def get_required_permission(self):
         return f'netbox_branching.{self.action}_branch'
@@ -181,8 +199,10 @@ class BaseBranchActionView(generic.ObjectView):
         branch = self.get_object(**kwargs)
         form = forms.BranchActionForm(branch, request.POST)
 
-        if not branch.ready:
-            messages.error(request, _("The branch must be in the ready state to perform this action."))
+        if branch.status not in self.valid_states:
+            messages.error(request, _(
+                "The branch must be in one of the following states to perform this action: {valid_states}"
+            ).format(valid_states=', '.join(self.valid_states)))
         elif form.is_valid():
             return self.do_action(branch, request, form)
 
@@ -222,6 +242,25 @@ class BranchMergeView(BaseBranchActionView):
             commit=form.cleaned_data['commit']
         )
         messages.success(request, f"Merging of branch {branch} in progress")
+
+        return redirect(branch.get_absolute_url())
+
+
+@register_model_view(Branch, 'revert')
+class BranchRevertView(BaseBranchActionView):
+    action = 'revert'
+    valid_states = (
+        BranchStatusChoices.MERGED,
+    )
+
+    def do_action(self, branch, request, form):
+        # Enqueue a background job to revert the Branch
+        RevertBranchJob.enqueue(
+            instance=branch,
+            user=request.user,
+            commit=form.cleaned_data['commit']
+        )
+        messages.success(request, f"Reverting branch {branch}")
 
         return redirect(branch.get_absolute_url())
 

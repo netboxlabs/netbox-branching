@@ -9,6 +9,7 @@ class BranchStatusChoices(ChoiceSet):
     READY = 'ready'
     SYNCING = 'syncing'
     MERGING = 'merging'
+    REVERTING = 'reverting'
     MERGED = 'merged'
     FAILED = 'failed'
 
@@ -18,6 +19,7 @@ class BranchStatusChoices(ChoiceSet):
         (READY, _('Ready'), 'green'),
         (SYNCING, _('Syncing'), 'orange'),
         (MERGING, _('Merging'), 'orange'),
+        (REVERTING, _('Reverting'), 'orange'),
         (MERGED, _('Merged'), 'blue'),
         (FAILED, _('Failed'), 'red'),
     )
@@ -27,9 +29,11 @@ class BranchEventTypeChoices(ChoiceSet):
     PROVISIONED = 'provisioned'
     SYNCED = 'synced'
     MERGED = 'merged'
+    REVERTED = 'reverted'
 
     CHOICES = (
         (PROVISIONED, _('Provisioned'), 'green'),
         (SYNCED, _('Synced'), 'cyan'),
         (MERGED, _('Merged'), 'blue'),
+        (REVERTED, _('Reverted'), 'orange'),
     )
