@@ -35,7 +35,7 @@ class BranchView(generic.ObjectView):
 
     def get_extra_context(self, request, instance):
         qs = instance.get_changes().values_list('changed_object_type').annotate(count=Count('pk'))
-        if instance.ready:
+        if instance.ready or instance.merged:
             stats = {
                 'created': {
                     ContentType.objects.get(pk=ct): count
@@ -102,10 +102,6 @@ class BranchDiffView(generic.ObjectChildrenView):
         return ChangeDiff.objects.filter(branch=parent)
 
 
-def _get_unsynced_count(obj):
-    return obj.get_unsynced_changes().count()
-
-
 @register_model_view(Branch, 'changes-behind')
 class BranchChangesBehindView(generic.ObjectChildrenView):
     queryset = Branch.objects.all()
@@ -115,16 +111,12 @@ class BranchChangesBehindView(generic.ObjectChildrenView):
     actions = {}
     tab = ViewTab(
         label=_('Changes Behind'),
-        badge=_get_unsynced_count,
+        badge=lambda obj: obj.get_unsynced_changes().count(),
         permission='netbox_branching.view_branch'
     )
 
     def get_children(self, request, parent):
         return parent.get_unsynced_changes().order_by('time')
-
-
-def _get_change_count(obj):
-    return obj.get_changes().count()
 
 
 @register_model_view(Branch, 'changes-ahead')
@@ -136,12 +128,34 @@ class BranchChangesAheadView(generic.ObjectChildrenView):
     actions = {}
     tab = ViewTab(
         label=_('Changes Ahead'),
-        badge=_get_change_count,
+        badge=lambda obj: obj.get_unmerged_changes().count(),
         permission='netbox_branching.view_branch'
     )
 
     def get_children(self, request, parent):
-        return parent.get_changes().order_by('time')
+        return parent.get_unmerged_changes().order_by('time')
+
+
+def _get_change_count(obj):
+    return obj.get_unmerged_changes().count()
+
+
+@register_model_view(Branch, 'changes-merged')
+class BranchChangesAheadView(generic.ObjectChildrenView):
+    queryset = Branch.objects.all()
+    child_model = ObjectChange
+    filterset = ObjectChangeFilterSet
+    table = tables.ChangesTable
+    actions = {}
+    tab = ViewTab(
+        label=_('Changes Merged'),
+        badge=lambda obj: obj.get_merged_changes().count(),
+        permission='netbox_branching.view_branch',
+        hide_if_empty=True
+    )
+
+    def get_children(self, request, parent):
+        return parent.get_merged_changes().order_by('time')
 
 
 class BaseBranchActionView(generic.ObjectView):

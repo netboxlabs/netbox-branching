@@ -170,20 +170,35 @@ class Branch(JobsMixin, PrimaryModel):
         """
         if self.status == BranchStatusChoices.NEW:
             return ObjectChange.objects.none()
-        if self.status == BranchStatusChoices.MERGED:
-            return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
-                application__branch=self
-            )
         return ObjectChange.objects.using(self.connection_name)
 
     def get_unsynced_changes(self):
         """
-        Return a queryset of all ObjectChange records created since the Branch
-        was last synced or created.
+        Return a queryset of all ObjectChange records created in main since the Branch was last synced or created.
         """
-        return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
+        return ObjectChange.objects.using(DEFAULT_DB_ALIAS).exclude(
+            application__branch=self
+        ).filter(
             changed_object_type__in=get_branchable_object_types(),
             time__gt=self.synced_time
+        )
+
+    def get_unmerged_changes(self):
+        """
+        Return a queryset of all unmerged ObjectChange records within the Branch schema.
+        """
+        if self.status == BranchStatusChoices.MERGED:
+            return ObjectChange.objects.none()
+        return ObjectChange.objects.using(self.connection_name)
+
+    def get_merged_changes(self):
+        """
+        Return a queryset of all merged ObjectChange records for the Branch.
+        """
+        if self.status != BranchStatusChoices.MERGED:
+            return ObjectChange.objects.none()
+        return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
+            application__branch=self
         )
 
     def get_event_history(self):
@@ -255,7 +270,7 @@ class Branch(JobsMixin, PrimaryModel):
             raise Exception(f"Branch {self} is not ready to merge")
 
         # Retrieve staged changes before we update the Branch's status
-        changes = self.get_changes().order_by('time')
+        changes = self.get_unmerged_changes().order_by('time')
 
         # Update Branch status
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MERGING)
@@ -275,7 +290,7 @@ class Branch(JobsMixin, PrimaryModel):
                         logger.debug(f'Applying change: {change}')
                         request.id = change.request_id
                         request.user = change.user
-                        change.apply()
+                        change.apply(using=DEFAULT_DB_ALIAS)
                 if not commit:
                     raise AbortTransaction()
 

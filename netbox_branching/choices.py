@@ -35,5 +35,5 @@ class BranchEventTypeChoices(ChoiceSet):
         (PROVISIONED, _('Provisioned'), 'green'),
         (SYNCED, _('Synced'), 'cyan'),
         (MERGED, _('Merged'), 'blue'),
-        (REVERTED, _('Reverted'), 'blue'),
+        (REVERTED, _('Reverted'), 'orange'),
     )
