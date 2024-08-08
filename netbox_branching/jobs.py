@@ -4,6 +4,7 @@ from django.db.models.signals import m2m_changed, post_save, pre_delete
 
 from core.signals import handle_changed_object, handle_deleted_object
 from netbox.jobs import JobRunner
+from utilities.exceptions import AbortTransaction
 from .utilities import ListHandler
 
 __all__ = (
@@ -77,6 +78,8 @@ class SyncBranchJob(JobRunner):
         try:
             branch = self.job.object
             branch.sync(user=self.job.user, commit=commit)
+        except AbortTransaction:
+            logger.info("Dry run completed; rolling back changes")
         except Exception as e:
             # TODO: Can JobRunner be extended to handle this more cleanly?
             # Ensure that signal handlers are reconnected
@@ -101,5 +104,8 @@ class MergeBranchJob(JobRunner):
         logger.addHandler(ListHandler(queue=get_job_log(self.job)))
 
         # Merge the Branch
-        branch = self.job.object
-        branch.merge(user=self.job.user, commit=commit)
+        try:
+            branch = self.job.object
+            branch.merge(user=self.job.user, commit=commit)
+        except AbortTransaction:
+            logger.info("Dry run completed; rolling back changes")
