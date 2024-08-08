@@ -19,6 +19,7 @@ __all__ = (
     'branch_deprovisioned',
     'branch_merged',
     'branch_provisioned',
+    'branch_reverted',
     'branch_synced',
     'record_applied_change',
     'record_change_diff',
@@ -30,15 +31,17 @@ __all__ = (
 #
 
 branch_provisioned = Signal()
+branch_deprovisioned = Signal()
 branch_synced = Signal()
 branch_merged = Signal()
-branch_deprovisioned = Signal()
+branch_reverted = Signal()
 
 branch_signals = {
     branch_provisioned: BRANCH_PROVISIONED,
+    branch_deprovisioned: BRANCH_DEPROVISIONED,
     branch_synced: BRANCH_SYNCED,
     branch_merged: BRANCH_MERGED,
-    branch_deprovisioned: BRANCH_DEPROVISIONED,
+    branch_reverted: BRANCH_REVERTED,
 }
 
 

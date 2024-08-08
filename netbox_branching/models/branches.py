@@ -368,9 +368,8 @@ class Branch(JobsMixin, PrimaryModel):
         self.save()
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.REVERTED)
 
-        # TODO: Introduce branch_reverted signal
-        # Emit branch_merged signal
-        # branch_merged.send(sender=self.__class__, branch=self, user=user)
+        # Emit branch_reverted signal
+        branch_reverted.send(sender=self.__class__, branch=self, user=user)
 
         logger.info('Reversion completed')
 
