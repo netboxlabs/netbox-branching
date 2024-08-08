@@ -9,7 +9,7 @@ from rest_framework.viewsets import ModelViewSet
 from core.api.serializers import JobSerializer
 from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
 from netbox_branching import filtersets
-from netbox_branching.jobs import MergeBranchJob, SyncBranchJob
+from netbox_branching.jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
 from . import serializers
 
@@ -34,7 +34,7 @@ class BranchViewSet(ModelViewSet):
 
         branch = self.get_object()
         if not branch.ready:
-            return HttpResponseBadRequest("Branch is not ready to sync")
+            return HttpResponseBadRequest("Branch is not ready to sync.")
 
         serializer = serializers.CommitSerializer(data=request.data)
         commit = serializer.validated_data['commit'] if serializer.is_valid() else False
@@ -58,13 +58,37 @@ class BranchViewSet(ModelViewSet):
 
         branch = self.get_object()
         if not branch.ready:
-            return HttpResponseBadRequest("Branch is not ready to merge")
+            return HttpResponseBadRequest("Branch is not ready to merge.")
 
         serializer = serializers.CommitSerializer(data=request.data)
         commit = serializer.validated_data['commit'] if serializer.is_valid() else False
 
         # Enqueue a background job
         job = MergeBranchJob.enqueue(
+            instance=branch,
+            user=request.user,
+            commit=commit
+        )
+
+        return Response(JobSerializer(job, context={'request': request}).data)
+
+    @action(detail=True, methods=['post'])
+    def revert(self, request, pk):
+        """
+        Enqueue a background job to run Branch.revert().
+        """
+        if not request.user.has_perm('netbox_branching.revert_branch'):
+            raise PermissionDenied("This user does not have permission to revert branches.")
+
+        branch = self.get_object()
+        if not branch.merged:
+            return HttpResponseBadRequest("Only merged branches can be reverted.")
+
+        serializer = serializers.CommitSerializer(data=request.data)
+        commit = serializer.validated_data['commit'] if serializer.is_valid() else False
+
+        # Enqueue a background job
+        job = RevertBranchJob.enqueue(
             instance=branch,
             user=request.user,
             commit=commit
