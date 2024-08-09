@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Set short sha output
         id: short-sha
-        run: echo "::set-output name=short-sha::${GITHUB_SHA::7}"
+        run: echo "short-sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
       - name: Set release version
         id: release-version
         run: |
