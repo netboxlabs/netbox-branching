@@ -14,5 +14,5 @@ docker-compose-down:
 
 .PHONY: docker-compose-test
 docker-compose-test:
-	@$(DOCKER_COMPOSE) -f docker/docker-compose.yaml run -u root --rm netbox ./manage.py test --keepdb netbox_branchinga
+	@$(DOCKER_COMPOSE) -f docker/docker-compose.yaml run -u root --rm netbox ./manage.py test --keepdb netbox_branching
 	@$(MAKE) docker-compose-down
