@@ -14,6 +14,17 @@ env:
   PYTHON_PACKAGE_NAME: netboxlabs-netbox-branching
 
 jobs:
+  get-package-name:
+    name: Get Python package name
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python package name
+        id: python-package-name
+        run: echo "package-name=${{ env.PYTHON_PACKAGE_NAME }}" >> "$GITHUB_OUTPUT"
+    outputs:
+      python-package-name: ${{ steps.python-package-name.outputs.package-name }}
   get-next-version:
     name: Get next version
     runs-on: ubuntu-latest
@@ -51,7 +62,7 @@ jobs:
       release-notes: ${{ steps.release-notes.outputs.release-notes }}
   build:
     name: Build
-    needs: [ get-next-version, get-release-notes ]
+    needs: [ get-package-name, get-next-version, get-release-notes ]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -61,7 +72,7 @@ jobs:
       BUILD_VERSION: ${{ needs.get-next-version.outputs.release-version }}
       BUILD_TRACK: release
       BUILD_COMMIT: ${{ needs.get-next-version.outputs.short-sha }}
-      OUTPUT_FILENAME: ${{ env.PYTHON_PACKAGE_NAME }}-${{ needs.get-next-version.outputs.release-version }}.tar.gz
+      OUTPUT_FILENAME: ${{ needs.get-package-name.outputs.package-name }}-${{ needs.get-next-version.outputs.release-version }}.tar.gz
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
