@@ -35,10 +35,11 @@ jobs:
           pip install .
           pip install .[dev]
           pip install .[test]
+      - name: Build documentation
+        run: mkdocs build
       - name: Lint with Ruff
         run: |
           ruff check --output-format=github netbox_branching/
         continue-on-error: true
       - name: Test
-        run: |
-          make docker-compose-test
+        run: make docker-compose-test
