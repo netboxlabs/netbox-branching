@@ -75,3 +75,13 @@ sequenceDiagram
 ## Getting Started
 
 TODO
+
+## Known Limitations
+
+There are currently a few limitations to the functionality provided by this plugin that are worth highlighting. We hope to address these in future releases.
+
+* **Branches may not persist across minor version upgrades of NetBox.** Users are strongly encouraged to merge or remove all open branches prior to upgrading to a new minor release of NetBox (e.g. from v4.1 to v4.2). This is because database migrations introduced by the upgrade will _not_ be applied to branch schemas, potentially resulting in an invalid state. However, it should be considered safe to upgrade to new patch releases (e.g. v4.1.0 to v4.1.1) with open branches.
+
+* **Open branches will not reflect newly installed plugins.** Any branches created before installing a new plugin will not be updated to support its models. Note, however, that installing a new plugin will generally not impede the use of existing branches. Users are encouraged to install all necessary plugins prior to creating branches. (This also applies to database migrations introduced by upgrading a plugin.)
+
+* **Changes to main can potentially disrupt the branch provisioning process.**  Changes made to the main schema while a branch is being provisioned can potentially be only partially captured, and may result in an incomplete or invalid state being copied to the branch. Users are encouraged to avoid making changes to the main schema while a branch is being provisioned. (Changes made to other branches, however, will not interfere with this process.)
