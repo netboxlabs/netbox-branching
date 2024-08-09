@@ -24,6 +24,13 @@ class BranchStatusChoices(ChoiceSet):
         (FAILED, _('Failed'), 'red'),
     )
 
+    TRANSITIONAL = (
+        PROVISIONING,
+        SYNCING,
+        MERGING,
+        REVERTING
+    )
+
 
 class BranchEventTypeChoices(ChoiceSet):
     PROVISIONED = 'provisioned'

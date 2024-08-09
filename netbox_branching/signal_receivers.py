@@ -110,3 +110,14 @@ branch_provisioned.connect(partial(handle_branch_event, event_type=BRANCH_PROVIS
 branch_synced.connect(partial(handle_branch_event, event_type=BRANCH_SYNCED))
 branch_merged.connect(partial(handle_branch_event, event_type=BRANCH_MERGED))
 branch_deprovisioned.connect(partial(handle_branch_event, event_type=BRANCH_DEPROVISIONED))
+
+
+@receiver(pre_delete, sender=Branch)
+def validate_branch_deletion(sender, instance, **kwargs):
+    """
+    Prevent the deletion of a Branch which is in a transitional state (e.g. provisioning, syncing, etc.).
+    """
+    if instance.status in BranchStatusChoices.TRANSITIONAL:
+        raise AbortRequest(
+            _("A branch in the {status} status may not be deleted.").format(status=instance.status)
+        )

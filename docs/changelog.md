@@ -19,6 +19,7 @@
 * [#16](https://github.com/netboxlabs/nbl-netbox-branching/issues/16) - Fix support for many-to-many assignments
 * [#24](https://github.com/netboxlabs/nbl-netbox-branching/issues/24) - Correct the REST API schema for the sync, merge, and revert branch endpoints
 * [#30](https://github.com/netboxlabs/nbl-netbox-branching/issues/30) - Include only unmerged branches with relevant changes in object view notifications
+* [#31](https://github.com/netboxlabs/nbl-netbox-branching/issues/31) - Prevent the deletion of a branch in a transitional state
 
 ## v0.2.0
 
