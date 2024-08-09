@@ -23,7 +23,7 @@ from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.contextvars import active_branch
 from netbox_branching.signals import *
 from netbox_branching.utilities import (
-    ChangeSummary, activate_branch, get_branchable_object_types, get_tables_to_replicate,
+    ChangeSummary, activate_branch, get_branchable_object_types, get_tables_to_replicate, record_applied_change,
 )
 from utilities.exceptions import AbortRequest, AbortTransaction
 from .changes import ObjectChange

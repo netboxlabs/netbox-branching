@@ -15,6 +15,7 @@ __all__ = (
     'deactivate_branch',
     'get_branchable_object_types',
     'get_tables_to_replicate',
+    'record_applied_change',
     'update_object',
 )
 
@@ -153,3 +154,12 @@ def update_object(instance, data, using):
     instance.save(using=using)
     for m2m_manager, value in m2m_assignments.items():
         m2m_manager.set(value)
+
+
+def record_applied_change(instance, branch, **kwargs):
+    """
+    Create a new AppliedChange instance mapping an applied ObjectChange to its Branch.
+    """
+    from .models import AppliedChange
+
+    AppliedChange.objects.update_or_create(change=instance, defaults={'branch': branch})
