@@ -10,6 +10,7 @@
 * [#13](https://github.com/netboxlabs/nbl-netbox-branching/issues/13) - Add a link to the active branch in the branch selector dropdown
 * [#15](https://github.com/netboxlabs/nbl-netbox-branching/issues/15) - Default to performing a "dry run" for branch sync & merge
 * [#17](https://github.com/netboxlabs/nbl-netbox-branching/issues/17) - Utilize NetBox's `JobRunner` class for background jobs
+* [#29](https://github.com/netboxlabs/nbl-netbox-branching/issues/29) - Register a branch column on NetBox's global changelog table
 
 ### Bug Fixes
 
