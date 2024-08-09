@@ -6,10 +6,10 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "PolyForm Shield License 1.0.0" }
 authors = [
-    {name = "NetBox Labs", email = "support@netboxlabs.com" }
+    { name = "NetBox Labs", email = "support@netboxlabs.com" }
 ]
 maintainers = [
-    {name = "NetBox Labs", email = "support@netboxlabs.com" }
+    { name = "NetBox Labs", email = "support@netboxlabs.com" }
 ]
 
 classifiers = [
@@ -40,8 +40,8 @@ test = ["coverage", "pytest", "pytest-cov"]
 packages = [
     "netbox_branching",
 ]
-package-data = {"netbox_branching" = ["**/*", "templates/**"]}
-exclude-package-data = {netbox_branching = ["tests/*"]}
+package-data = { "netbox_branching" = ["**/*", "templates/**"] }
+exclude-package-data = { netbox_branching = ["tests/*"] }
 license-files = ["LICENSE.md"]
 
 [build-system]
@@ -57,4 +57,19 @@ indent-style = "space"
 
 [tool.ruff.lint]
 select = ["C", "D", "E", "F", "I", "R", "UP", "W"]
-ignore = ["F401", "D203", "D212", "D400", "D401", "D404", "RET504"]
+ignore = [
+    "F401",
+    "D203",
+    "D212",
+    "D400",
+    "D401",
+    "D404",
+    "RET504",
+    "D100",
+    "D101",
+    "D102",
+    "D104",
+    "D105",
+    "D106",
+    "D107"
+]
