@@ -7,7 +7,7 @@ First, navigate to Branching > Branches to view the list of any existing branche
 
 Pick a unique name for your branch, and add a description if you like.
 
-<!-- TODO: Screenshot of branch creation form -->
+![Screenshot: Branch creation form](../media/screenshots/branch-creation-form.png)
 
 When a branch is first created, its status will show as "new," indicating that its corresponding PostgreSQL schema has not yet been provisioned in the database. A background job is queued automatically to perform this task, which my take a few seconds to several minutes, depending on the size of your database.
 
@@ -16,7 +16,7 @@ When a branch is first created, its status will show as "new," indicating that i
 
 Once the branch's schema has been provisioned, the status will be updated to "ready," and the branch will become available to activate. You can activate a branch by selecting it from the dropdown menu at top right.
 
-<!-- TODO: Activating a branch -->
+![Screenshot: Activating a branch](../media/screenshots/activating-a-branch.png)
 
 When a branch is active, any changes you make in NetBox (aside from system resources such as users, permissions, etc.) will be reflected only within that branch. For example, if you create a new site when a branch is active, and then switch back to the main branch, the site will no longer appear. Switch back to the original branch, and the site will appear again.
 
