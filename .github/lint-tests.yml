@@ -1,0 +1,44 @@
+name: Lint and tests
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - "!release"
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  checks: write
+  pull-requests: write
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        python: [ "3.10" ]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install .
+          pip install .[dev]
+          pip install .[test]
+      - name: Lint with Ruff
+        run: |
+          ruff check --output-format=github netbox_branching/
+        continue-on-error: true
+      - name: Test
+        run: |
+          make docker-compose-test
