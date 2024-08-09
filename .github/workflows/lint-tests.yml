@@ -42,4 +42,4 @@ jobs:
           ruff check --output-format=github netbox_branching/
         continue-on-error: true
       - name: Test
-        run: make docker-compose-test || true
+        run: make docker-compose-test
