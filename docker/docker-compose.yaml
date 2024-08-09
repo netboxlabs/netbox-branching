@@ -17,6 +17,7 @@ services:
       - "8000:8080"
     volumes:
       - ./configuration:/etc/netbox/config:z,ro
+      - ./local_settings.py:/opt/netbox/netbox/netbox/local_settings.py:z,ro
       - ../netbox_branching:/opt/netbox/netbox/netbox_branching:ro
       - netbox-media-files:/opt/netbox/netbox/media:rw
       - netbox-reports-files:/opt/netbox/netbox/reports:rw

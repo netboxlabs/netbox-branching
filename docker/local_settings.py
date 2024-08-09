@@ -1,5 +1,5 @@
 from netbox_branching.utilities import DynamicSchemaDict
-from netbox.configuration.configuration import DATABASE
+from .configuration import DATABASE
 
 # Wrap DATABASES with DynamicSchemaDict for dynamic schema support
 DATABASES = DynamicSchemaDict({
