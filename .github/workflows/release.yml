@@ -21,10 +21,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Python package name
-        id: python-package-name
+        id: package-name
         run: echo "package-name=${{ env.PYTHON_PACKAGE_NAME }}" >> "$GITHUB_OUTPUT"
     outputs:
-      python-package-name: ${{ steps.python-package-name.outputs.package-name }}
+      package-name: ${{ steps.package-name.outputs.package-name }}
   get-next-version:
     name: Get next version
     runs-on: ubuntu-latest
