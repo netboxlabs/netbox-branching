@@ -1,0 +1,69 @@
+[project]
+name = "netboxlabs-netbox-branching"
+version = "0.2.0"
+description = "A git-like branching implementation for NetBox"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "PolyForm Shield License 1.0.0" }
+authors = [
+    { name = "NetBox Labs", email = "support@netboxlabs.com" }
+]
+maintainers = [
+    { name = "NetBox Labs", email = "support@netboxlabs.com" }
+]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Topic :: Software Development :: Build Tools",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    'Programming Language :: Python :: 3.10',
+    'Programming Language :: Python :: 3.11',
+    'Programming Language :: Python :: 3.12',
+]
+
+dependencies = [
+    "Django",
+]
+
+[project.optional-dependencies]
+dev = ["black", "check-manifest", "ruff", "mkdocs", "mkdocs-material"]
+test = ["coverage", "pytest", "pytest-cov"]
+
+[project.urls]
+"Homepage" = "https://netboxlabs.com/"
+
+[project.scripts]
+
+[tool.setuptools]
+packages = [
+    "netbox_branching",
+]
+package-data = { "netbox_branching" = ["**/*", "templates/**"] }
+exclude-package-data = { netbox_branching = ["tests/*"] }
+license-files = ["LICENSE.md"]
+
+[build-system]
+requires = ["setuptools>=43.0.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.ruff]
+line-length = 140
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint]
+select = ["C", "D", "E", "F", "I", "R", "UP", "W"]
+ignore = [
+    "F401",
+    "D203",
+    "D212",
+    "D400",
+    "D401",
+    "D404",
+    "RET504",
+    "D1"
+]
