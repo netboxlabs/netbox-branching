@@ -392,6 +392,10 @@ class Branch(JobsMixin, PrimaryModel):
             with connection.cursor() as cursor:
                 schema = self.schema_name
 
+                # Start a transaction
+                cursor.execute("BEGIN")
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+
                 # Create the new schema
                 logger.debug(f'Creating schema {schema}')
                 try:
@@ -434,6 +438,9 @@ class Branch(JobsMixin, PrimaryModel):
                     cursor.execute(
                         f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
                     )
+
+                # Commit the transaction
+                cursor.execute("COMMIT")
 
         except Exception as e:
             logger.error(e)
