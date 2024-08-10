@@ -1,25 +1,16 @@
 import re
 
 from django.db import connection
-from django.test import TestCase
+from django.test import TransactionTestCase
 
-from dcim.models import Site
 from netbox_branching.constants import MAIN_SCHEMA
 from netbox_branching.models import Branch
 from netbox_branching.utilities import get_tables_to_replicate
 from .utils import fetchall, fetchone
 
 
-class BranchTestCase(TestCase):
-
-    @classmethod
-    def setUpTestData(cls):
-        sites = (
-            Site(name='Site 1', slug='site-1'),
-            Site(name='Site 2', slug='site-2'),
-            Site(name='Site 3', slug='site-3'),
-        )
-        Site.objects.bulk_create(sites)
+class BranchTestCase(TransactionTestCase):
+    serialized_rollback = True
 
     def test_create_branch(self):
         branch = Branch(name='Branch 1')
