@@ -11,6 +11,7 @@
 * [#15](https://github.com/netboxlabs/nbl-netbox-branching/issues/15) - Default to performing a "dry run" for branch sync & merge
 * [#17](https://github.com/netboxlabs/nbl-netbox-branching/issues/17) - Utilize NetBox's `JobRunner` class for background jobs
 * [#29](https://github.com/netboxlabs/nbl-netbox-branching/issues/29) - Register a branch column on NetBox's global changelog table
+* [#36](https://github.com/netboxlabs/nbl-netbox-branching/issues/36) - Run the branch provisioning process within an isolated transaction
 
 ### Bug Fixes
 
