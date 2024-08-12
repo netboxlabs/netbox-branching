@@ -9,7 +9,9 @@ This [NetBox](http://netboxlabs.com/oss/netbox/) plugin introduces branching fun
 
 ## Installation
 
-1. Activate the NetBox virtual environment
+Brief installation instructions are provided below. For a complete installation guide, please refer to the included documentation.
+
+1. Activate the NetBox virtual environment:
 
 ```
 $ source /opt/netbox/venv/bin/activate
@@ -21,7 +23,7 @@ $ source /opt/netbox/venv/bin/activate
 $ pip install netboxlabs-netbox-branching
 ```
 
-3. Add `netbox_branching` to `PLUGINS` in `configuration.py`
+3. Add `netbox_branching` to `PLUGINS` in `configuration.py`:
 
 ```python
 PLUGINS = [
