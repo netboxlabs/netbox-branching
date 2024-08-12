@@ -23,7 +23,7 @@ from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.contextvars import active_branch
 from netbox_branching.signals import *
 from netbox_branching.utilities import (
-    ChangeSummary, activate_branch, get_branchable_object_types, get_tables_to_replicate,
+    ChangeSummary, activate_branch, get_branchable_object_types, get_tables_to_replicate, record_applied_change,
 )
 from utilities.exceptions import AbortRequest, AbortTransaction
 from .changes import ObjectChange
@@ -392,6 +392,10 @@ class Branch(JobsMixin, PrimaryModel):
             with connection.cursor() as cursor:
                 schema = self.schema_name
 
+                # Start a transaction
+                cursor.execute("BEGIN")
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+
                 # Create the new schema
                 logger.debug(f'Creating schema {schema}')
                 try:
@@ -434,6 +438,9 @@ class Branch(JobsMixin, PrimaryModel):
                     cursor.execute(
                         f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
                     )
+
+                # Commit the transaction
+                cursor.execute("COMMIT")
 
         except Exception as e:
             logger.error(e)

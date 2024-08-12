@@ -1,5 +1,6 @@
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseBadRequest
+from drf_spectacular.utils import extend_schema
 from rest_framework.decorators import action
 from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
 from rest_framework.response import Response
@@ -24,10 +25,15 @@ class BranchViewSet(ModelViewSet):
     serializer_class = serializers.BranchSerializer
     filterset_class = filtersets.BranchFilterSet
 
+    @extend_schema(
+        methods=['post'],
+        request=serializers.CommitSerializer(),
+        responses={200: JobSerializer()},
+    )
     @action(detail=True, methods=['post'])
     def sync(self, request, pk):
         """
-        Enqueue a background job to run Branch.sync().
+        Enqueue a background job to synchronize a branch from main.
         """
         if not request.user.has_perm('netbox_branching.sync_branch'):
             raise PermissionDenied("This user does not have permission to sync branches.")
@@ -48,10 +54,15 @@ class BranchViewSet(ModelViewSet):
 
         return Response(JobSerializer(job, context={'request': request}).data)
 
+    @extend_schema(
+        methods=['post'],
+        request=serializers.CommitSerializer(),
+        responses={200: JobSerializer()},
+    )
     @action(detail=True, methods=['post'])
     def merge(self, request, pk):
         """
-        Enqueue a background job to run Branch.merge().
+        Enqueue a background job to merge a branch.
         """
         if not request.user.has_perm('netbox_branching.merge_branch'):
             raise PermissionDenied("This user does not have permission to merge branches.")
@@ -72,10 +83,15 @@ class BranchViewSet(ModelViewSet):
 
         return Response(JobSerializer(job, context={'request': request}).data)
 
+    @extend_schema(
+        methods=['post'],
+        request=serializers.CommitSerializer(),
+        responses={200: JobSerializer()},
+    )
     @action(detail=True, methods=['post'])
     def revert(self, request, pk):
         """
-        Enqueue a background job to run Branch.revert().
+        Enqueue a background job to revert a merged branch.
         """
         if not request.user.has_perm('netbox_branching.revert_branch'):
             raise PermissionDenied("This user does not have permission to revert branches.")

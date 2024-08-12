@@ -159,6 +159,8 @@
                 {% endif %}
               </div>
             </div>
+          {% empty %}
+            <div class="list-group-item text-muted">{% trans "None" %}</div>
           {% endfor %}
         </div>
       </div>

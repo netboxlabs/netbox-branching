@@ -26,8 +26,14 @@ class BranchNotification(PluginTemplateExtension):
     def alerts(self):
         instance = self.context['object']
         ct = ContentType.objects.get_for_model(instance)
+        relevant_changes = ChangeDiff.objects.filter(
+            object_type=ct,
+            object_id=instance.pk
+        ).exclude(
+            branch__status=BranchStatusChoices.MERGED
+        )
         branches = [
-            diff.branch for diff in ChangeDiff.objects.filter(object_type=ct, object_id=instance.pk).only('branch')
+            diff.branch for diff in relevant_changes.only('branch')
         ]
         return self.render('netbox_branching/inc/modified_notice.html', extra_context={
             'branches': branches,
