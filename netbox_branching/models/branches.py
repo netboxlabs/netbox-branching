@@ -388,8 +388,8 @@ class Branch(JobsMixin, PrimaryModel):
         # Update Branch status
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.PROVISIONING)
 
-        try:
-            with connection.cursor() as cursor:
+        with connection.cursor() as cursor:
+            try:
                 schema = self.schema_name
 
                 # Start a transaction
@@ -447,10 +447,15 @@ class Branch(JobsMixin, PrimaryModel):
                 # Commit the transaction
                 cursor.execute("COMMIT")
 
-        except Exception as e:
-            logger.error(e)
-            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
-            raise e
+            except Exception as e:
+                # Abort the transaction
+                cursor.execute("ROLLBACK")
+
+                # Mark the Branch as failed
+                logger.error(e)
+                Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
+
+                raise e
 
         # Emit branch_provisioned signal
         branch_provisioned.send(sender=self.__class__, branch=self, user=user)
