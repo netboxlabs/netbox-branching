@@ -24,7 +24,8 @@ class BranchSelector(PluginTemplateExtension):
 class BranchNotification(PluginTemplateExtension):
 
     def alerts(self):
-        instance = self.context['object']
+        if not (instance := self.context['object']):
+            return ''
         ct = ContentType.objects.get_for_model(instance)
         relevant_changes = ChangeDiff.objects.filter(
             object_type=ct,
