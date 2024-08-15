@@ -434,9 +434,14 @@ class Branch(JobsMixin, PrimaryModel):
                     cursor.execute(
                         f"INSERT INTO {schema}.{table} SELECT * FROM public.{table}"
                     )
+                    # Get the name of the sequence used for object ID allocations
+                    cursor.execute(
+                        f"SELECT pg_get_serial_sequence('{table}', 'id');"
+                    )
+                    sequence_name = cursor.fetchone()[0]
                     # Set the default value for the ID column to the sequence associated with the source table
                     cursor.execute(
-                        f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
+                        f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT nextval('{sequence_name}')"
                     )
 
                 # Commit the transaction
