@@ -358,7 +358,7 @@ class Branch(JobsMixin, PrimaryModel):
             logger.error(e)
             # Disconnect signal receiver & restore original branch status
             post_save.disconnect(handler, sender=ObjectChange_)
-            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MERGED)
             raise e
 
         # Update the Branch's status to "ready"
