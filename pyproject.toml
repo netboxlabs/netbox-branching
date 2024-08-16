@@ -1,6 +1,6 @@
 [project]
 name = "netboxlabs-netbox-branching"
-version = "0.3.0"
+version = "0.3.1"
 description = "A git-like branching implementation for NetBox"
 readme = "README.md"
 requires-python = ">=3.10"
