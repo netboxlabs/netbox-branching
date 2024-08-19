@@ -1,15 +1,5 @@
 name: Release
 on:
-  workflow_dispatch:
-    inputs:
-      pypi:
-        description: 'PyPI instance'
-        required: true
-        type: choice
-        default: 'production'
-        options:
-          - production
-          - testing
   push:
     branches: [ release ]
 
@@ -20,8 +10,6 @@ concurrency:
 env:
   PYTHON_RUNTIME_VERSION: "3.11"
   PYTHON_PACKAGE_NAME: netboxlabs-netbox-branching
-  PYPI_URL_PRODUCTION: "https://upload.pypi.org/legacy/"
-  PYPI_URL_TESTING: "https://test.pypi.org/legacy/"
 
 jobs:
   get-package-name:
@@ -106,7 +94,6 @@ jobs:
       - name: Publish release distributions to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
-          repository-url: ${{ github.event.inputs.pypi == 'production' && env.PYPI_URL_PRODUCTION || env.PYPI_URL_TESTING }}
           packages-dir: dist
   release:
     name: Release
@@ -125,4 +112,4 @@ jobs:
           release_name: ${{ needs.get-next-version.outputs.release-version }}
           body: ${{ needs.get-release-notes.outputs.release-notes }}
           draft: false
-          prerelease: false
+          prerelease: true

@@ -1,7 +1,7 @@
 ---
 name: ✨ Feature Request
 description: Propose a new NetBox feature or enhancement
-labels: ["feature"]
+labels: ["type: feature"]
 body:
   - type: input
     attributes:

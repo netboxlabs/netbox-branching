@@ -358,7 +358,7 @@ class Branch(JobsMixin, PrimaryModel):
             logger.error(e)
             # Disconnect signal receiver & restore original branch status
             post_save.disconnect(handler, sender=ObjectChange_)
-            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MERGED)
             raise e
 
         # Update the Branch's status to "ready"
@@ -388,8 +388,8 @@ class Branch(JobsMixin, PrimaryModel):
         # Update Branch status
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.PROVISIONING)
 
-        try:
-            with connection.cursor() as cursor:
+        with connection.cursor() as cursor:
+            try:
                 schema = self.schema_name
 
                 # Start a transaction
@@ -413,39 +413,53 @@ class Branch(JobsMixin, PrimaryModel):
                 # Create an empty copy of the global change log. Share the ID sequence from the main table to avoid
                 # reusing change record IDs.
                 table = ObjectChange_._meta.db_table
-                logger.debug(f'Creating table {schema}.{table}')
+                main_table = f'public.{table}'
+                schema_table = f'{schema}.{table}'
+                logger.debug(f'Creating table {schema_table}')
                 cursor.execute(
-                    f"CREATE TABLE {schema}.{table} ( LIKE public.{table} INCLUDING INDEXES )"
+                    f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
                 )
                 # Set the default value for the ID column to the sequence associated with the source table
+                sequence_name = f'public.{table}_id_seq'
                 cursor.execute(
-                    f"ALTER TABLE {schema}.{table} "
-                    f"ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
+                    f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
                 )
 
                 # Replicate relevant tables from the main schema
                 for table in get_tables_to_replicate():
-                    logger.debug(f'Creating table {schema}.{table}')
+                    main_table = f'public.{table}'
+                    schema_table = f'{schema}.{table}'
+                    logger.debug(f'Creating table {schema_table}')
                     # Create the table in the new schema
                     cursor.execute(
-                        f"CREATE TABLE {schema}.{table} ( LIKE public.{table} INCLUDING INDEXES )"
+                        f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
                     )
                     # Copy data from the source table
                     cursor.execute(
-                        f"INSERT INTO {schema}.{table} SELECT * FROM public.{table}"
+                        f"INSERT INTO {schema_table} SELECT * FROM {main_table}"
                     )
+                    # Get the name of the sequence used for object ID allocations
+                    cursor.execute(
+                        "SELECT pg_get_serial_sequence(%s, 'id')", [table]
+                    )
+                    sequence_name = cursor.fetchone()[0]
                     # Set the default value for the ID column to the sequence associated with the source table
                     cursor.execute(
-                        f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
+                        f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
                     )
 
                 # Commit the transaction
                 cursor.execute("COMMIT")
 
-        except Exception as e:
-            logger.error(e)
-            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
-            raise e
+            except Exception as e:
+                # Abort the transaction
+                cursor.execute("ROLLBACK")
+
+                # Mark the Branch as failed
+                logger.error(e)
+                Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
+
+                raise e
 
         # Emit branch_provisioned signal
         branch_provisioned.send(sender=self.__class__, branch=self, user=user)

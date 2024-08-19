@@ -5,7 +5,7 @@ class AppConfig(PluginConfig):
     name = 'netbox_branching'
     verbose_name = 'NetBox Branching'
     description = 'A git-like branching implementation for NetBox'
-    version = '0.2.0'
+    version = '0.3.1'
     base_url = 'branching'
     min_version = '4.1'
     middleware = [

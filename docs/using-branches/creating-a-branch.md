@@ -25,6 +25,6 @@ When a branch is active, any changes you make in NetBox (aside from system resou
 Within the branch view, you'll notice several tabs. Each of these pertains to a set of changes related to the branch.
 
 * **Diff** - This tab provides a summary of all the objects that have been created, updated, or deleted within the branch.
-* **Changes Behind** - This tab lists all changes that have been made in main since the branch was last synchronized. [Synchronizing the branch](./syncing-changes.md) will update it to include these changes.
-* **Changes Ahead** - This tab lists all changes made within your branch. [Merging the branch](./merging-a-branch.md) will replicate these changes into main.
+* **Changes Behind** - This tab lists all changes that have been made in main since the branch was last synchronized. [Synchronizing the branch](./syncing-merging.md#syncing-a-branch) will update it to include these changes.
+* **Changes Ahead** - This tab lists all changes made within your branch. [Merging the branch](./syncing-merging.md#merging-a-branch) will replicate these changes into main.
 * **Merged Changes** - Once a branch has been merged, this tab lists all changes that have been applied from the branch. (This tab appears only for merged branches.)

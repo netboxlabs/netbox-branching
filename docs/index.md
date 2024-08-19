@@ -74,7 +74,70 @@ sequenceDiagram
 
 ## Getting Started
 
-TODO
+### Plugin Installation
+
+#### 1. Virtual Environment
+
+The plugin can be installed from [PyPI](https://pypi.org/project/netboxlabs-netbox-branching/). First, activate the Python virtual environment used by NetBox (which is typically located at `/opt/netbox/venv/`):
+
+```
+source /opt/netbox/venv/bin/activate
+```
+
+!!! note
+    You may need to modify the `source` command above if your virtual environment has been installed in a different location.
+
+#### 2. Python Package
+
+Use `pip` to install the Python package:
+
+```
+pip install netboxlabs-netbox-branching
+```
+
+#### 3. Enable Plugin
+
+Add `netbox_branching` to the list `PLUGINS` list in `configuration.py`.
+
+```python
+PLUGINS = [
+    # ...
+    'netbox_branching',
+]
+```
+
+!!! note
+    If there are no plugins already installed, you might need to create this parameter. If so, be sure to define `PLUGINS` as a list _containing_ the plugin name as above, rather than just the name.
+
+#### 4. Configuration
+
+This plugin employs dynamic schema resolution, which requires that we override two low-level Django settings. First, we'll wrap NetBox's configured `DATABASE` parameter with `DynamicSchemaDict` to support dynamic schemas. Second, we'll employ the plugin's custom database router.
+
+Create a new file named `local_settings.py` in the same directory as `configuration.py`, and add the content below.
+
+```python
+from netbox_branching.utilities import DynamicSchemaDict
+from .configuration import DATABASE
+
+# Wrap DATABASES with DynamicSchemaDict for dynamic schema support
+DATABASES = DynamicSchemaDict({
+    'default': DATABASE,
+})
+
+# Employ our custom database router
+DATABASE_ROUTERS = [
+    'netbox_branching.database.BranchAwareRouter',
+]
+```
+
+#### 5. Database Migrations
+
+Run the included database migrations:
+
+```
+cd /opt/netbox/netbox
+./manage.py migrate
+```
 
 ## Known Limitations
 

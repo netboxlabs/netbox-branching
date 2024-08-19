@@ -1,24 +1,29 @@
-# nbl-netbox-branching
+# NetBox Branching
 
-### Internal Use Only
+This [NetBox](http://netboxlabs.com/oss/netbox/) plugin introduces branching functionality. A branch is a discrete, static snapshot of the NetBox database which can be modified independently and later merged back into the main database. This enables users to make "offline" changes to objects within NetBox and avoid interfering with its integrity as the network source of truth. It also provides the opportunity to review changes in bulk prior to their application.
 
-Initial proof of concept for multi-branch/versioning support in NetBox.
+## Requirements
 
-### Initial Setup
+* NetBox v4.1 or later
+* PostgreSQL 12 or later
 
-1. Activate the NetBox virtual environment
+## Installation
+
+Brief installation instructions are provided below. For a complete installation guide, please refer to the included documentation.
+
+1. Activate the NetBox virtual environment:
 
 ```
 $ source /opt/netbox/venv/bin/activate
 ```
 
-2. Install the plugin from source
+2. Install the plugin from [PyPI](https://pypi.org/project/netboxlabs-netbox-branching/):
 
 ```
-$ pip install -e .
+$ pip install netboxlabs-netbox-branching
 ```
 
-3. Add `netbox_branching` to `PLUGINS` in `configuration.py`
+3. Add `netbox_branching` to `PLUGINS` in `configuration.py`:
 
 ```python
 PLUGINS = [
@@ -27,7 +32,7 @@ PLUGINS = [
 ]
 ```
 
-4. Create `local_settings.py` to override the `DATABASES` setting. This enables dynamic schema support.
+4. Create `local_settings.py` to override the `DATABASES` & `DATABASE_ROUTERS` settings. This enables dynamic schema support.
 
 ```python
 from netbox_branching.utilities import DynamicSchemaDict
@@ -44,7 +49,7 @@ DATABASE_ROUTERS = [
 ]
 ```
 
-5. Run NetBox migrations
+5. Run NetBox migrations:
 
 ```
 $ ./manage.py migrate

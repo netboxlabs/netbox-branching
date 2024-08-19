@@ -1,5 +1,16 @@
 # Change Log
 
+## v0.3.1
+
+### Bug Fixes
+
+* [#42](https://github.com/netboxlabs/nbl-netbox-branching/issues/42) - Fix exception raised when viewing custom scripts
+* [#44](https://github.com/netboxlabs/nbl-netbox-branching/issues/44) - Handle truncated SQL sequence names to avoid exceptions during branch provisioning
+* [#48](https://github.com/netboxlabs/nbl-netbox-branching/issues/48) - Ensure background job is terminated in the event branch provisioning errors
+* [#50](https://github.com/netboxlabs/nbl-netbox-branching/issues/50) - Branch state should remain as "merged" after dry-run revert
+
+---
+
 ## v0.3.0
 
 ### Enhancements
@@ -21,6 +32,8 @@
 * [#24](https://github.com/netboxlabs/nbl-netbox-branching/issues/24) - Correct the REST API schema for the sync, merge, and revert branch endpoints
 * [#30](https://github.com/netboxlabs/nbl-netbox-branching/issues/30) - Include only unmerged branches with relevant changes in object view notifications
 * [#31](https://github.com/netboxlabs/nbl-netbox-branching/issues/31) - Prevent the deletion of a branch in a transitional state
+
+---
 
 ## v0.2.0
 
