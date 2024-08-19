@@ -80,6 +80,9 @@ jobs:
       - name: Install netbox-branching
         working-directory: netbox-branching
         run: |
+          # include tests directory for test
+          sed -i 's/exclude-package-data/#exclude-package-data/g' pyproject.toml
+          
           python -m pip install --upgrade pip
           pip install .
           pip install .[test]
