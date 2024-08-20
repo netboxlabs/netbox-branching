@@ -10,6 +10,7 @@ from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange, ObjectType
 from extras.events import process_event_rules
 from extras.models import EventRule
+from netbox.registry import registry
 from utilities.exceptions import AbortRequest
 from utilities.serialization import serialize_object
 from .choices import BranchStatusChoices
@@ -33,6 +34,10 @@ def record_change_diff(instance, **kwargs):
     branch = active_branch.get()
     object_type = instance.changed_object_type
     object_id = instance.changed_object_id
+
+    # If this type of object does not support branching, return immediately.
+    if object_type.model not in registry['model_features']['branching'].get(object_type.app_label, []):
+        return
 
     # If this is a global change, update the "current" state in any ChangeDiffs for this object.
     if branch is None:
