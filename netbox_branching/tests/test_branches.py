@@ -1,7 +1,8 @@
 import re
 
+from django.core.exceptions import ValidationError
 from django.db import connection
-from django.test import TransactionTestCase
+from django.test import TransactionTestCase, override_settings
 
 from netbox_branching.constants import MAIN_SCHEMA
 from netbox_branching.models import Branch
@@ -75,3 +76,21 @@ class BranchTestCase(TransactionTestCase):
         branch.save(provision=False)
         branch.refresh_from_db()
         self.assertEqual(branch.schema_id, schema_id, msg="Schema ID was changed during save()")
+
+    @override_settings(PLUGINS_CONFIG={
+        'netbox_branching': {
+            'max_branches': 2,
+        }
+    })
+    def text_max_branches(self):
+        """
+        Verify that the max_branches config parameter is enforced.
+        """
+        Branch.objects.bulk_create((
+            Branch(name='Branch 1'),
+            Branch(name='Branch 2'),
+        ))
+
+        branch = Branch(name='Branch 3')
+        with self.assertRaises(ValidationError):
+            branch.full_clean()
