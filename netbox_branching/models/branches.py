@@ -5,6 +5,7 @@ from functools import cached_property, partial
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.db.models.signals import post_save
 from django.db.utils import ProgrammingError
@@ -123,6 +124,19 @@ class Branch(JobsMixin, PrimaryModel):
     @cached_property
     def synced_time(self):
         return self.last_sync or self.created
+
+    def clean(self):
+
+        # Check whether we're exceeding the maximum number of Branches
+        if not self.pk and (max_branches := get_plugin_config('netbox_branching', 'max_branches')):
+            branch_count = Branch.objects.count()
+            if branch_count >= max_branches:
+                raise ValidationError(
+                    _(
+                        "The configured maximum number of branches ({max}) cannot be exceeded. One or more existing "
+                        "branches must be deleted before a new branch may be created."
+                    ).format(max=max_branches)
+                )
 
     def save(self, provision=True, *args, **kwargs):
         """

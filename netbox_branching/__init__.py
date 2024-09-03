@@ -13,6 +13,9 @@ class AppConfig(PluginConfig):
         'netbox_branching.middleware.BranchMiddleware'
     ]
     default_settings = {
+        # The maximum number of branches which can be provisioned simultaneously
+        'max_branches': None,
+
         # This string is prefixed to the name of each new branch schema during provisioning
         'schema_prefix': 'branch_',
     }

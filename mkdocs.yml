@@ -43,6 +43,7 @@ nav:
         - Syncing & Merging: 'using-branches/syncing-merging.md'
         - Reverting a Branch: 'using-branches/reverting-a-branch.md'
     - REST API: 'rest-api.md'
+    - Configuration: 'configuration.md'
     - Data Model:
         - Branch: 'models/branch.md'
         - BranchEvent: 'models/branchevent.md'
