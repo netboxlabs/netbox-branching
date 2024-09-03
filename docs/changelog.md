@@ -1,5 +1,18 @@
 # Change Log
 
+## FUTURE
+
+### Enhancements
+
+* [#52](https://github.com/netboxlabs/nbl-netbox-branching/issues/52) - Introduce the `max_branches` config parameter
+
+### Bug Fixes
+
+* [#57](https://github.com/netboxlabs/nbl-netbox-branching/issues/57) - Avoid recording ChangeDiff records for unsupported object types
+* [#59](https://github.com/netboxlabs/nbl-netbox-branching/issues/59) - `BranchAwareRouter` should consider branching support for model when determining database connection to use
+
+---
+
 ## v0.3.1
 
 ### Bug Fixes
