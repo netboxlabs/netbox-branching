@@ -4,7 +4,7 @@
 
 Default: None
 
-The maximum number of branches that can be provisioned simultaneously. This includes merged branches that have not been deleted.
+The maximum number of branches that can exist simultaneously, including merged branches that have not been deleted. It may be desirable to limit the total number of provisioned branches to safeguard against excessive database size.
 
 ---
 
