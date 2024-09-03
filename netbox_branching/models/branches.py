@@ -249,7 +249,7 @@ class Branch(JobsMixin, PrimaryModel):
                     # Apply each change from the main schema
                     for change in self.get_unsynced_changes().order_by('time'):
                         logger.debug(f'Applying change: {change}')
-                        change.apply(using=self.connection_name)
+                        change.apply()
                     if not commit:
                         raise AbortTransaction()
 
