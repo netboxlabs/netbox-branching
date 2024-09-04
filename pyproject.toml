@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["black", "check-manifest", "ruff", "mkdocs", "mkdocs-material"]
+dev = ["check-manifest", "mkdocs", "mkdocs-material", "pycodestyle"]
 test = ["coverage", "pytest", "pytest-cov"]
 
 [project.urls]
@@ -47,23 +47,3 @@ license-files = ["LICENSE.md"]
 [build-system]
 requires = ["setuptools>=43.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
-
-[tool.ruff]
-line-length = 140
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-
-[tool.ruff.lint]
-select = ["C", "D", "E", "F", "I", "R", "UP", "W"]
-ignore = [
-    "F401",
-    "D203",
-    "D212",
-    "D400",
-    "D401",
-    "D404",
-    "RET504",
-    "D1"
-]
