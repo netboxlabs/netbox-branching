@@ -75,8 +75,7 @@ def record_change_diff(instance, **kwargs):
                 current_data = serialize_object(obj, exclude=['created', 'last_updated'])
             diff = ChangeDiff(
                 branch=branch,
-                object_type=instance.changed_object_type,
-                object_id=instance.changed_object_id,
+                object=instance.changed_object,
                 action=instance.action,
                 original=instance.prechange_data_clean,
                 modified=instance.postchange_data_clean,
