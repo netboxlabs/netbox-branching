@@ -61,7 +61,6 @@ jobs:
           --health-retries 5
         ports:
           - 5432:5432
-
     steps:
       - name: Checkout netbox-branching
         uses: actions/checkout@v4
@@ -76,13 +75,11 @@ jobs:
         with:
           repository: "netbox-community/netbox"
           path: netbox
-          ref: v4.1-beta1
       - name: Install netbox-branching
         working-directory: netbox-branching
         run: |
-          # include tests directory for test
+          # Include tests directory for test
           sed -i 's/exclude-package-data/#exclude-package-data/g' pyproject.toml
-          
           python -m pip install --upgrade pip
           pip install .
           pip install .[test]
