@@ -47,10 +47,14 @@ def record_change_diff(instance, **kwargs):
             return
 
         print(f"Updating change diff for global change to {instance.changed_object}")
-        if diff := ChangeDiff.objects.filter(object_type=object_type, object_id=object_id, branch__status=BranchStatusChoices.READY).first():
-            diff.last_updated = timezone.now()
-            diff.current = instance.postchange_data_clean
-            diff.save()
+        ChangeDiff.objects.filter(
+            object_type=object_type,
+            object_id=object_id,
+            branch__status=BranchStatusChoices.READY
+        ).update(
+            last_updated=timezone.now(),
+            current=instance.postchange_data_clean
+        )
 
     # If this is a branch-aware change, create or update ChangeDiff for this object.
     else:
