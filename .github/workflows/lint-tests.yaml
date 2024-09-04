@@ -34,10 +34,9 @@ jobs:
           pip install .[test]
       - name: Build documentation
         run: mkdocs build
-      - name: Lint with Ruff
+      - name: Run pycodestyle
         run: |
-          ruff check --output-format=github netbox_branching/
-        continue-on-error: true
+          pycodestyle --ignore=W504,E501 netbox_branching/
   tests:
     runs-on: ubuntu-latest
     timeout-minutes: 10
