@@ -53,7 +53,7 @@ def record_change_diff(instance, **kwargs):
             branch__status=BranchStatusChoices.READY
         ).update(
             last_updated=timezone.now(),
-            current=instance.postchange_data_clean
+            current=instance.postchange_data_clean or None
         )
 
     # If this is a branch-aware change, create or update ChangeDiff for this object.
@@ -65,7 +65,7 @@ def record_change_diff(instance, **kwargs):
             diff.last_updated = timezone.now()
             if diff.action != ObjectChangeActionChoices.ACTION_CREATE:
                 diff.action = instance.action
-            diff.modified = instance.postchange_data_clean
+            diff.modified = instance.postchange_data_clean or None
             diff.save()
 
         # Creating a new ChangeDiff
@@ -81,9 +81,9 @@ def record_change_diff(instance, **kwargs):
                 branch=branch,
                 object=instance.changed_object,
                 action=instance.action,
-                original=instance.prechange_data_clean,
-                modified=instance.postchange_data_clean,
-                current=current_data,
+                original=instance.prechange_data_clean or None,
+                modified=instance.postchange_data_clean or None,
+                current=current_data or None,
                 last_updated=timezone.now(),
             )
             diff.save()
