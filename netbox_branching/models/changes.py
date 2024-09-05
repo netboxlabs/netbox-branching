@@ -1,3 +1,4 @@
+import logging
 from functools import cached_property
 
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -30,13 +31,14 @@ class ObjectChange(ObjectChange_):
         """
         Apply the change using the specified database connection.
         """
+        logger = logging.getLogger('netbox_branching.models.ObjectChange.apply')
         model = self.changed_object_type.model_class()
-        print(f'Applying change {self} using {using}')
+        logger.debug(f'Applying change {self} using {using}')
 
         # Creating a new object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
             instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
-            print(f'Creating {model._meta.verbose_name} {instance}')
+            logger.debug(f'Creating {model._meta.verbose_name} {instance}')
             instance.object.full_clean()
             instance.save(using=using)
 
@@ -49,10 +51,10 @@ class ObjectChange(ObjectChange_):
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
             try:
                 instance = model.objects.get(pk=self.changed_object_id)
-                print(f'Deleting {model._meta.verbose_name} {instance}')
+                logger.debug(f'Deleting {model._meta.verbose_name} {instance}')
                 instance.delete(using=using)
             except model.DoesNotExist:
-                print(f'{model._meta.verbose_name} ID {self.changed_object_id} already deleted; skipping')
+                logger.debug(f'{model._meta.verbose_name} ID {self.changed_object_id} already deleted; skipping')
 
         # Rebuild the MPTT tree where applicable
         if issubclass(model, MPTTModel):
@@ -64,16 +66,17 @@ class ObjectChange(ObjectChange_):
         """
         Revert a previously applied change using the specified database connection.
         """
+        logger = logging.getLogger('netbox_branching.models.ObjectChange.undo')
         model = self.changed_object_type.model_class()
 
         # Deleting a previously created object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
             try:
                 instance = model.objects.get(pk=self.changed_object_id)
-                print(f'Undoing creation of {model._meta.verbose_name} {instance}')
+                logger.debug(f'Undoing creation of {model._meta.verbose_name} {instance}')
                 instance.delete(using=using)
             except model.DoesNotExist:
-                print(f'{model._meta.verbose_name} ID {self.changed_object_id} does not exist; skipping')
+                logger.debug(f'{model._meta.verbose_name} ID {self.changed_object_id} does not exist; skipping')
 
         # Reverting a modification to an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
@@ -83,7 +86,7 @@ class ObjectChange(ObjectChange_):
         # Restoring a deleted object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
             instance = deserialize_object(model, self.prechange_data, pk=self.changed_object_id)
-            print(f'Restoring {model._meta.verbose_name} {instance}')
+            logger.debug(f'Restoring {model._meta.verbose_name} {instance}')
             instance.object.full_clean()
             instance.save(using=using)
 

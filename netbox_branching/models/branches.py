@@ -240,15 +240,22 @@ class Branch(JobsMixin, PrimaryModel):
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to sync")
 
+        # Retrieve unsynced changes before we update the Branch's status
+        if changes := self.get_unsynced_changes().order_by('time'):
+            logger.debug(f"Found {len(changes)} changes to sync")
+        else:
+            logger.info(f"No changes found; aborting.")
+            return
+
         # Update Branch status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.SYNCING}")
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.SYNCING)
 
         try:
             with activate_branch(self):
                 with transaction.atomic(using=self.connection_name):
                     # Apply each change from the main schema
-                    for change in self.get_unsynced_changes().order_by('time'):
-                        logger.debug(f'Applying change: {change}')
+                    for change in changes:
                         change.apply(using=self.connection_name)
                     if not commit:
                         raise AbortTransaction()
@@ -260,9 +267,13 @@ class Branch(JobsMixin, PrimaryModel):
             raise e
 
         # Record the branch's last_synced time & update its status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
         self.last_sync = timezone.now()
         self.status = BranchStatusChoices.READY
         self.save()
+
+        # Record a branch event for the sync
+        logger.debug(f"Recording branch event: {BranchEventTypeChoices.SYNCED}")
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.SYNCED)
 
         # Emit branch_synced signal
@@ -284,9 +295,14 @@ class Branch(JobsMixin, PrimaryModel):
             raise Exception(f"Branch {self} is not ready to merge")
 
         # Retrieve staged changes before we update the Branch's status
-        changes = self.get_unmerged_changes().order_by('time')
+        if changes := self.get_unmerged_changes().order_by('time'):
+            logger.debug(f"Found {len(changes)} changes to merge")
+        else:
+            logger.info(f"No changes found; aborting.")
+            return
 
         # Update Branch status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.MERGING}")
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MERGING)
 
         # Create a dummy request for the event_tracking() context manager
@@ -301,7 +317,6 @@ class Branch(JobsMixin, PrimaryModel):
                 # Apply each change from the Branch
                 for change in changes:
                     with event_tracking(request):
-                        logger.debug(f'Applying change: {change}')
                         request.id = change.request_id
                         request.user = change.user
                         change.apply(using=DEFAULT_DB_ALIAS)
@@ -316,10 +331,14 @@ class Branch(JobsMixin, PrimaryModel):
             raise e
 
         # Update the Branch's status to "merged"
+        logger.debug(f"Setting branch status to {BranchStatusChoices.MERGED}")
         self.status = BranchStatusChoices.MERGED
         self.merged_time = timezone.now()
         self.merged_by = user
         self.save()
+
+        # Record a branch event for the merge
+        logger.debug(f"Recording branch event: {BranchEventTypeChoices.MERGED}")
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MERGED)
 
         # Emit branch_merged signal
@@ -344,9 +363,14 @@ class Branch(JobsMixin, PrimaryModel):
             raise Exception(f"Only merged branches can be reverted.")
 
         # Retrieve applied changes before we update the Branch's status
-        changes = self.get_changes().order_by('-time')
+        if changes := self.get_changes().order_by('-time'):
+            logger.debug(f"Found {len(changes)} changes to revert")
+        else:
+            logger.info(f"No changes found; aborting.")
+            return
 
         # Update Branch status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.REVERTING}")
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.REVERTING)
 
         # Create a dummy request for the event_tracking() context manager
@@ -361,7 +385,6 @@ class Branch(JobsMixin, PrimaryModel):
                 # Undo each change from the Branch
                 for change in changes:
                     with event_tracking(request):
-                        logger.debug(f'Undoing change: {change}')
                         request.id = change.request_id
                         request.user = change.user
                         change.undo()
@@ -376,10 +399,14 @@ class Branch(JobsMixin, PrimaryModel):
             raise e
 
         # Update the Branch's status to "ready"
+        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
         self.status = BranchStatusChoices.READY
         self.merged_time = None
         self.merged_by = None
         self.save()
+
+        # Record a branch event for the merge
+        logger.debug(f"Recording branch event: {BranchEventTypeChoices.REVERTED}")
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.REVERTED)
 
         # Emit branch_reverted signal
@@ -494,6 +521,7 @@ class Branch(JobsMixin, PrimaryModel):
 
         with connection.cursor() as cursor:
             # Delete the schema and all its tables
+            logger.debug(f'Deleting schema {self.schema_name}')
             cursor.execute(
                 f"DROP SCHEMA IF EXISTS {self.schema_name} CASCADE"
             )
