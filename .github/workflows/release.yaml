@@ -112,4 +112,3 @@ jobs:
           release_name: ${{ needs.get-next-version.outputs.release-version }}
           body: ${{ needs.get-release-notes.outputs.release-notes }}
           draft: false
-          prerelease: true
