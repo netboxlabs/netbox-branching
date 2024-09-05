@@ -5,6 +5,7 @@ from functools import cached_property, partial
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
 from django.db.models.signals import post_save
 from django.db.utils import ProgrammingError
@@ -124,6 +125,19 @@ class Branch(JobsMixin, PrimaryModel):
     def synced_time(self):
         return self.last_sync or self.created
 
+    def clean(self):
+
+        # Check whether we're exceeding the maximum number of Branches
+        if not self.pk and (max_branches := get_plugin_config('netbox_branching', 'max_branches')):
+            branch_count = Branch.objects.count()
+            if branch_count >= max_branches:
+                raise ValidationError(
+                    _(
+                        "The configured maximum number of branches ({max}) cannot be exceeded. One or more existing "
+                        "branches must be deleted before a new branch may be created."
+                    ).format(max=max_branches)
+                )
+
     def save(self, provision=True, *args, **kwargs):
         """
         Args:
@@ -226,15 +240,22 @@ class Branch(JobsMixin, PrimaryModel):
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to sync")
 
+        # Retrieve unsynced changes before we update the Branch's status
+        if changes := self.get_unsynced_changes().order_by('time'):
+            logger.debug(f"Found {len(changes)} changes to sync")
+        else:
+            logger.info(f"No changes found; aborting.")
+            return
+
         # Update Branch status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.SYNCING}")
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.SYNCING)
 
         try:
             with activate_branch(self):
-                with transaction.atomic():
+                with transaction.atomic(using=self.connection_name):
                     # Apply each change from the main schema
-                    for change in self.get_unsynced_changes().order_by('time'):
-                        logger.debug(f'Applying change: {change}')
+                    for change in changes:
                         change.apply(using=self.connection_name)
                     if not commit:
                         raise AbortTransaction()
@@ -246,9 +267,13 @@ class Branch(JobsMixin, PrimaryModel):
             raise e
 
         # Record the branch's last_synced time & update its status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
         self.last_sync = timezone.now()
         self.status = BranchStatusChoices.READY
         self.save()
+
+        # Record a branch event for the sync
+        logger.debug(f"Recording branch event: {BranchEventTypeChoices.SYNCED}")
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.SYNCED)
 
         # Emit branch_synced signal
@@ -270,9 +295,14 @@ class Branch(JobsMixin, PrimaryModel):
             raise Exception(f"Branch {self} is not ready to merge")
 
         # Retrieve staged changes before we update the Branch's status
-        changes = self.get_unmerged_changes().order_by('time')
+        if changes := self.get_unmerged_changes().order_by('time'):
+            logger.debug(f"Found {len(changes)} changes to merge")
+        else:
+            logger.info(f"No changes found; aborting.")
+            return
 
         # Update Branch status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.MERGING}")
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MERGING)
 
         # Create a dummy request for the event_tracking() context manager
@@ -287,7 +317,6 @@ class Branch(JobsMixin, PrimaryModel):
                 # Apply each change from the Branch
                 for change in changes:
                     with event_tracking(request):
-                        logger.debug(f'Applying change: {change}')
                         request.id = change.request_id
                         request.user = change.user
                         change.apply(using=DEFAULT_DB_ALIAS)
@@ -302,10 +331,14 @@ class Branch(JobsMixin, PrimaryModel):
             raise e
 
         # Update the Branch's status to "merged"
+        logger.debug(f"Setting branch status to {BranchStatusChoices.MERGED}")
         self.status = BranchStatusChoices.MERGED
         self.merged_time = timezone.now()
         self.merged_by = user
         self.save()
+
+        # Record a branch event for the merge
+        logger.debug(f"Recording branch event: {BranchEventTypeChoices.MERGED}")
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MERGED)
 
         # Emit branch_merged signal
@@ -330,9 +363,14 @@ class Branch(JobsMixin, PrimaryModel):
             raise Exception(f"Only merged branches can be reverted.")
 
         # Retrieve applied changes before we update the Branch's status
-        changes = self.get_changes().order_by('-time')
+        if changes := self.get_changes().order_by('-time'):
+            logger.debug(f"Found {len(changes)} changes to revert")
+        else:
+            logger.info(f"No changes found; aborting.")
+            return
 
         # Update Branch status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.REVERTING}")
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.REVERTING)
 
         # Create a dummy request for the event_tracking() context manager
@@ -347,7 +385,6 @@ class Branch(JobsMixin, PrimaryModel):
                 # Undo each change from the Branch
                 for change in changes:
                     with event_tracking(request):
-                        logger.debug(f'Undoing change: {change}')
                         request.id = change.request_id
                         request.user = change.user
                         change.undo()
@@ -362,10 +399,14 @@ class Branch(JobsMixin, PrimaryModel):
             raise e
 
         # Update the Branch's status to "ready"
+        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
         self.status = BranchStatusChoices.READY
         self.merged_time = None
         self.merged_by = None
         self.save()
+
+        # Record a branch event for the merge
+        logger.debug(f"Recording branch event: {BranchEventTypeChoices.REVERTED}")
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.REVERTED)
 
         # Emit branch_reverted signal
@@ -413,35 +454,39 @@ class Branch(JobsMixin, PrimaryModel):
                 # Create an empty copy of the global change log. Share the ID sequence from the main table to avoid
                 # reusing change record IDs.
                 table = ObjectChange_._meta.db_table
-                logger.debug(f'Creating table {schema}.{table}')
+                main_table = f'public.{table}'
+                schema_table = f'{schema}.{table}'
+                logger.debug(f'Creating table {schema_table}')
                 cursor.execute(
-                    f"CREATE TABLE {schema}.{table} ( LIKE public.{table} INCLUDING INDEXES )"
+                    f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
                 )
                 # Set the default value for the ID column to the sequence associated with the source table
+                sequence_name = f'public.{table}_id_seq'
                 cursor.execute(
-                    f"ALTER TABLE {schema}.{table} "
-                    f"ALTER COLUMN id SET DEFAULT nextval('public.{table}_id_seq')"
+                    f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
                 )
 
                 # Replicate relevant tables from the main schema
                 for table in get_tables_to_replicate():
-                    logger.debug(f'Creating table {schema}.{table}')
+                    main_table = f'public.{table}'
+                    schema_table = f'{schema}.{table}'
+                    logger.debug(f'Creating table {schema_table}')
                     # Create the table in the new schema
                     cursor.execute(
-                        f"CREATE TABLE {schema}.{table} ( LIKE public.{table} INCLUDING INDEXES )"
+                        f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
                     )
                     # Copy data from the source table
                     cursor.execute(
-                        f"INSERT INTO {schema}.{table} SELECT * FROM public.{table}"
+                        f"INSERT INTO {schema_table} SELECT * FROM {main_table}"
                     )
                     # Get the name of the sequence used for object ID allocations
                     cursor.execute(
-                        f"SELECT pg_get_serial_sequence('{table}', 'id');"
+                        "SELECT pg_get_serial_sequence(%s, 'id')", [table]
                     )
                     sequence_name = cursor.fetchone()[0]
                     # Set the default value for the ID column to the sequence associated with the source table
                     cursor.execute(
-                        f"ALTER TABLE {schema}.{table} ALTER COLUMN id SET DEFAULT nextval('{sequence_name}')"
+                        f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
                     )
 
                 # Commit the transaction
@@ -476,6 +521,7 @@ class Branch(JobsMixin, PrimaryModel):
 
         with connection.cursor() as cursor:
             # Delete the schema and all its tables
+            logger.debug(f'Deleting schema {self.schema_name}')
             cursor.execute(
                 f"DROP SCHEMA IF EXISTS {self.schema_name} CASCADE"
             )

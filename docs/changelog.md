@@ -1,5 +1,24 @@
 # Change Log
 
+## v0.4.0
+
+### Enhancements
+
+* [#52](https://github.com/netboxlabs/nbl-netbox-branching/issues/52) - Introduce the `max_branches` config parameter
+* [#71](https://github.com/netboxlabs/nbl-netbox-branching/issues/71) - Ensure the consistent application of logging messages
+* [#76](https://github.com/netboxlabs/nbl-netbox-branching/issues/76) - Validate required configuration items on initialization
+
+### Bug Fixes
+
+* [#57](https://github.com/netboxlabs/nbl-netbox-branching/issues/57) - Avoid recording ChangeDiff records for unsupported object types
+* [#59](https://github.com/netboxlabs/nbl-netbox-branching/issues/59) - `BranchAwareRouter` should consider branching support for model when determining database connection to use
+* [#61](https://github.com/netboxlabs/nbl-netbox-branching/issues/61) - Fix transaction rollback when performing a dry run sync
+* [#66](https://github.com/netboxlabs/nbl-netbox-branching/issues/66) - Capture object representation on ChangeDiff when creating a new object within a branch
+* [#69](https://github.com/netboxlabs/nbl-netbox-branching/issues/69) - Represent null values for ChangeDiff fields consistently in REST API
+* [#73](https://github.com/netboxlabs/nbl-netbox-branching/issues/73) - Ensure all relevant branch diffs are updated when an object is modified in main
+
+---
+
 ## v0.3.1
 
 ### Bug Fixes
