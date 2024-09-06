@@ -141,7 +141,7 @@ def _get_change_count(obj):
 
 
 @register_model_view(Branch, 'changes-merged')
-class BranchChangesAheadView(generic.ObjectChildrenView):
+class BranchChangesMergedView(generic.ObjectChildrenView):
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
