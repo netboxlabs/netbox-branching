@@ -82,7 +82,7 @@ class BranchTestCase(TransactionTestCase):
             'max_branches': 2,
         }
     })
-    def text_max_branches(self):
+    def test_max_branches(self):
         """
         Verify that the max_branches config parameter is enforced.
         """
