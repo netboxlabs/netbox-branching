@@ -127,6 +127,7 @@ def handle_branch_event(event_type, branch, user=None, **kwargs):
 branch_provisioned.connect(partial(handle_branch_event, event_type=BRANCH_PROVISIONED))
 branch_synced.connect(partial(handle_branch_event, event_type=BRANCH_SYNCED))
 branch_merged.connect(partial(handle_branch_event, event_type=BRANCH_MERGED))
+branch_reverted.connect(partial(handle_branch_event, event_type=BRANCH_REVERTED))
 branch_deprovisioned.connect(partial(handle_branch_event, event_type=BRANCH_DEPROVISIONED))
 
 
