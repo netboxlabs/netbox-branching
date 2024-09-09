@@ -12,7 +12,7 @@ from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
 from .jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
-from .models import ChangeDiff, Branch
+from .models import Branch, ChangeDiff
 
 
 #
@@ -186,7 +186,7 @@ class BaseBranchActionView(generic.ObjectView):
 
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        form = forms.BranchActionForm(branch)
+        form = self.form(branch)
 
         return render(request, self.template_name, {
             'branch': branch,
@@ -197,7 +197,7 @@ class BaseBranchActionView(generic.ObjectView):
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        form = forms.BranchActionForm(branch, request.POST)
+        form = self.form(branch, request.POST)
 
         if branch.status not in self.valid_states:
             messages.error(request, _(
@@ -263,6 +263,50 @@ class BranchRevertView(BaseBranchActionView):
         messages.success(request, f"Reverting branch {branch}")
 
         return redirect(branch.get_absolute_url())
+
+
+@register_model_view(Branch, 'archive')
+class BranchArchiveView(generic.ObjectView):
+    """
+    Archive a merged Branch, deleting its database schema but retaining the Branch object.
+    """
+    queryset = Branch.objects.all()
+    template_name = 'netbox_branching/branch_archive.html'
+
+    def get_required_permission(self):
+        return f'netbox_branching.archive_branch'
+
+    @staticmethod
+    def _enforce_status(request, branch):
+        if branch.status != BranchStatusChoices.MERGED:
+            messages.error(request, _("Only merged branches can be archived."))
+            return redirect(branch.get_absolute_url())
+
+    def get(self, request, **kwargs):
+        branch = self.get_object(**kwargs)
+        self._enforce_status(request, branch)
+        form = forms.ConfirmationForm()
+
+        return render(request, self.template_name, {
+            'branch': branch,
+            'form': form,
+        })
+
+    def post(self, request, **kwargs):
+        branch = self.get_object(**kwargs)
+        self._enforce_status(request, branch)
+        form = forms.ConfirmationForm(request.POST)
+
+        if form.is_valid():
+            branch.archive(user=request.user)
+
+            messages.success(request, f"Branch {branch} has been archived.")
+            return redirect(branch.get_absolute_url())
+
+        return render(request, self.template_name, {
+            'branch': branch,
+            'form': form,
+        })
 
 
 class BranchBulkImportView(generic.BulkImportView):

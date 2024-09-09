@@ -51,6 +51,15 @@
         <i class="mdi mdi-arrow-u-left-top"></i> {% trans "Revert" %}
       </button>
     {% endif %}
+    {% if perms.netbox_branching.archive_branch %}
+      <a href="{% url 'plugins:netbox_branching:branch_archive' pk=object.pk %}" class="btn btn-primary">
+        <i class="mdi mdi-archive-outline"></i> {% trans "Archive" %}
+      </a>
+    {% else %}
+      <button type="button" class="btn btn-primary disabled" aria-disabled="true">
+        <i class="mdi mdi-archive-outline"></i> {% trans "Archive" %}
+      </button>
+    {% endif %}
   {% endif %}
 {% endblock %}
 
