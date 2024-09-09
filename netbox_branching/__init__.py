@@ -16,6 +16,9 @@ class AppConfig(PluginConfig):
         'netbox_branching.middleware.BranchMiddleware'
     ]
     default_settings = {
+        # The maximum number of active branches (excludes merged & archived branches)
+        'max_active_branches': None,
+
         # The maximum number of branches which can be provisioned simultaneously
         'max_branches': None,
 

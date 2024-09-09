@@ -28,7 +28,13 @@ class BranchStatusChoices(ChoiceSet):
         PROVISIONING,
         SYNCING,
         MERGING,
-        REVERTING
+        REVERTING,
+    )
+
+    ACTIVE_STATUSES = (
+        NEW,
+        READY,
+        *TRANSITIONAL,
     )
 
 

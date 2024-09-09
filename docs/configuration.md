@@ -1,10 +1,18 @@
 # Configuration Parameters
 
+## `max_active_branches`
+
+Default: None
+
+The maximum number of _active_ branches that can exist simultaneously. This count excludes branches which have been merged or archived.
+
+---
+
 ## `max_branches`
 
 Default: None
 
-The maximum number of branches that can exist simultaneously, including merged branches that have not been deleted. It may be desirable to limit the total number of provisioned branches to safeguard against excessive database size.
+The maximum total number of branches that can exist simultaneously, including merged branches that have not been deleted. It may be desirable to limit the total number of provisioned branches to safeguard against excessive database size.
 
 ---
 
