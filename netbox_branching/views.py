@@ -225,7 +225,7 @@ class BranchSyncView(BaseBranchActionView):
             user=request.user,
             commit=form.cleaned_data['commit']
         )
-        messages.success(request, f"Syncing of branch {branch} in progress")
+        messages.success(request, _("Syncing of branch {branch} in progress").format(branch=branch))
 
         return redirect(branch.get_absolute_url())
 
@@ -241,7 +241,7 @@ class BranchMergeView(BaseBranchActionView):
             user=request.user,
             commit=form.cleaned_data['commit']
         )
-        messages.success(request, f"Merging of branch {branch} in progress")
+        messages.success(request, _("Merging of branch {branch} in progress").format(branch=branch))
 
         return redirect(branch.get_absolute_url())
 
@@ -260,7 +260,7 @@ class BranchRevertView(BaseBranchActionView):
             user=request.user,
             commit=form.cleaned_data['commit']
         )
-        messages.success(request, f"Reverting branch {branch}")
+        messages.success(request, _("Reverting branch {branch}").format(branch=branch))
 
         return redirect(branch.get_absolute_url())
 
@@ -300,7 +300,7 @@ class BranchArchiveView(generic.ObjectView):
         if form.is_valid():
             branch.archive(user=request.user)
 
-            messages.success(request, f"Branch {branch} has been archived.")
+            messages.success(request, _("Branch {branch} has been archived.").format(branch=branch))
             return redirect(branch.get_absolute_url())
 
         return render(request, self.template_name, {
