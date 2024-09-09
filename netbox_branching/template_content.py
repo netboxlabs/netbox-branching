@@ -32,6 +32,8 @@ class BranchNotification(PluginTemplateExtension):
             object_id=instance.pk
         ).exclude(
             branch__status=BranchStatusChoices.MERGED
+        ).exclude(
+            branch=active_branch.get()
         )
         branches = [
             diff.branch for diff in relevant_changes.only('branch')
