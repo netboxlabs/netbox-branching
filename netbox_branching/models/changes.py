@@ -27,13 +27,13 @@ class ObjectChange(ObjectChange_):
     class Meta:
         proxy = True
 
-    def apply(self, using=DEFAULT_DB_ALIAS):
+    def apply(self, using=DEFAULT_DB_ALIAS, logger=None):
         """
         Apply the change using the specified database connection.
         """
-        logger = logging.getLogger('netbox_branching.models.ObjectChange.apply')
+        logger = logger or logging.getLogger('netbox_branching.models.ObjectChange.apply')
         model = self.changed_object_type.model_class()
-        logger.debug(f'Applying change {self} using {using}')
+        logger.info(f'Applying change {self} using {using}')
 
         # Creating a new object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
@@ -62,12 +62,13 @@ class ObjectChange(ObjectChange_):
 
     apply.alters_data = True
 
-    def undo(self, using=DEFAULT_DB_ALIAS):
+    def undo(self, using=DEFAULT_DB_ALIAS, logger=None):
         """
         Revert a previously applied change using the specified database connection.
         """
-        logger = logging.getLogger('netbox_branching.models.ObjectChange.undo')
+        logger = logger or logging.getLogger('netbox_branching.models.ObjectChange.undo')
         model = self.changed_object_type.model_class()
+        logger.info(f'Undoing change {self} using {using}')
 
         # Deleting a previously created object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
