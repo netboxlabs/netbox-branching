@@ -21,6 +21,14 @@ class BranchSelector(PluginTemplateExtension):
         })
 
 
+class ShareButton(PluginTemplateExtension):
+
+    def buttons(self):
+        return self.render('netbox_branching/inc/share_button.html', extra_context={
+            'active_branch': active_branch.get(),
+        })
+
+
 class BranchNotification(PluginTemplateExtension):
 
     def alerts(self):
@@ -43,4 +51,4 @@ class BranchNotification(PluginTemplateExtension):
         })
 
 
-template_extensions = [BranchSelector, BranchNotification]
+template_extensions = [BranchSelector, ShareButton, BranchNotification]
