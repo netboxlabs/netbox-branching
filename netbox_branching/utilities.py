@@ -136,6 +136,10 @@ def update_object(instance, data, using):
     m2m_assignments = {}
 
     for attr, value in data.items():
+        # Account for custom field data
+        if attr == 'custom_fields':
+            attr = 'custom_field_data'
+
         model_field = instance._meta.get_field(attr)
         field_cls = model_field.__class__
 
