@@ -127,15 +127,26 @@ class Branch(JobsMixin, PrimaryModel):
 
     def clean(self):
 
-        # Check whether we're exceeding the maximum number of Branches
+        # Enforce the maximum number of total branches
         if not self.pk and (max_branches := get_plugin_config('netbox_branching', 'max_branches')):
-            branch_count = Branch.objects.count()
-            if branch_count >= max_branches:
+            total_branch_count = Branch.objects.count()
+            if total_branch_count >= max_branches:
                 raise ValidationError(
                     _(
                         "The configured maximum number of branches ({max}) cannot be exceeded. One or more existing "
                         "branches must be deleted before a new branch may be created."
                     ).format(max=max_branches)
+                )
+
+        # Enforce the maximum number of active branches
+        if not self.pk and (max_working_branches := get_plugin_config('netbox_branching', 'max_working_branches')):
+            working_branch_count = Branch.objects.filter(status__in=BranchStatusChoices.WORKING).count()
+            if working_branch_count >= max_working_branches:
+                raise ValidationError(
+                    _(
+                        "The configured maximum number of working branches ({max}) cannot be exceeded. One or more "
+                        "working branches must be merged or archived before a new branch may be created."
+                    ).format(max=max_working_branches)
                 )
 
     def save(self, provision=True, *args, **kwargs):

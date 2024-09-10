@@ -30,7 +30,13 @@ class BranchStatusChoices(ChoiceSet):
         PROVISIONING,
         SYNCING,
         MERGING,
-        REVERTING
+        REVERTING,
+    )
+
+    WORKING = (
+        NEW,
+        READY,
+        *TRANSITIONAL,
     )
 
 
