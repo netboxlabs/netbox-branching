@@ -45,12 +45,13 @@ class BranchMiddleware:
         """
         Return the active Branch (if any).
         """
-        # The active Branch is specified by HTTP header for REST API requests.
-        if request.path_info.startswith(reverse('api-root')) and (schema_id := request.headers.get(BRANCH_HEADER)):
-            branch = Branch.objects.get(schema_id=schema_id)
-            if not branch.ready:
-                return HttpResponseBadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
-            return branch
+        # The active Branch is specified by HTTP header for REST & GraphQL API requests.
+        if request.path_info.startswith(reverse('api-root')) or request.path_info.startswith(reverse('graphql')):
+            if schema_id := request.headers.get(BRANCH_HEADER):
+                branch = Branch.objects.get(schema_id=schema_id)
+                if not branch.ready:
+                    return HttpResponseBadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
+                return branch
 
         # Branch activated/deactivated by URL query parameter
         elif QUERY_PARAM in request.GET:
