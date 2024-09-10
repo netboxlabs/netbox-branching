@@ -4,6 +4,7 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import TransactionTestCase, override_settings
 
+from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import MAIN_SCHEMA
 from netbox_branching.models import Branch
 from netbox_branching.utilities import get_tables_to_replicate
@@ -76,6 +77,30 @@ class BranchTestCase(TransactionTestCase):
         branch.save(provision=False)
         branch.refresh_from_db()
         self.assertEqual(branch.schema_id, schema_id, msg="Schema ID was changed during save()")
+
+    @override_settings(PLUGINS_CONFIG={
+        'netbox_branching': {
+            'max_working_branches': 2,
+        }
+    })
+    def test_max_working_branches(self):
+        """
+        Verify that the max_working_branches config parameter is enforced.
+        """
+        Branch.objects.bulk_create((
+            Branch(name='Branch 1', status=BranchStatusChoices.MERGED),
+            Branch(name='Branch 2', status=BranchStatusChoices.READY),
+        ))
+
+        # Second active branch should be permitted (merged branches don't count)
+        branch = Branch(name='Branch 3')
+        branch.full_clean()
+        branch.save()
+
+        # Attempting to create a third active branch should fail
+        branch = Branch(name='Branch 4')
+        with self.assertRaises(ValidationError):
+            branch.full_clean()
 
     @override_settings(PLUGINS_CONFIG={
         'netbox_branching': {
