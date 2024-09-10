@@ -1,10 +1,10 @@
 # Configuration Parameters
 
-## `max_active_branches`
+## `max_working_branches`
 
 Default: None
 
-The maximum number of _active_ branches that can exist simultaneously. This count excludes branches which have been merged or archived.
+The maximum number of operational branches that can exist simultaneously. This count excludes branches which have been merged or archived.
 
 ---
 

@@ -33,7 +33,7 @@ class BranchStatusChoices(ChoiceSet):
         REVERTING,
     )
 
-    ACTIVE_STATUSES = (
+    WORKING = (
         NEW,
         READY,
         *TRANSITIONAL,

@@ -80,12 +80,12 @@ class BranchTestCase(TransactionTestCase):
 
     @override_settings(PLUGINS_CONFIG={
         'netbox_branching': {
-            'max_active_branches': 2,
+            'max_working_branches': 2,
         }
     })
-    def test_max_active_branches(self):
+    def test_max_working_branches(self):
         """
-        Verify that the max_active_branches config parameter is enforced.
+        Verify that the max_working_branches config parameter is enforced.
         """
         Branch.objects.bulk_create((
             Branch(name='Branch 1', status=BranchStatusChoices.MERGED),
