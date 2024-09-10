@@ -22,6 +22,8 @@ While a branch is being merged, its status will show "merging."
 !!! tip
     You can check on the status of the merging job under the "Jobs" tab of the branch view.
 
+Once a branch has been merged, it can be [reverted](./reverting-a-branch.md), archived, or deleted. Archiving a branch removes its associated schema from the PostgreSQL database to deallocate space. An archived branch cannot be restored, however the branch record is retained for future reference.
+
 ## Dealing with Conflicts
 
 In the event an object has been modified in both your branch _and_ in main in a diverging manner, this will be flagged as a conflict. For example, if both you and another user have modified the description of an interface to two different values in main and in the branch, this represents a conflict.

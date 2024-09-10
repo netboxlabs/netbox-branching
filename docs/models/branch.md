@@ -29,6 +29,7 @@ The current status of the branch. This must be one of the following values.
 | Merging      | A job is running to merge changes from the branch into main       |
 | Reverting    | A job is running to revert previously merged changes in main      |
 | Merged       | Changes from this branch have been successfully merged into main  |
+| Archived     | A merged branch which has been deprovisioned in the database      |
 | Failed       | Provisioning the schema for this branch has failed                |
 
 ### Last Sync

@@ -5,6 +5,7 @@ from netbox_branching.models import ChangeDiff
 
 __all__ = (
     'BranchActionForm',
+    'ConfirmationForm',
 )
 
 
@@ -36,3 +37,10 @@ class BranchActionForm(forms.Form):
             raise forms.ValidationError(_("All conflicts must be acknowledged in order to merge the branch."))
 
         return self.cleaned_data
+
+
+class ConfirmationForm(forms.Form):
+    confirm = forms.BooleanField(
+        required=True,
+        label=_('Confirm')
+    )
