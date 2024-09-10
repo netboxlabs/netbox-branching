@@ -420,7 +420,7 @@ class Branch(JobsMixin, PrimaryModel):
         # Disconnect the signal receiver
         post_save.disconnect(handler, sender=ObjectChange_)
 
-    merge.alters_data = True
+    revert.alters_data = True
 
     def provision(self, user):
         """
@@ -514,6 +514,18 @@ class Branch(JobsMixin, PrimaryModel):
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.PROVISIONED)
 
     provision.alters_data = True
+
+    def archive(self, user):
+        """
+        Deprovision the Branch and set its status to "archived."
+        """
+        self.deprovision()
+
+        # Update the branch's status to "archived"
+        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.ARCHIVED)
+        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.ARCHIVED)
+
+    archive.alters_data = True
 
     def deprovision(self):
         """
