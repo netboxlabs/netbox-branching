@@ -242,7 +242,7 @@ class Branch(JobsMixin, PrimaryModel):
 
         # Retrieve unsynced changes before we update the Branch's status
         if changes := self.get_unsynced_changes().order_by('time'):
-            logger.debug(f"Found {len(changes)} changes to sync")
+            logger.info(f"Found {len(changes)} changes to sync")
         else:
             logger.info(f"No changes found; aborting.")
             return
@@ -256,12 +256,13 @@ class Branch(JobsMixin, PrimaryModel):
                 with transaction.atomic(using=self.connection_name):
                     # Apply each change from the main schema
                     for change in changes:
-                        change.apply(using=self.connection_name)
+                        change.apply(using=self.connection_name, logger=logger)
                     if not commit:
                         raise AbortTransaction()
 
         except Exception as e:
-            logger.error(e)
+            if err_message := str(e):
+                logger.error(err_message)
             # Restore original branch status
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
             raise e
@@ -296,7 +297,7 @@ class Branch(JobsMixin, PrimaryModel):
 
         # Retrieve staged changes before we update the Branch's status
         if changes := self.get_unmerged_changes().order_by('time'):
-            logger.debug(f"Found {len(changes)} changes to merge")
+            logger.info(f"Found {len(changes)} changes to merge")
         else:
             logger.info(f"No changes found; aborting.")
             return
@@ -319,12 +320,13 @@ class Branch(JobsMixin, PrimaryModel):
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
-                        change.apply(using=DEFAULT_DB_ALIAS)
+                        change.apply(using=DEFAULT_DB_ALIAS, logger=logger)
                 if not commit:
                     raise AbortTransaction()
 
         except Exception as e:
-            logger.error(e)
+            if err_message := str(e):
+                logger.error(err_message)
             # Disconnect signal receiver & restore original branch status
             post_save.disconnect(handler, sender=ObjectChange_)
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
@@ -364,7 +366,7 @@ class Branch(JobsMixin, PrimaryModel):
 
         # Retrieve applied changes before we update the Branch's status
         if changes := self.get_changes().order_by('-time'):
-            logger.debug(f"Found {len(changes)} changes to revert")
+            logger.info(f"Found {len(changes)} changes to revert")
         else:
             logger.info(f"No changes found; aborting.")
             return
@@ -387,12 +389,13 @@ class Branch(JobsMixin, PrimaryModel):
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
-                        change.undo()
+                        change.undo(logger=logger)
                 if not commit:
                     raise AbortTransaction()
 
         except Exception as e:
-            logger.error(e)
+            if err_message := str(e):
+                logger.error(err_message)
             # Disconnect signal receiver & restore original branch status
             post_save.disconnect(handler, sender=ObjectChange_)
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MERGED)
