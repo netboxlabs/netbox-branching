@@ -1,5 +1,30 @@
 # Configuration Parameters
 
+## `exempt_models`
+
+Default: `[]` (empty list)
+
+A list of models provided by other plugins which should be exempt from branching support. (Only models which support change logging need be listed; all other models are ineligible for branching support.)
+
+Models must be specified by app label and model name, as such:
+
+```python
+exempt_models = (
+    'my_plugin.foo',
+    'my_plugin.bar',
+)
+```
+
+It is also possible to exclude _all_ models from within a plugin by substituting an asterisk (`*`) for the model name:
+
+```python
+exempt_models = (
+    'my_plugin.*',
+)
+```
+
+---
+
 ## `max_working_branches`
 
 Default: None
