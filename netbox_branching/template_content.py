@@ -17,7 +17,9 @@ class BranchSelector(PluginTemplateExtension):
     def navbar(self):
         return self.render('netbox_branching/inc/branch_selector.html', extra_context={
             'active_branch': active_branch.get(),
-            'branches': Branch.objects.exclude(status=BranchStatusChoices.MERGED),
+            'branches': Branch.objects.exclude(
+                status__in=[BranchStatusChoices.MERGED, BranchStatusChoices.ARCHIVED]
+            ),
         })
 
 
@@ -32,6 +34,8 @@ class BranchNotification(PluginTemplateExtension):
             object_id=instance.pk
         ).exclude(
             branch__status=BranchStatusChoices.MERGED
+        ).exclude(
+            branch=active_branch.get()
         )
         branches = [
             diff.branch for diff in relevant_changes.only('branch')

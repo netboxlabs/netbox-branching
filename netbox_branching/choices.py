@@ -11,6 +11,7 @@ class BranchStatusChoices(ChoiceSet):
     MERGING = 'merging'
     REVERTING = 'reverting'
     MERGED = 'merged'
+    ARCHIVED = 'archived'
     FAILED = 'failed'
 
     CHOICES = (
@@ -21,6 +22,7 @@ class BranchStatusChoices(ChoiceSet):
         (MERGING, _('Merging'), 'orange'),
         (REVERTING, _('Reverting'), 'orange'),
         (MERGED, _('Merged'), 'blue'),
+        (ARCHIVED, _('Archived'), 'gray'),
         (FAILED, _('Failed'), 'red'),
     )
 
@@ -43,10 +45,12 @@ class BranchEventTypeChoices(ChoiceSet):
     SYNCED = 'synced'
     MERGED = 'merged'
     REVERTED = 'reverted'
+    ARCHIVED = 'archived'
 
     CHOICES = (
         (PROVISIONED, _('Provisioned'), 'green'),
         (SYNCED, _('Synced'), 'cyan'),
         (MERGED, _('Merged'), 'blue'),
         (REVERTED, _('Reverted'), 'orange'),
+        (ARCHIVED, _('Archived'), 'gray'),
     )

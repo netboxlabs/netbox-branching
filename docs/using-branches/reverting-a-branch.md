@@ -2,8 +2,8 @@
 
 Once a branch has been merged, it is generally no longer needed, and can no longer be activated. However, occasionally you may find it necessary to undo the changes from a branch (due to an error or an otherwise undesired state). This can be done by _reverting_ the branch. Only merged branches can be reverted.
 
-!!! note
-    Only branches which have not yet been deleted can be reverted. Once a branch is deleted, reversion is no longer possible.
+!!! warning
+    Only branches which have not yet been archived or deleted can be reverted. Once a branch's schema has been deprovisioned, it can no longer be reverted.
 
 Before reverting a branch, review the changes listed under its "Merged Changes" tab. NetBox will attempt to undo these specific changes when reverting the branch.
 

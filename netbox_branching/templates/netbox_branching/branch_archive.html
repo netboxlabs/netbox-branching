@@ -1,0 +1,43 @@
+{% extends 'generic/_base.html' %}
+{% load form_helpers %}
+{% load i18n %}
+
+{% block title %}{% trans "Archive" %} {{ branch }}{% endblock %}
+
+{% block tabs %}
+  <ul class="nav nav-tabs">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" id="action-form-tab" data-bs-toggle="tab" data-bs-target="#action-form" type="button" role="tab" aria-controls="merge-form" aria-selected="true">
+        {% trans "Archive" %}
+      </button>
+    </li>
+  </ul>
+{% endblock tabs %}
+
+{% block content %}
+  {# Form tab #}
+  <div class="tab-pane show active" id="action-form" role="tabpanel" aria-labelledby="action-form-tab">
+    <form action="" method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <div class="row">
+        <div class="col col-6 offset-3">
+          <div class="alert alert-danger">
+            <i class="mdi mdi-alert-circle"></i>
+            {% blocktrans %}
+              Are you sure you want to archive the branch {{ branch }}? This will permanently deprovision
+              its database schema, and it will no longer be possible to automatically rever the branch.
+            {% endblocktrans %}
+          </div>
+          {% render_field form.confirm %}
+          <div class="col offset-3 my-3">
+            <a href="{{ branch.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
+            <button type="submit" name="_update" class="btn btn-primary">
+              {% trans "Archive" %}
+            </button>
+          </div>
+        </div>
+      </div>
+    </form>
+  </div>
+  {# /Form tab #}
+{% endblock content %}
