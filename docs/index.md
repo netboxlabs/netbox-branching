@@ -74,6 +74,14 @@ sequenceDiagram
 
 ## Getting Started
 
+### Database Preparation
+
+Before installing this plugin, ensure that the PostgreSQL user as which NetBox authenticates has permission to create new schemas in the database. This can be achieved by issuing the following command in the PostgreSQL shell (substituting `$database` and `$user` with their respective values):
+
+```postgresql
+GRANT CREATE ON DATABASE $database TO $user;
+```
+
 ### Plugin Installation
 
 #### 1. Virtual Environment

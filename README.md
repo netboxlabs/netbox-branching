@@ -11,19 +11,25 @@ This [NetBox](http://netboxlabs.com/oss/netbox/) plugin introduces branching fun
 
 Brief installation instructions are provided below. For a complete installation guide, please refer to the included documentation.
 
-1. Activate the NetBox virtual environment:
+1. Grant PostgreSQL permission for the NetBox database user to create schemas:
+
+```postgresql
+GRANT CREATE ON DATABASE $database TO $user;
+```
+
+2. Activate the NetBox virtual environment:
 
 ```
 $ source /opt/netbox/venv/bin/activate
 ```
 
-2. Install the plugin from [PyPI](https://pypi.org/project/netboxlabs-netbox-branching/):
+3. Install the plugin from [PyPI](https://pypi.org/project/netboxlabs-netbox-branching/):
 
 ```
 $ pip install netboxlabs-netbox-branching
 ```
 
-3. Add `netbox_branching` to `PLUGINS` in `configuration.py`:
+4. Add `netbox_branching` to `PLUGINS` in `configuration.py`:
 
 ```python
 PLUGINS = [
@@ -32,7 +38,7 @@ PLUGINS = [
 ]
 ```
 
-4. Create `local_settings.py` to override the `DATABASES` & `DATABASE_ROUTERS` settings. This enables dynamic schema support.
+5. Create `local_settings.py` to override the `DATABASES` & `DATABASE_ROUTERS` settings. This enables dynamic schema support.
 
 ```python
 from netbox_branching.utilities import DynamicSchemaDict
@@ -49,7 +55,7 @@ DATABASE_ROUTERS = [
 ]
 ```
 
-5. Run NetBox migrations:
+6. Run NetBox migrations:
 
 ```
 $ ./manage.py migrate
