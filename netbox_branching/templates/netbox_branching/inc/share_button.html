@@ -1,0 +1,6 @@
+{% if active_branch %}
+    {% load i18n %}
+    <a href="{{ object.get_absolute_url }}?_branch={{ active_branch.schema_id }}" type="button" class="btn btn-outline-blue" title="{% trans "Link to the this page in the current branch" %} ({{ active_branch.name }})">
+        <i class="mdi mdi-share"></i> {% trans "Share" %}
+    </a>
+{% endif %}
