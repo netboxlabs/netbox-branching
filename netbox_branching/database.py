@@ -1,3 +1,5 @@
+import warnings
+
 from netbox.registry import registry
 
 from .contextvars import active_branch
@@ -14,6 +16,11 @@ class BranchAwareRouter:
     the active branch (if any).
     """
     def _get_db(self, model, **hints):
+        # Warn & exit if branching support has not yet been initialized
+        if 'branching' not in registry['model_features']:
+            warnings.warn(f"Routing database query for {model} before branching support is initialized.")
+            return
+
         # Bail if the model does not support branching
         app_label, model_name = model._meta.label.lower().split('.')
         if model_name not in registry['model_features']['branching'].get(app_label, []):
