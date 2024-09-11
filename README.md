@@ -29,7 +29,7 @@ $ source /opt/netbox/venv/bin/activate
 $ pip install netboxlabs-netbox-branching
 ```
 
-4. Add `netbox_branching` to `PLUGINS` in `configuration.py`:
+4. Add `netbox_branching` to the end of `PLUGINS` in `configuration.py`. Note that `netbox_branching` **MUST** be the last plugin listed.
 
 ```python
 PLUGINS = [
