@@ -1,7 +1,7 @@
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 
-from netbox.plugins import PluginConfig
+from netbox.plugins import PluginConfig, get_plugin_config
 from netbox.registry import registry
 
 
@@ -21,6 +21,9 @@ class AppConfig(PluginConfig):
 
         # The maximum number of branches which can be provisioned simultaneously
         'max_branches': None,
+
+        # Models from other plugins which should be excluded from branching support
+        'exempt_models': [],
 
         # This string is prefixed to the name of each new branch schema during provisioning
         'schema_prefix': 'branch_',
@@ -42,11 +45,20 @@ class AppConfig(PluginConfig):
             )
 
         # Record all object types which support branching in the NetBox registry
-        if 'branching' not in registry['model_features']:
-            registry['model_features']['branching'] = {
-                k: v for k, v in registry['model_features']['change_logging'].items()
-                if k not in constants.EXCLUDED_APPS
-            }
+        exempt_models = (
+            *constants.EXEMPT_MODELS,
+            *get_plugin_config('netbox_branching', 'exempt_models'),
+        )
+        branching_models = {}
+        for app_label, models in registry['model_features']['change_logging'].items():
+            # Wildcard exclusion for all models in this app
+            if f'{app_label}.*' in exempt_models:
+                continue
+            branching_models[app_label] = [
+                model for model in models
+                if f'{app_label}.{model}' not in exempt_models
+            ]
+        registry['model_features']['branching'] = branching_models
 
 
 config = AppConfig
