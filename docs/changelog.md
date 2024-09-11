@@ -4,15 +4,18 @@
 
 ### Enhancements
 
+* [#83](https://github.com/netboxlabs/nbl-netbox-branching/issues/83) - Add a "share" button under object views when a branch is active
 * [#84](https://github.com/netboxlabs/nbl-netbox-branching/issues/84) - Introduce the `max_working_branches` configuration parameter
 * [#88](https://github.com/netboxlabs/nbl-netbox-branching/issues/88) - Add branching support for NetBox's graphQL API
 * [#90](https://github.com/netboxlabs/nbl-netbox-branching/issues/90) - Introduce the ability to archive & deprovision merged branches without deleting them
+* [#97](https://github.com/netboxlabs/nbl-netbox-branching/issues/97) - Introduce the `exempt_models` config parameter to disable branching support for plugin models
 
 ### Bug Fixes
 
 * [#81](https://github.com/netboxlabs/nbl-netbox-branching/issues/81) - Fix event rule triggering for the `branch_reverted` event
 * [#91](https://github.com/netboxlabs/nbl-netbox-branching/issues/91) - Disregard the active branch (if any) when alerting on changes under object views
 * [#94](https://github.com/netboxlabs/nbl-netbox-branching/issues/94) - Fix branch merging after modifying an object with custom field data
+* [#101](https://github.com/netboxlabs/nbl-netbox-branching/issues/101) - Permit (but warn about) database queries issued before branching support has been initialized
 * [#102](https://github.com/netboxlabs/nbl-netbox-branching/issues/102) - Record individual object actions in branch job logs
 
 ---
