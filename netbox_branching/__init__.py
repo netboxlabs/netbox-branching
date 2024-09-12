@@ -54,10 +54,12 @@ class AppConfig(PluginConfig):
             # Wildcard exclusion for all models in this app
             if f'{app_label}.*' in exempt_models:
                 continue
-            branching_models[app_label] = [
+            models = [
                 model for model in models
                 if f'{app_label}.{model}' not in exempt_models
             ]
+            if models:
+                branching_models[app_label] = models
         registry['model_features']['branching'] = branching_models
 
 
