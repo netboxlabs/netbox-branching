@@ -12,6 +12,19 @@ QUERY_PARAM = '_branch'
 
 # Models for which branching support is explicitly disabled
 EXEMPT_MODELS = (
+    # Exempt applicable core NetBox models
+    'core.*',
+    'extras.branch',
+    'extras.customfield',
+    'extras.customfieldchoiceset',
+    'extras.customlink',
+    'extras.eventrule',
+    'extras.exporttemplate',
+    'extras.notificationgroup',
+    'extras.savedfilter',
+    'extras.webhook',
+
+    # Exempt all models from this plugin and from netbox-changes
     'netbox_branching.*',
     'netbox_changes.*',
 )
