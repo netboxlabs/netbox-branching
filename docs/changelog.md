@@ -9,6 +9,7 @@
 * [#88](https://github.com/netboxlabs/nbl-netbox-branching/issues/88) - Add branching support for NetBox's graphQL API
 * [#90](https://github.com/netboxlabs/nbl-netbox-branching/issues/90) - Introduce the ability to archive & deprovision merged branches without deleting them
 * [#97](https://github.com/netboxlabs/nbl-netbox-branching/issues/97) - Introduce the `exempt_models` config parameter to disable branching support for plugin models
+* [#116](https://github.com/netboxlabs/nbl-netbox-branching/issues/116) - Disable branching support for applicable core models
 
 ### Bug Fixes
 
