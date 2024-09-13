@@ -1,0 +1,10 @@
+{% load i18n %}
+{% if perms.netbox_branching.sync_branch %}
+  <a href="{% url 'plugins:netbox_branching:branch_sync' pk=branch.pk %}" class="btn btn-primary">
+    <i class="mdi mdi-sync"></i> {% trans "Sync" %}
+  </a>
+{% else %}
+  <button type="button" class="btn btn-primary disabled" aria-disabled="true">
+    <i class="mdi mdi-sync"></i> {% trans "Sync" %}
+  </button>
+{% endif %}

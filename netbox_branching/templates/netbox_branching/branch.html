@@ -4,6 +4,7 @@
 {% load plugins %}
 {% load render_table from django_tables2 %}
 {% load i18n %}
+{% load branch_buttons %}
 
 {% block extra_controls %}
   {% if not object.is_active %}
@@ -22,44 +23,12 @@
     </a>
   {% endif %}
   {% if object.ready %}
-    {% if perms.netbox_branching.sync_branch %}
-      <a href="{% url 'plugins:netbox_branching:branch_sync' pk=object.pk %}" class="btn btn-primary">
-        <i class="mdi mdi-sync"></i> {% trans "Sync" %}
-      </a>
-    {% else %}
-      <button type="button" class="btn btn-primary disabled" aria-disabled="true">
-        <i class="mdi mdi-sync"></i> {% trans "Sync" %}
-      </button>
-    {% endif %}
-    {% if perms.netbox_branching.merge_branch %}
-      <a href="{% url 'plugins:netbox_branching:branch_merge' pk=object.pk %}" class="btn btn-primary">
-        <i class="mdi mdi-merge"></i> {% trans "Merge" %}
-      </a>
-    {% else %}
-      <button type="button" class="btn btn-primary disabled" aria-disabled="true">
-        <i class="mdi mdi-merge"></i> {% trans "Merge" %}
-      </button>
-    {% endif %}
+    {% branch_sync_button object %}
+    {% branch_merge_button object %}
   {% endif %}
   {% if object.merged %}
-    {% if perms.netbox_branching.revert_branch %}
-      <a href="{% url 'plugins:netbox_branching:branch_revert' pk=object.pk %}" class="btn btn-primary">
-        <i class="mdi mdi-arrow-u-left-top"></i> {% trans "Revert" %}
-      </a>
-    {% else %}
-      <button type="button" class="btn btn-primary disabled" aria-disabled="true">
-        <i class="mdi mdi-arrow-u-left-top"></i> {% trans "Revert" %}
-      </button>
-    {% endif %}
-    {% if perms.netbox_branching.archive_branch %}
-      <a href="{% url 'plugins:netbox_branching:branch_archive' pk=object.pk %}" class="btn btn-primary">
-        <i class="mdi mdi-archive-outline"></i> {% trans "Archive" %}
-      </a>
-    {% else %}
-      <button type="button" class="btn btn-primary disabled" aria-disabled="true">
-        <i class="mdi mdi-archive-outline"></i> {% trans "Archive" %}
-      </button>
-    {% endif %}
+    {% branch_revert_button object %}
+    {% branch_archive_button object %}
   {% endif %}
 {% endblock %}
 
