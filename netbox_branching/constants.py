@@ -7,6 +7,14 @@ COOKIE_NAME = 'active_branch'
 # HTTP header for API requests
 BRANCH_HEADER = 'X-NetBox-Branch'
 
+# Branch actions
+BRANCH_ACTIONS = (
+    'sync',
+    'merge',
+    'revert',
+    'archive',
+)
+
 # URL query parameter name
 QUERY_PARAM = '_branch'
 

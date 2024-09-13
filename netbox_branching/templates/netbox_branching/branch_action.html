@@ -17,6 +17,14 @@
 {% block content %}
   {# Form tab #}
   <div class="tab-pane show active" id="action-form" role="tabpanel" aria-labelledby="action-form-tab">
+    {% if not action_permitted %}
+      <div class="alert alert-warning">
+        <i class="mdi mdi-alert-circle"></i>
+        {% blocktrans %}
+          This action is disallowed per policy, however dry runs are permitted.
+        {% endblocktrans %}
+      </div>
+    {% endif %}
     {% if conflicts_table.rows %}
       <div class="alert alert-danger">
         <i class="mdi mdi-alert-circle"></i>

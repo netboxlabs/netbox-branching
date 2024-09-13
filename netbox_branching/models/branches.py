@@ -12,6 +12,7 @@ from django.db.utils import ProgrammingError
 from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
 from core.models import ObjectChange as ObjectChange_
@@ -21,6 +22,7 @@ from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
+from netbox_branching.constants import BRANCH_ACTIONS
 from netbox_branching.contextvars import active_branch
 from netbox_branching.signals import *
 from netbox_branching.utilities import (
@@ -243,6 +245,54 @@ class Branch(JobsMixin, PrimaryModel):
             last_time = event.time
         return history
 
+    #
+    # Branch action indicators
+    #
+
+    def _can_do_action(self, action):
+        """
+        Execute any validators configured for the specified branch
+        action. Return False if any fail; otherwise return True.
+        """
+        if action not in BRANCH_ACTIONS:
+            raise Exception(f"Unrecognized branch action: {action}")
+        for validator_path in get_plugin_config('netbox_branching', f'{action}_validators'):
+            if not import_string(validator_path)(self):
+                return False
+        return True
+
+    @property
+    def can_sync(self):
+        """
+        Indicates whether the branch can be synced.
+        """
+        return self._can_do_action('sync')
+
+    @property
+    def can_merge(self):
+        """
+        Indicates whether the branch can be merged.
+        """
+        return self._can_do_action('merge')
+
+    @property
+    def can_revert(self):
+        """
+        Indicates whether the branch can be reverted.
+        """
+        return self._can_do_action('revert')
+
+    @property
+    def can_archive(self):
+        """
+        Indicates whether the branch can be archived.
+        """
+        return self._can_do_action('archive')
+
+    #
+    # Branch actions
+    #
+
     def sync(self, user, commit=True):
         """
         Apply changes from the main schema onto the Branch's schema.
@@ -252,6 +302,8 @@ class Branch(JobsMixin, PrimaryModel):
 
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to sync")
+        if commit and not self.can_sync:
+            raise Exception(f"Syncing this branch is not permitted.")
 
         # Emit pre-sync signal
         pre_sync.send(sender=self.__class__, branch=self, user=user)
@@ -310,6 +362,8 @@ class Branch(JobsMixin, PrimaryModel):
 
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to merge")
+        if commit and not self.can_merge:
+            raise Exception(f"Merging this branch is not permitted.")
 
         # Emit pre-merge signal
         pre_merge.send(sender=self.__class__, branch=self, user=user)
@@ -382,6 +436,8 @@ class Branch(JobsMixin, PrimaryModel):
 
         if not self.merged:
             raise Exception(f"Only merged branches can be reverted.")
+        if commit and not self.can_revert:
+            raise Exception(f"Reverting this branch is not permitted.")
 
         # Emit pre-revert signal
         pre_revert.send(sender=self.__class__, branch=self, user=user)
@@ -544,6 +600,10 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Deprovision the Branch and set its status to "archived."
         """
+        if not self.can_archive:
+            raise Exception(f"Archiving this branch is not permitted.")
+
+        # Deprovision the branch's schema
         self.deprovision()
 
         # Update the branch's status to "archived"
