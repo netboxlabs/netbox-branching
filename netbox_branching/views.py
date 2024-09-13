@@ -186,18 +186,21 @@ class BaseBranchActionView(generic.ObjectView):
 
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        form = self.form(branch)
+        action_permitted = getattr(branch, f'can_{self.action}')
+        form = self.form(branch, allow_commit=action_permitted)
 
         return render(request, self.template_name, {
             'branch': branch,
             'action': _(f'{self.action.title()} Branch'),
             'form': form,
+            'action_permitted': action_permitted,
             'conflicts_table': self._get_conflicts_table(branch),
         })
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        form = self.form(branch, request.POST)
+        action_permitted = getattr(branch, f'can_{self.action}')
+        form = self.form(branch, request.POST, allow_commit=action_permitted)
 
         if branch.status not in self.valid_states:
             messages.error(request, _(
@@ -210,6 +213,7 @@ class BaseBranchActionView(generic.ObjectView):
             'branch': branch,
             'action': _(f'{self.action.title()} Branch'),
             'form': form,
+            'action_permitted': action_permitted,
             'conflicts_table': self._get_conflicts_table(branch),
         })
 
@@ -277,14 +281,17 @@ class BranchArchiveView(generic.ObjectView):
         return f'netbox_branching.archive_branch'
 
     @staticmethod
-    def _enforce_status(request, branch):
+    def _validate(request, branch):
         if branch.status != BranchStatusChoices.MERGED:
             messages.error(request, _("Only merged branches can be archived."))
+            return redirect(branch.get_absolute_url())
+        if not branch.can_revert:
+            messages.error(request, _("Reverting this branch is disallowed per policy."))
             return redirect(branch.get_absolute_url())
 
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        self._enforce_status(request, branch)
+        self._validate(request, branch)
         form = forms.ConfirmationForm()
 
         return render(request, self.template_name, {
@@ -294,7 +301,7 @@ class BranchArchiveView(generic.ObjectView):
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        self._enforce_status(request, branch)
+        self._validate(request, branch)
         form = forms.ConfirmationForm(request.POST)
 
         if form.is_valid():

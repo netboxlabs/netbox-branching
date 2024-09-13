@@ -1,8 +1,11 @@
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.utils.module_loading import import_string
 
 from netbox.plugins import PluginConfig, get_plugin_config
 from netbox.registry import registry
+
+from .constants import BRANCH_ACTIONS
 
 
 class AppConfig(PluginConfig):
@@ -27,6 +30,12 @@ class AppConfig(PluginConfig):
 
         # This string is prefixed to the name of each new branch schema during provisioning
         'schema_prefix': 'branch_',
+
+        # Branch action validators
+        'sync_validators': [],
+        'merge_validators': [],
+        'revert_validators': [],
+        'archive_validators': [],
     }
 
     def ready(self):
@@ -43,6 +52,14 @@ class AppConfig(PluginConfig):
             raise ImproperlyConfigured(
                 "netbox_branching: DATABASE_ROUTERS must contain 'netbox_branching.database.BranchAwareRouter'."
             )
+
+        # Validate branch action validators
+        for action in BRANCH_ACTIONS:
+            for validator_path in get_plugin_config('netbox_branching', f'{action}_validators'):
+                try:
+                    import_string(validator_path)
+                except ImportError:
+                    raise ImproperlyConfigured(f"Branch {action} validator not found: {validator_path}")
 
         # Record all object types which support branching in the NetBox registry
         exempt_models = (

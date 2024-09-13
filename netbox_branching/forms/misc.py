@@ -20,9 +20,12 @@ class BranchActionForm(forms.Form):
         help_text=_('Leave unchecked to perform a dry run')
     )
 
-    def __init__(self, branch, *args, **kwargs):
+    def __init__(self, branch, *args, allow_commit=True, **kwargs):
         self.branch = branch
         super().__init__(*args, **kwargs)
+
+        if not allow_commit:
+            self.fields['commit'].disabled = True
 
     def clean(self):
         super().clean()
