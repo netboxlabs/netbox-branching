@@ -9,6 +9,7 @@ from django.urls import reverse
 from dcim.models import Site
 from users.models import Token
 
+from netbox_branching.constants import COOKIE_NAME
 from netbox_branching.models import Branch
 
 
@@ -58,21 +59,43 @@ class APITestCase(TransactionTestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['name'], 'Site 1')
 
-    def test_with_branch(self):
+    def test_with_branch_header(self):
+        url = reverse('dcim-api:site-list')
         branch = Branch.objects.first()
         self.assertIsNotNone(branch, "Branch was not created")
+
+        # Regular API query
+        response = self.client.get(url, **self.header)
+        results = self.get_results(response)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['name'], 'Site 1')
+
+        # Branch-aware API query
         header = {
             **self.header,
             f'HTTP_X_NETBOX_BRANCH': branch.schema_id,
         }
-
-        # Sanity checks
-        self.assertEqual(Site.objects.count(), 1)
-        self.assertEqual(Site.objects.using(branch.connection_name).count(), 1)
-
-        url = reverse('dcim-api:site-list')
         response = self.client.get(url, **header)
         results = self.get_results(response)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['name'], 'Site 2')
 
+    def test_with_branch_cookie(self):
+        url = reverse('dcim-api:site-list')
+        branch = Branch.objects.first()
+        self.assertIsNotNone(branch, "Branch was not created")
+
+        # Regular API query
+        response = self.client.get(url, **self.header)
+        results = self.get_results(response)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['name'], 'Site 1')
+
+        # Branch-aware API query
+        self.client.cookies.load({
+            COOKIE_NAME: branch.schema_id,
+        })
+        response = self.client.get(url, **self.header)
+        results = self.get_results(response)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['name'], 'Site 2')
