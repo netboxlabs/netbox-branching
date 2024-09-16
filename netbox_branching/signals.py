@@ -1,26 +1,28 @@
 from django.dispatch import Signal
 
-from .events import *
-
 __all__ = (
-    'branch_deprovisioned',
-    'branch_merged',
-    'branch_provisioned',
-    'branch_reverted',
-    'branch_synced',
+    'post_deprovision',
+    'post_merge',
+    'post_provision',
+    'post_revert',
+    'post_sync',
+    'pre_deprovision',
+    'pre_merge',
+    'pre_provision',
+    'pre_revert',
+    'pre_sync',
 )
 
+# Pre-event signals
+pre_provision = Signal()
+pre_deprovision = Signal()
+pre_sync = Signal()
+pre_merge = Signal()
+pre_revert = Signal()
 
-branch_provisioned = Signal()
-branch_deprovisioned = Signal()
-branch_synced = Signal()
-branch_merged = Signal()
-branch_reverted = Signal()
-
-branch_signals = {
-    branch_provisioned: BRANCH_PROVISIONED,
-    branch_deprovisioned: BRANCH_DEPROVISIONED,
-    branch_synced: BRANCH_SYNCED,
-    branch_merged: BRANCH_MERGED,
-    branch_reverted: BRANCH_REVERTED,
-}
+# Post-event signals
+post_provision = Signal()
+post_deprovision = Signal()
+post_sync = Signal()
+post_merge = Signal()
+post_revert = Signal()
