@@ -129,12 +129,12 @@ class Branch(JobsMixin, PrimaryModel):
 
         # Enforce the maximum number of total branches
         if not self.pk and (max_branches := get_plugin_config('netbox_branching', 'max_branches')):
-            total_branch_count = Branch.objects.count()
+            total_branch_count = Branch.objects.exclude(status=BranchStatusChoices.ARCHIVED).count()
             if total_branch_count >= max_branches:
                 raise ValidationError(
                     _(
-                        "The configured maximum number of branches ({max}) cannot be exceeded. One or more existing "
-                        "branches must be deleted before a new branch may be created."
+                        "The configured maximum number of non-archived branches ({max}) cannot be exceeded. One or "
+                        "more existing branches must be deleted before a new branch may be created."
                     ).format(max=max_branches)
                 )
 
