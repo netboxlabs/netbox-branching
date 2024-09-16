@@ -251,6 +251,9 @@ class Branch(JobsMixin, PrimaryModel):
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to sync")
 
+        # Emit pre-sync signal
+        pre_sync.send(sender=self.__class__, branch=self, user=user)
+
         # Retrieve unsynced changes before we update the Branch's status
         if changes := self.get_unsynced_changes().order_by('time'):
             logger.info(f"Found {len(changes)} changes to sync")
@@ -288,8 +291,8 @@ class Branch(JobsMixin, PrimaryModel):
         logger.debug(f"Recording branch event: {BranchEventTypeChoices.SYNCED}")
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.SYNCED)
 
-        # Emit branch_synced signal
-        branch_synced.send(sender=self.__class__, branch=self, user=user)
+        # Emit post-sync signal
+        post_sync.send(sender=self.__class__, branch=self, user=user)
 
         logger.info('Syncing completed')
 
@@ -305,6 +308,9 @@ class Branch(JobsMixin, PrimaryModel):
 
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to merge")
+
+        # Emit pre-merge signal
+        pre_merge.send(sender=self.__class__, branch=self, user=user)
 
         # Retrieve staged changes before we update the Branch's status
         if changes := self.get_unmerged_changes().order_by('time'):
@@ -354,8 +360,8 @@ class Branch(JobsMixin, PrimaryModel):
         logger.debug(f"Recording branch event: {BranchEventTypeChoices.MERGED}")
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MERGED)
 
-        # Emit branch_merged signal
-        branch_merged.send(sender=self.__class__, branch=self, user=user)
+        # Emit post-merge signal
+        post_merge.send(sender=self.__class__, branch=self, user=user)
 
         logger.info('Merging completed')
 
@@ -374,6 +380,9 @@ class Branch(JobsMixin, PrimaryModel):
 
         if not self.merged:
             raise Exception(f"Only merged branches can be reverted.")
+
+        # Emit pre-revert signal
+        pre_revert.send(sender=self.__class__, branch=self, user=user)
 
         # Retrieve applied changes before we update the Branch's status
         if changes := self.get_changes().order_by('-time'):
@@ -423,8 +432,8 @@ class Branch(JobsMixin, PrimaryModel):
         logger.debug(f"Recording branch event: {BranchEventTypeChoices.REVERTED}")
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.REVERTED)
 
-        # Emit branch_reverted signal
-        branch_reverted.send(sender=self.__class__, branch=self, user=user)
+        # Emit post-revert signal
+        post_revert.send(sender=self.__class__, branch=self, user=user)
 
         logger.info('Reversion completed')
 
@@ -439,6 +448,9 @@ class Branch(JobsMixin, PrimaryModel):
         """
         logger = logging.getLogger('netbox_branching.branch.provision')
         logger.info(f'Provisioning branch {self} ({self.schema_name})')
+
+        # Emit pre-provision signal
+        pre_provision.send(sender=self.__class__, branch=self, user=user)
 
         # Update Branch status
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.PROVISIONING)
@@ -516,8 +528,8 @@ class Branch(JobsMixin, PrimaryModel):
 
                 raise e
 
-        # Emit branch_provisioned signal
-        branch_provisioned.send(sender=self.__class__, branch=self, user=user)
+        # Emit post-provision signal
+        post_provision.send(sender=self.__class__, branch=self, user=user)
 
         logger.info('Provisioning completed')
 
@@ -545,6 +557,9 @@ class Branch(JobsMixin, PrimaryModel):
         logger = logging.getLogger('netbox_branching.branch.provision')
         logger.info(f'Deprovisioning branch {self} ({self.schema_name})')
 
+        # Emit pre-deprovision signal
+        pre_deprovision.send(sender=self.__class__, branch=self)
+
         with connection.cursor() as cursor:
             # Delete the schema and all its tables
             logger.debug(f'Deleting schema {self.schema_name}')
@@ -552,8 +567,8 @@ class Branch(JobsMixin, PrimaryModel):
                 f"DROP SCHEMA IF EXISTS {self.schema_name} CASCADE"
             )
 
-        # Emit branch_deprovisioned signal
-        branch_deprovisioned.send(sender=self.__class__, branch=self)
+        # Emit post-deprovision signal
+        post_deprovision.send(sender=self.__class__, branch=self)
 
         logger.info('Deprovisioning completed')
 
