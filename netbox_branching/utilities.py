@@ -4,6 +4,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 
 from django.db.models import ForeignKey, ManyToManyField
+from django.urls import reverse
 
 from .contextvars import active_branch
 
@@ -15,6 +16,7 @@ __all__ = (
     'deactivate_branch',
     'get_branchable_object_types',
     'get_tables_to_replicate',
+    'is_api_request',
     'record_applied_change',
     'update_object',
 )
@@ -166,3 +168,10 @@ def record_applied_change(instance, branch, **kwargs):
     from .models import AppliedChange
 
     AppliedChange.objects.update_or_create(change=instance, defaults={'branch': branch})
+
+
+def is_api_request(request):
+    """
+    Returns True if the given request is a REST or GraphQL API request.
+    """
+    return request.path_info.startswith(reverse('api-root')) or request.path_info.startswith(reverse('graphql'))

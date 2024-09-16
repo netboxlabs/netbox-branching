@@ -8,7 +8,7 @@ from utilities.api import is_api_request
 from .choices import BranchStatusChoices
 from .constants import COOKIE_NAME, BRANCH_HEADER, QUERY_PARAM
 from .models import Branch
-from .utilities import activate_branch
+from .utilities import activate_branch, is_api_request
 
 __all__ = (
     'BranchMiddleware',
@@ -45,13 +45,12 @@ class BranchMiddleware:
         """
         Return the active Branch (if any).
         """
-        # The active Branch is specified by HTTP header for REST & GraphQL API requests.
-        if request.path_info.startswith(reverse('api-root')) or request.path_info.startswith(reverse('graphql')):
-            if schema_id := request.headers.get(BRANCH_HEADER):
-                branch = Branch.objects.get(schema_id=schema_id)
-                if not branch.ready:
-                    return HttpResponseBadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
-                return branch
+        # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
+        if is_api_request(request) and BRANCH_HEADER in request.headers:
+            branch = Branch.objects.get(schema_id=request.headers.get(BRANCH_HEADER))
+            if not branch.ready:
+                return HttpResponseBadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
+            return branch
 
         # Branch activated/deactivated by URL query parameter
         elif QUERY_PARAM in request.GET:
