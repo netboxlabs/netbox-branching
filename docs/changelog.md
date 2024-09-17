@@ -1,5 +1,19 @@
 # Change Log
 
+## v0.5.1
+
+### Enhancements
+
+* [#123](https://github.com/netboxlabs/netbox-branching/issues/123) - Introduce template tags for branch action buttons
+* [#129](https://github.com/netboxlabs/netbox-branching/issues/129) - Implement pre-event signals for branch actions
+
+### Bug Fixes
+
+* [#119](https://github.com/netboxlabs/netbox-branching/issues/119) - Fix the dynamic selection of related objects in forms while a branch is active
+* [#120](https://github.com/netboxlabs/netbox-branching/issues/120) - `max_branches` config parameter should disregard archived branches
+
+---
+
 ## v0.5.0
 
 ### Enhancements
