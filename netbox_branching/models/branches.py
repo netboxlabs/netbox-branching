@@ -201,6 +201,8 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all ObjectChange records created in main since the Branch was last synced or created.
         """
+        if self.status not in BranchStatusChoices.WORKING:
+            return ObjectChange.objects.none()
         return ObjectChange.objects.using(DEFAULT_DB_ALIAS).exclude(
             application__branch=self
         ).filter(
@@ -212,7 +214,7 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all unmerged ObjectChange records within the Branch schema.
         """
-        if self.status == BranchStatusChoices.MERGED:
+        if self.status not in BranchStatusChoices.WORKING:
             return ObjectChange.objects.none()
         return ObjectChange.objects.using(self.connection_name)
 
@@ -220,7 +222,7 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all merged ObjectChange records for the Branch.
         """
-        if self.status != BranchStatusChoices.MERGED:
+        if self.status not in (BranchStatusChoices.MERGED, BranchStatusChoices.ARCHIVED):
             return ObjectChange.objects.none()
         return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
             application__branch=self
