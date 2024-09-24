@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from django.db.models import ForeignKey, ManyToManyField
 from django.urls import reverse
 
+from .constants import REPLICATE_TABLES
 from .contextvars import active_branch
 
 __all__ = (
@@ -81,9 +82,9 @@ def get_branchable_object_types():
 
 def get_tables_to_replicate():
     """
-    Returned an ordered list of database tables to replicate when provisioning a new schema.
+    Return an ordered list of database tables to replicate when provisioning a new schema.
     """
-    tables = set()
+    tables = set(REPLICATE_TABLES)
 
     branch_aware_models = [
         ot.model_class() for ot in get_branchable_object_types()
