@@ -9,6 +9,7 @@
 
 ### Bug Fixes
 
+* [#98](https://github.com/netboxlabs/netbox-branching/issues/98) - Cable changes in branch should not impact main schema
 * [#119](https://github.com/netboxlabs/netbox-branching/issues/119) - Fix the dynamic selection of related objects in forms while a branch is active
 * [#120](https://github.com/netboxlabs/netbox-branching/issues/120) - `max_branches` config parameter should disregard archived branches
 * [#138](https://github.com/netboxlabs/netbox-branching/issues/138) - Fix rendering the ID column of the change diffs table
