@@ -38,7 +38,7 @@ PLUGINS = [
 ]
 ```
 
-5. Create `local_settings.py` to override the `DATABASES` & `DATABASE_ROUTERS` settings. This enables dynamic schema support.
+5. Create `local_settings.py` (in the same directory as `settings.py`) to override the `DATABASES` & `DATABASE_ROUTERS` settings. This enables dynamic schema support.
 
 ```python
 from netbox_branching.utilities import DynamicSchemaDict

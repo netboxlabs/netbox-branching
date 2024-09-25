@@ -112,10 +112,16 @@ class BranchTestCase(TransactionTestCase):
         Verify that the max_branches config parameter is enforced.
         """
         Branch.objects.bulk_create((
-            Branch(name='Branch 1'),
-            Branch(name='Branch 2'),
+            Branch(name='Branch 1', status=BranchStatusChoices.ARCHIVED),
+            Branch(name='Branch 2', status=BranchStatusChoices.READY),
         ))
 
+        # Creating a second non-archived Branch should succeed
         branch = Branch(name='Branch 3')
+        branch.full_clean()
+        branch.save(provision=False)
+
+        # Creating a third non-archived Branch should fail
+        branch = Branch(name='Branch 4')
         with self.assertRaises(ValidationError):
             branch.full_clean()

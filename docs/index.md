@@ -124,7 +124,7 @@ PLUGINS = [
 
 This plugin employs dynamic schema resolution, which requires that we override two low-level Django settings. First, we'll wrap NetBox's configured `DATABASE` parameter with `DynamicSchemaDict` to support dynamic schemas. Second, we'll employ the plugin's custom database router.
 
-Create a new file named `local_settings.py` in the same directory as `configuration.py`, and add the content below.
+Create a new file named `local_settings.py` in the same directory as `settings.py`, and add the content below.
 
 ```python
 from netbox_branching.utilities import DynamicSchemaDict

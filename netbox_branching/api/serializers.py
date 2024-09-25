@@ -5,7 +5,7 @@ from core.choices import ObjectChangeActionChoices
 from netbox.api.exceptions import SerializerNotFound
 from netbox.api.fields import ChoiceField, ContentTypeField
 from netbox.api.serializers import NetBoxModelSerializer
-from netbox_branching.choices import BranchEventTypeChoices
+from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.models import ChangeDiff, Branch, BranchEvent
 from users.api.serializers import UserSerializer
 from utilities.api import get_serializer_for_model
@@ -29,6 +29,9 @@ class BranchSerializer(NetBoxModelSerializer):
     merged_by = UserSerializer(
         nested=True,
         read_only=True
+    )
+    status = ChoiceField(
+        choices=BranchStatusChoices
     )
 
     class Meta:

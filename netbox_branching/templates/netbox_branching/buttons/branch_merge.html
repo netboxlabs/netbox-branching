@@ -1,0 +1,10 @@
+{% load i18n %}
+{% if perms.netbox_branching.merge_branch %}
+  <a href="{% url 'plugins:netbox_branching:branch_merge' pk=branch.pk %}" class="btn btn-primary">
+    <i class="mdi mdi-merge"></i> {% trans "Merge" %}
+  </a>
+{% else %}
+  <button type="button" class="btn btn-primary disabled" aria-disabled="true">
+    <i class="mdi mdi-merge"></i> {% trans "Merge" %}
+  </button>
+{% endif %}
