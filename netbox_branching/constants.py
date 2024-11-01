@@ -10,10 +10,10 @@ BRANCH_HEADER = 'X-NetBox-Branch'
 # URL query parameter name
 QUERY_PARAM = '_branch'
 
-# Tables which must be replicated within a branch even though their
-# models don't directly support branching.
-REPLICATE_TABLES = (
-    'dcim_cablepath',
+# Models which do not support change logging, but whose database tables
+# must be replicated for each branch to ensure proper functionality
+INCLUDE_MODELS = (
+    'dcim.cablepath',
 )
 
 # Models for which branching support is explicitly disabled
