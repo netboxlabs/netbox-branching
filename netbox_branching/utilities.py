@@ -6,7 +6,9 @@ from dataclasses import dataclass
 from django.db.models import ForeignKey, ManyToManyField
 from django.urls import reverse
 
-from .constants import REPLICATE_TABLES
+from netbox.plugins import get_plugin_config
+from netbox.registry import registry
+from .constants import EXEMPT_MODELS, REPLICATE_TABLES
 from .contextvars import active_branch
 
 __all__ = (
@@ -19,6 +21,7 @@ __all__ = (
     'get_tables_to_replicate',
     'is_api_request',
     'record_applied_change',
+    'register_models',
     'update_object',
 )
 
@@ -78,6 +81,33 @@ def get_branchable_object_types():
     from core.models import ObjectType
 
     return ObjectType.objects.with_feature('branching')
+
+
+def register_models():
+    """
+    Register all models which support branching in the NetBox registry.
+    """
+    # Compile a list of exempt models (those for which change logging may
+    # be enabled, but branching is not supported)
+    exempt_models = (
+        *EXEMPT_MODELS,
+        *get_plugin_config('netbox_branching', 'exempt_models'),
+    )
+
+    # Determine which models support branching
+    branching_models = {}
+    for app_label, models in registry['model_features']['change_logging'].items():
+        # Wildcard exclusion for all models in this app
+        if f'{app_label}.*' in exempt_models:
+            continue
+        models = [
+            model for model in models
+            if f'{app_label}.{model}' not in exempt_models
+        ]
+        if models:
+            branching_models[app_label] = models
+
+    registry['model_features']['branching'] = branching_models
 
 
 def get_tables_to_replicate():
