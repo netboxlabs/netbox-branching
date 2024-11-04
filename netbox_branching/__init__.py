@@ -3,13 +3,14 @@ from django.core.exceptions import ImproperlyConfigured
 
 from netbox.plugins import PluginConfig, get_plugin_config
 from netbox.registry import registry
+from .version import version_semver
 
 
 class AppConfig(PluginConfig):
     name = 'netbox_branching'
     verbose_name = 'NetBox Branching'
     description = 'A git-like branching implementation for NetBox'
-    version = '0.5.1'
+    version = version_semver()
     base_url = 'branching'
     min_version = '4.1'
     middleware = [
