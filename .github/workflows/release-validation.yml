@@ -12,6 +12,6 @@ jobs:
   release:
     uses: netboxlabs/public-workflows/.github/workflows/reusable-plugin-release-validation.yml@develop
     with:
-      plugin_package_name: netbox-branching
+      plugin_package_name: netboxlabs-netbox-branching
       plugin_package_dir: netbox_branching
     secrets: inherit
