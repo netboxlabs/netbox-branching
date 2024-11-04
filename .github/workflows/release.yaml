@@ -7,108 +7,11 @@ concurrency:
   group: ${{ github.workflow }}
   cancel-in-progress: false
 
-env:
-  PYTHON_RUNTIME_VERSION: "3.11"
-  PYTHON_PACKAGE_NAME: netboxlabs-netbox-branching
-
 jobs:
-  get-package-name:
-    name: Get package name
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Python package name
-        id: package-name
-        run: echo "package-name=${{ env.PYTHON_PACKAGE_NAME }}" >> "$GITHUB_OUTPUT"
-    outputs:
-      package-name: ${{ steps.package-name.outputs.package-name }}
-  get-next-version:
-    name: Get next version
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set short sha output
-        id: short-sha
-        run: echo "short-sha=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
-      - name: Set release version
-        id: release-version
-        run: |
-          pip install toml-cli
-          release_version=`toml get --toml-path pyproject.toml project.version`
-          echo "Release version: $release_version"
-          echo "release-version=$release_version" >> "$GITHUB_OUTPUT"
-    outputs:
-      short-sha: ${{ steps.short-sha.outputs.short-sha }}
-      release-version: ${{ steps.release-version.outputs.release-version }}
-  get-release-notes:
-    name: Get release notes
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set release notes
-        id: release-notes
-        env:
-          PR_BODY: ${{ github.event.pull_request.body }}
-        run: |
-          echo 'release-notes<<EOF' >> $GITHUB_OUTPUT
-          echo $PR_BODY >> $GITHUB_OUTPUT
-          echo 'EOF' >> $GITHUB_OUTPUT
-    outputs:
-      release-notes: ${{ steps.release-notes.outputs.release-notes }}
-  build:
-    name: Build
-    needs: [ get-package-name, get-next-version, get-release-notes ]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      id-token: write
-      contents: read
-    env:
-      BUILD_VERSION: ${{ needs.get-next-version.outputs.release-version }}
-      BUILD_TRACK: release
-      BUILD_COMMIT: ${{ needs.get-next-version.outputs.short-sha }}
-      OUTPUT_FILENAME: ${{ needs.get-package-name.outputs.package-name }}-${{ needs.get-next-version.outputs.release-version }}.tar.gz
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ env.PYTHON_RUNTIME_VERSION }}
-      - name: Build sdist package
-        run: |
-          python3 -m pip install --upgrade build
-          python3 -m build --sdist --outdir dist/
-      - name: Replace underscores with hyphens in build filename
-        run: |
-          BUILD_FILENAME=$(ls dist/ | grep tar.gz)
-          mv dist/$BUILD_FILENAME dist/${{ env.OUTPUT_FILENAME }}
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ env.OUTPUT_FILENAME }}
-          path: dist/${{ env.OUTPUT_FILENAME }}
-          retention-days: 30
-          if-no-files-found: error
-      - name: Publish release distributions to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: dist
   release:
-    name: Release
-    needs: [ get-next-version, get-release-notes, build ]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    steps:
-      - uses: actions/checkout@v4
-      - name: Create release
-        id: create_release
-        uses: actions/create-release@latest
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: v${{ needs.get-next-version.outputs.release-version }}
-          release_name: ${{ needs.get-next-version.outputs.release-version }}
-          body: ${{ needs.get-release-notes.outputs.release-notes }}
-          draft: false
+    uses: netboxlabs/public-workflows/.github/workflows/reusable-plugin-release.yml@develop
+    with:
+      plugin_package_name: netboxlabs-netbox-branching
+      plugin_package_dir: netbox_branching
+      release_notes_from_pr_body: true
+    secrets: inherit
