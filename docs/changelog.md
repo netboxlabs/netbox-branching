@@ -1,5 +1,13 @@
 # Change Log
 
+## v0.5.2
+
+### Bug Fixes
+
+* [#163](https://github.com/netboxlabs/netbox-branching/issues/163) - Ensure changelog records for non-branching models are created in main schema
+
+---
+
 ## v0.5.1
 
 ### Enhancements
