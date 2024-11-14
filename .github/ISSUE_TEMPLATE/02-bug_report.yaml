@@ -25,9 +25,8 @@ body:
     attributes:
       label: Steps to Reproduce
       description: >
-        Describe in detail the exact steps that someone else can take to reproduce
-        this bug. A numbered list of discrete steps is strongly preferred. Remember
-        to capture the creation of any objects which must exist to reproduce the
+        Describe in detail the exact steps that someone else can take to reproduce this bug. A numbered list of discrete
+        steps is strongly preferred. Remember to capture the creation of any objects which must exist to reproduce the
         behavior.
       placeholder: |
         1. Click on "create widget"
@@ -45,7 +44,7 @@ body:
   - type: textarea
     attributes:
       label: Observed Behavior
-      description: What happened instead?
+      description: What happened instead? Be sure to include any error messages.
       placeholder: A TypeError exception was raised
     validations:
       required: true
