@@ -1,6 +1,6 @@
 ---
 name: ✨ Feature Request
-description: Propose a new NetBox feature or enhancement
+description: Propose a new feature or enhancement
 labels: ["type: feature"]
 body:
   - type: input
@@ -13,21 +13,21 @@ body:
     attributes:
       label: Proposed functionality
       description: >
-        Describe in detail the new feature or behavior you are proposing. Include any specific changes
-        to work flows, data models, and/or the user interface. The more detail you provide here, the
-        greater chance your proposal has of being discussed.
+        Describe in detail the new feature or behavior you are proposing. Include any specific changes to work flows,
+        data models, and/or the user interface. The more detail you provide here, the greater chance your proposal has
+        of being discussed.
     validations:
       required: true
   - type: textarea
     attributes:
       label: Use case
       description: >
-        Explain how adding this functionality would benefit users. What need does it address?
+        Explain how adding this functionality would benefit users. What specific need(s) does it address?
     validations:
       required: true
   - type: textarea
     attributes:
       label: External dependencies
       description: >
-        List any new dependencies on external libraries or services that this new feature would
-        introduce. For example, does the proposal require the installation of a new Python package?
+        List any new dependencies on external libraries or services that this new feature would introduce. For example,
+        does the proposal require the installation of a new Python package?
