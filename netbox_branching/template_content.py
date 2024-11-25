@@ -1,4 +1,5 @@
 from django.contrib.contenttypes.models import ContentType
+from extras.models.scripts import Script
 from netbox.plugins import PluginTemplateExtension
 
 from .choices import BranchStatusChoices
@@ -34,6 +35,12 @@ class BranchNotification(PluginTemplateExtension):
     def alerts(self):
         if not (instance := self.context['object']):
             return ''
+
+        if type(instance) == Script:
+            return self.render('netbox_branching/inc/script_branch.html', extra_context={
+                'active_branch': active_branch.get(),
+            })
+
         ct = ContentType.objects.get_for_model(instance)
         relevant_changes = ChangeDiff.objects.filter(
             object_type=ct,
