@@ -38,7 +38,13 @@ PLUGINS = [
 ]
 ```
 
-5. Create `local_settings.py` (in the same directory as `settings.py`) to override the `DATABASES` & `DATABASE_ROUTERS` settings. This enables dynamic schema support.
+5. Add `BRANCHING_BACKEND` to `configuration.py`.
+
+```python
+BRANCHING_BACKEND = 'netbox_branching.backends.BranchingBackend'
+```
+
+6. Create `local_settings.py` (in the same directory as `settings.py`) to override the `DATABASES` & `DATABASE_ROUTERS` settings. This enables dynamic schema support.
 
 ```python
 from netbox_branching.utilities import DynamicSchemaDict
@@ -55,7 +61,7 @@ DATABASE_ROUTERS = [
 ]
 ```
 
-6. Run NetBox migrations:
+7. Run NetBox migrations:
 
 ```
 $ ./manage.py migrate
