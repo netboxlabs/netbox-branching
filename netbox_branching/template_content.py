@@ -36,7 +36,7 @@ class BranchNotification(PluginTemplateExtension):
         if not (instance := self.context['object']):
             return ''
 
-        if type(instance) == Script:
+        if isinstance(instance, Script):
             return self.render('netbox_branching/inc/script_branch.html', extra_context={
                 'active_branch': active_branch.get(),
             })
