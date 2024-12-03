@@ -7,12 +7,14 @@ from django.utils.translation import gettext_lazy as _
 from core.choices import ObjectChangeActionChoices
 from core.filtersets import ObjectChangeFilterSet
 from core.models import ObjectChange
+from netbox_branching.contextvars import active_branch
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
 from .jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
+from .utilities import activate_branch
 
 
 #
@@ -73,6 +75,15 @@ class BranchEditView(generic.ObjectEditView):
         if not obj.pk:
             obj.owner = request.user
         return obj
+
+    def post(self, request, **kwargs):
+        # if creating and there is an active branch - switch to main
+        obj = self.get_object(**kwargs)
+        if not obj.pk and active_branch.get():
+            with activate_branch(None):
+                return super().post(request, **kwargs)
+
+        return super().post(request, **kwargs)
 
 
 @register_model_view(Branch, 'delete')
