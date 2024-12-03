@@ -65,6 +65,9 @@ class BranchTable(NetBoxTable):
     schema_id = tables.TemplateColumn(
         template_code='<span class="font-monospace">{{ value }}</code>'
     )
+    tags = columns.TagColumn(
+        url_name='plugins:netbox_branching:branch_list'
+    )
 
     class Meta(NetBoxTable.Meta):
         model = Branch
