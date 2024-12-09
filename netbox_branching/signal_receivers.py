@@ -38,18 +38,6 @@ def record_change_diff(instance, **kwargs):
     object_type = instance.changed_object_type
     object_id = instance.changed_object_id
 
-    qs = ChangeDiff.objects.all()
-    from django.contrib.contenttypes.models import ContentType
-    from dcim.models import Site
-
-    if qs:
-        for diff in qs:
-            print(f"{diff.id}: {diff.object_type} - {diff.object_id} - {diff.object} - {diff.object_repr}")
-            ct = ContentType.objects.get(app_label=diff.object_type.app_label, model=diff.object_type.model)
-            print(f"ct: {ct}")
-            site = Site.objects.get(id=diff.object_id)
-            print(f"site: {site}")
-
     # If this type of object does not support branching, return immediately.
     if object_type.model not in registry['model_features']['branching'].get(object_type.app_label, []):
         return
@@ -73,6 +61,7 @@ def record_change_diff(instance, **kwargs):
 
     # If this is a branch-aware change, create or update ChangeDiff for this object.
     else:
+
         # Updating the existing ChangeDiff
         if diff := ChangeDiff.objects.filter(object_type=object_type, object_id=object_id, branch=branch).first():
             logger.debug(f"Updating branch change diff for change to {instance.changed_object}")
