@@ -1,28 +1,29 @@
 import datetime
 import logging
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
 from django.contrib import messages
-from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import ForeignKey, ManyToManyField
 from django.http import HttpResponseBadRequest
 from django.urls import reverse
 
 from netbox.plugins import get_plugin_config
 from netbox.registry import registry
+from netbox.utils import register_request_processor
 from .choices import BranchStatusChoices
-from .constants import EXEMPT_MODELS, INCLUDE_MODELS
-from .constants import COOKIE_NAME, BRANCH_HEADER, QUERY_PARAM
+from .constants import BRANCH_HEADER, COOKIE_NAME, EXEMPT_MODELS, INCLUDE_MODELS, QUERY_PARAM
 from .contextvars import active_branch
 
 __all__ = (
     'ChangeSummary',
     'DynamicSchemaDict',
     'ListHandler',
+    'ActiveBranchContextManager',
     'activate_branch',
     'deactivate_branch',
+    'get_active_branch',
     'get_branchable_object_types',
     'get_tables_to_replicate',
     'is_api_request',
@@ -250,3 +251,10 @@ def get_active_branch(request):
     # Branch set by cookie
     elif schema_id := request.COOKIES.get(COOKIE_NAME):
         return Branch.objects.filter(schema_id=schema_id, status=BranchStatusChoices.READY).first()
+
+
+@register_request_processor
+def ActiveBranchContextManager(request):
+    if branch := get_active_branch(request):
+        return activate_branch(branch)
+    return nullcontext()

@@ -38,13 +38,7 @@ PLUGINS = [
 ]
 ```
 
-5. Add `SCRIPT_CONTEXT_MANAGERS` to `configuration.py`.
-
-```python
-SCRIPT_CONTEXT_MANAGERS = ['netbox_branching.script_context_manager.NetBoxScriptContextManager',]
-```
-
-6. Create `local_settings.py` (in the same directory as `settings.py`) to override the `DATABASES` & `DATABASE_ROUTERS` settings. This enables dynamic schema support.
+5. Create `local_settings.py` (in the same directory as `settings.py`) to override the `DATABASES` & `DATABASE_ROUTERS` settings. This enables dynamic schema support.
 
 ```python
 from netbox_branching.utilities import DynamicSchemaDict
@@ -61,7 +55,7 @@ DATABASE_ROUTERS = [
 ]
 ```
 
-7. Run NetBox migrations:
+6. Run NetBox migrations:
 
 ```
 $ ./manage.py migrate
