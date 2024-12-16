@@ -255,6 +255,9 @@ def get_active_branch(request):
 
 @register_request_processor
 def ActiveBranchContextManager(request):
+    """
+    Activate a branch if indicated by the request.
+    """
     if branch := get_active_branch(request):
         return activate_branch(branch)
     return nullcontext()

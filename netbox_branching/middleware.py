@@ -22,8 +22,7 @@ class BranchMiddleware:
         except ObjectDoesNotExist:
             return HttpResponseBadRequest("Invalid branch identifier")
 
-        with activate_branch(branch):
-            response = self.get_response(request)
+        response = self.get_response(request)
 
         # Set/clear the branch cookie (for non-API requests)
         if not is_api_request(request):
