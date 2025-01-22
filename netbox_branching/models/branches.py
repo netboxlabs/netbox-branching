@@ -352,7 +352,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     sync.alters_data = True
 
-    def merge(self, user, commit=True):
+    def merge(self, user, commit=True, squash=None):
         """
         Apply all changes in the Branch to the main schema by replaying them in
         chronological order.
@@ -386,14 +386,23 @@ class Branch(JobsMixin, PrimaryModel):
         handler = partial(record_applied_change, branch=self)
         post_save.connect(handler, sender=ObjectChange_, weak=False)
 
+        # Squash selected changes
+        squash_data = {}
+        for change in squash or []:
+            if predecessor := change.predecessor:
+                squash_data[predecessor.pk] = change.postchange_data_clean
+
         try:
             with transaction.atomic():
                 # Apply each change from the Branch
                 for change in changes:
+                    # Skip squashed changes
+                    if change in squash:
+                        continue
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
-                        change.apply(using=DEFAULT_DB_ALIAS, logger=logger)
+                        change.apply(using=DEFAULT_DB_ALIAS, logger=logger, extra_data=squash_data.get(change.pk, {}))
                 if not commit:
                     raise AbortTransaction()
 

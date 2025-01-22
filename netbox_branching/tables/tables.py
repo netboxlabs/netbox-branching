@@ -12,6 +12,7 @@ __all__ = (
     'ChangeDiffTable',
     'BranchTable',
     'ChangesTable',
+    'MergeChangesTable',
 )
 
 
@@ -174,4 +175,18 @@ class ChangesTable(NetBoxTable):
         model = ObjectChange
         fields = (
             'pk', 'time', 'action', 'model', 'changed_object_type', 'object_repr', 'request_id', 'before', 'after',
+        )
+
+
+class MergeChangesTable(ChangesTable):
+    squash = columns.ToggleColumn(
+        accessor=tables.A('pk'),
+        visible=True,
+        verbose_name=_('Squash')
+    )
+
+    class Meta(NetBoxTable.Meta):
+        model = ObjectChange
+        fields = (
+            'pk', 'time', 'changed_object_type', 'object_repr', 'before', 'after', 'squash',
         )

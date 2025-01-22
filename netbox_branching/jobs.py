@@ -98,7 +98,7 @@ class MergeBranchJob(JobRunner):
     class Meta:
         name = 'Merge branch'
 
-    def run(self, commit=True, *args, **kwargs):
+    def run(self, commit=True, squash=None, *args, **kwargs):
         # Initialize logging
         logger = logging.getLogger('netbox_branching.branch.merge')
         logger.setLevel(logging.DEBUG)
@@ -107,7 +107,7 @@ class MergeBranchJob(JobRunner):
         # Merge the Branch
         try:
             branch = self.job.object
-            branch.merge(user=self.job.user, commit=commit)
+            branch.merge(user=self.job.user, commit=commit, squash=squash)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
 

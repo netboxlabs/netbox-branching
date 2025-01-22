@@ -1,6 +1,7 @@
 {% extends 'generic/_base.html' %}
 {% load form_helpers %}
 {% load i18n %}
+{% load render_table from django_tables2 %}
 
 {% block title %}{% trans action %} {{ branch }}{% endblock %}
 
@@ -15,6 +16,7 @@
 {% endblock tabs %}
 
 {% block content %}
+  {{ form.errors }}
   {# Form tab #}
   <div class="tab-pane show active" id="action-form" role="tabpanel" aria-labelledby="action-form-tab">
     {% if not action_permitted %}
@@ -41,6 +43,7 @@
     {% endif %}
     <form action="" method="post" enctype="multipart/form-data">
       {% csrf_token %}
+      {% render_table table %}
       {% if conflicts_table.rows %}
         <div class="card">
           <div class="htmx-container table-responsive" id="object_list">

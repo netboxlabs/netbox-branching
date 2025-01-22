@@ -195,6 +195,7 @@ class BaseBranchActionView(generic.ObjectView):
             'form': form,
             'action_permitted': action_permitted,
             'conflicts_table': self._get_conflicts_table(branch),
+            **self.get_extra_context(request, instance=branch)
         })
 
     def post(self, request, **kwargs):
@@ -215,6 +216,7 @@ class BaseBranchActionView(generic.ObjectView):
             'form': form,
             'action_permitted': action_permitted,
             'conflicts_table': self._get_conflicts_table(branch),
+            **self.get_extra_context(request, instance=branch)
         })
 
 
@@ -237,13 +239,24 @@ class BranchSyncView(BaseBranchActionView):
 @register_model_view(Branch, 'merge')
 class BranchMergeView(BaseBranchActionView):
     action = 'merge'
+    form = forms.BranchMergeForm
+
+    def get_extra_context(self, request, instance):
+        changes_table = tables.MergeChangesTable(
+            instance.get_unmerged_changes().order_by('time')
+        )
+
+        return {
+            'table': changes_table,
+        }
 
     def do_action(self, branch, request, form):
         # Enqueue a background job to merge the Branch
         MergeBranchJob.enqueue(
             instance=branch,
             user=request.user,
-            commit=form.cleaned_data['commit']
+            commit=form.cleaned_data['commit'],
+            squash=form.cleaned_data['squash']
         )
         messages.success(request, _("Merging of branch {branch} in progress").format(branch=branch))
 

@@ -27,7 +27,18 @@ class ObjectChange(ObjectChange_):
     class Meta:
         proxy = True
 
-    def apply(self, using=DEFAULT_DB_ALIAS, logger=None):
+    @cached_property
+    def predecessor(self):
+        """
+        Return the previous change record for this object, if any.
+        """
+        return self.__class__.objects.using(self._state.db).filter(
+            changed_object_type=self.changed_object_type,
+            changed_object_id=self.changed_object_id,
+            pk__lt=self.pk
+        ).order_by('-pk').first()
+
+    def apply(self, using=DEFAULT_DB_ALIAS, logger=None, extra_data={}):
         """
         Apply the change using the specified database connection.
         """
@@ -37,15 +48,17 @@ class ObjectChange(ObjectChange_):
 
         # Creating a new object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
-            instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
+            data = {**self.postchange_data, **extra_data}
+            instance = deserialize_object(model, data, pk=self.changed_object_id)
             logger.debug(f'Creating {model._meta.verbose_name} {instance}')
             instance.object.full_clean()
             instance.save(using=using)
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
+            data = {**self.diff()['post'], **extra_data}
             instance = model.objects.using(using).get(pk=self.changed_object_id)
-            update_object(instance, self.diff()['post'], using=using)
+            update_object(instance, data, using=using)
 
         # Deleting an object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:

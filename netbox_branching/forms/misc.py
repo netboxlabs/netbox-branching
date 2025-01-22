@@ -1,10 +1,11 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from netbox_branching.models import ChangeDiff
+from netbox_branching.models import ChangeDiff, ObjectChange
 
 __all__ = (
     'BranchActionForm',
+    'BranchMergeForm',
     'ConfirmationForm',
 )
 
@@ -40,6 +41,18 @@ class BranchActionForm(forms.Form):
             raise forms.ValidationError(_("All conflicts must be acknowledged in order to merge the branch."))
 
         return self.cleaned_data
+
+
+class BranchMergeForm(BranchActionForm):
+    squash = forms.ModelMultipleChoiceField(
+        queryset=ObjectChange.objects.all(),
+        required=False
+    )
+
+    def __init__(self, branch, *args, allow_commit=True, **kwargs):
+        super().__init__(branch, *args, allow_commit=allow_commit, **kwargs)
+
+        self.fields['squash'].queryset = ObjectChange.objects.using(branch.connection_name)
 
 
 class ConfirmationForm(forms.Form):
