@@ -8,6 +8,7 @@ from django.db import DEFAULT_DB_ALIAS
 
 from netbox_branching.models import Branch
 
+from utilities.exceptions import AbortTransaction
 
 def get_input_from_editor(editor, initial_data=''):
     """
@@ -41,7 +42,14 @@ class Command(BaseCommand):
 
         self.stdout.write(f"Merging branch {branch}")
 
-        branch.merge(user=None, commit=options['commit'], merge_func=self._apply_change)
+        try:
+            branch.merge(user=None, commit=options['commit'], merge_func=self._apply_change)
+        except AbortTransaction as e:
+            if not options['commit']:
+                self.stdout.write(f"Commit not set: {branch} merge cancelled")
+            
+
+
 
     def _apply_change(self, change, logger):
         """
@@ -73,6 +81,9 @@ class Command(BaseCommand):
                 del change.__dict__['postchange_data_clean']
 
             self._apply_change(change, logger)
+        except ObjectDoesNotExist as e:
+            self.stdout.write(f"Skipping change {change.id}:{change.object_repr} due to deleted object in main")
+
 
     def get_user_selection(self, options):
         """
