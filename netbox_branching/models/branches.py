@@ -352,7 +352,11 @@ class Branch(JobsMixin, PrimaryModel):
 
     sync.alters_data = True
 
-    def merge(self, user, commit=True):
+    @staticmethod
+    def _apply_change(change, logger):
+        change.apply(using=DEFAULT_DB_ALIAS, logger=logger)
+
+    def merge(self, user, commit=True, merge_func=_apply_change):
         """
         Apply all changes in the Branch to the main schema by replaying them in
         chronological order.
@@ -393,7 +397,7 @@ class Branch(JobsMixin, PrimaryModel):
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
-                        change.apply(using=DEFAULT_DB_ALIAS, logger=logger)
+                        merge_func(change, logger)
                 if not commit:
                     raise AbortTransaction()
 
