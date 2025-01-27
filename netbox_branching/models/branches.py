@@ -128,6 +128,16 @@ class Branch(JobsMixin, PrimaryModel):
     def get_status_color(self):
         return BranchStatusChoices.colors.get(self.status)
 
+    def clone(self):
+        """
+        Override CloningMixin's clone() method to nullify active branch and set origin ID.
+        """
+        return {
+            '_branch': '',
+            'origin': self.pk,
+            **super().clone(),
+        }
+
     @cached_property
     def is_active(self):
         return self == active_branch.get()
@@ -410,6 +420,60 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info('Syncing completed')
 
     sync.alters_data = True
+
+    def replay(self, logger=None):
+        """
+        Replay changes from the originating Branch onto this Branch.
+        """
+        logger = logger or logging.getLogger('netbox_branching.branch.replay')
+
+        if not self.origin:
+            raise Exception(f"Cannot replay changes onto branch {self}: No origin branch is defined.")
+        logger.info(f'Replaying changes from branch {self.origin} onto branch {self} ({self.schema_name})')
+
+        if not self.ready:
+            raise Exception(f"Branch {self} is not ready for replay")
+
+        # Fetch changes to apply from originating Branch
+        changes = ObjectChange.objects.using(self.origin.connection_name).filter(
+            changed_object_type__in=get_branchable_object_types(),
+            pk__gt=self.origin_ptr or 0
+        ).order_by('pk')
+        if changes:
+            logger.info(f"Found {len(changes)} changes to replay")
+        else:
+            logger.info(f"No changes found; aborting.")
+            return
+
+        # Create a dummy request for the event_tracking() context manager
+        request = RequestFactory().get(reverse('home'))
+
+        # Apply each change from the origin schema
+        try:
+            with activate_branch(self):
+                with event_tracking(request):
+                    for change in changes:
+                        request.id = change.request_id
+                        request.user = change.user
+                        change.apply(using=self.connection_name, logger=logger)
+                        self.origin_ptr = change.pk
+
+        except Exception as e:
+            if err_message := str(e):
+                logger.error(err_message)
+            # Restore original branch status
+            active_branch.set(None)
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY, origin_ptr=self.origin_ptr)
+
+        # Record the branch's last_synced time & update its status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
+        self.last_sync = timezone.now()
+        self.status = BranchStatusChoices.READY
+        self.save()
+
+        logger.info('Replay completed')
+
+    replay.alters_data = True
 
     def merge(self, user, commit=True):
         """
