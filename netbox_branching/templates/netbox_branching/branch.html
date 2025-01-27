@@ -73,6 +73,16 @@
             </td>
           </tr>
           <tr>
+            <th scope="row">{% trans "Origin" %}</th>
+            <td>
+              {% if object.origin %}
+                {{ object.origin|linkify }} ({{ object.origin_ptr }})
+              {% else %}
+                {{ ''|placeholder }}
+              {% endif %}
+            </td>
+          </tr>
+          <tr>
             <th scope="row">{% trans "Owner" %}</th>
             <td>{{ object.owner }}</td>
           </tr>

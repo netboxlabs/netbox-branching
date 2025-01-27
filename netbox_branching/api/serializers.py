@@ -4,7 +4,7 @@ from rest_framework import serializers
 from core.choices import ObjectChangeActionChoices
 from netbox.api.exceptions import SerializerNotFound
 from netbox.api.fields import ChoiceField, ContentTypeField
-from netbox.api.serializers import NetBoxModelSerializer
+from netbox.api.serializers import NetBoxModelSerializer, WritableNestedSerializer
 from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.models import ChangeDiff, Branch, BranchEvent
 from users.api.serializers import UserSerializer
@@ -15,7 +15,25 @@ __all__ = (
     'BranchEventSerializer',
     'ChangeDiffSerializer',
     'CommitSerializer',
+    'NestedBranchSerializer',
 )
+
+
+class NestedBranchSerializer(WritableNestedSerializer):
+    url = serializers.HyperlinkedIdentityField(
+        view_name='plugins-api:netbox_branching-api:branch-detail'
+    )
+    status = ChoiceField(
+        choices=BranchStatusChoices
+    )
+    owner = UserSerializer(
+        nested=True,
+        read_only=True
+    )
+
+    class Meta:
+        model = Branch
+        fields = ['id', 'url', 'display_url', 'display', 'name', 'status', 'owner', 'description']
 
 
 class BranchSerializer(NetBoxModelSerializer):
@@ -24,6 +42,12 @@ class BranchSerializer(NetBoxModelSerializer):
     )
     owner = UserSerializer(
         nested=True,
+        read_only=True
+    )
+    origin = NestedBranchSerializer(
+        read_only=True
+    )
+    origin_ptr = serializers.IntegerField(
         read_only=True
     )
     merged_by = UserSerializer(
@@ -37,8 +61,8 @@ class BranchSerializer(NetBoxModelSerializer):
     class Meta:
         model = Branch
         fields = [
-            'id', 'url', 'display', 'name', 'status', 'owner', 'description', 'schema_id', 'last_sync', 'merged_time',
-            'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated',
+            'id', 'url', 'display', 'name', 'origin', 'origin_ptr', 'status', 'owner', 'description', 'schema_id',
+            'last_sync', 'merged_time', 'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated',
         ]
         brief_fields = ('id', 'url', 'display', 'name', 'status', 'description')
 

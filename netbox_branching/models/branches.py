@@ -50,6 +50,19 @@ class Branch(JobsMixin, PrimaryModel):
         null=True,
         related_name='branches'
     )
+    origin = models.ForeignKey(
+        to='self',
+        on_delete=models.PROTECT,
+        blank=True,
+        null=True,
+        related_name='clones',
+        help_text=_("The branch from which this branch was cloned.")
+    )
+    origin_ptr = models.PositiveBigIntegerField(
+        blank=True,
+        null=True,
+        help_text=_("The last successfully applied change from the original branch.")
+    )
     schema_id = models.CharField(
         max_length=8,
         unique=True,

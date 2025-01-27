@@ -59,6 +59,13 @@ class BranchTable(NetBoxTable):
     status = columns.ChoiceFieldColumn(
         verbose_name=_('Status'),
     )
+    origin = tables.Column(
+        linkify=True,
+        verbose_name=_('Origin')
+    )
+    origin_ptr = tables.Column(
+        verbose_name=_('Origin Pointer')
+    )
     conflicts = ConflictsColumn(
         verbose_name=_('Conflicts')
     )
@@ -72,11 +79,11 @@ class BranchTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = Branch
         fields = (
-            'pk', 'id', 'name', 'is_active', 'status', 'conflicts', 'schema_id', 'description', 'owner', 'tags',
-            'created', 'last_updated',
+            'pk', 'id', 'name', 'is_active', 'status', 'origin', 'origin_ptr', 'conflicts', 'schema_id', 'description',
+            'owner', 'tags', 'created', 'last_updated',
         )
         default_columns = (
-            'pk', 'name', 'is_active', 'status', 'owner', 'conflicts', 'schema_id', 'description',
+            'pk', 'name', 'is_active', 'status', 'origin', 'owner', 'conflicts', 'schema_id', 'description',
         )
 
     def render_is_active(self, value):
