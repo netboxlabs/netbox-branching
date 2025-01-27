@@ -21,6 +21,16 @@ class BranchFilterSet(NetBoxModelFilterSet):
         choices=BranchStatusChoices,
         null_value=None
     )
+    origin_id = django_filters.ModelMultipleChoiceFilter(
+        queryset=Branch.objects.all(),
+        label=_('Origin (ID)'),
+    )
+    origin = django_filters.ModelMultipleChoiceFilter(
+        field_name='origin__schema_id',
+        queryset=Branch.objects.all(),
+        to_field_name='schema_id',
+        label=_('Origin (schema ID)'),
+    )
     last_sync = filters.MultiValueDateTimeFilter()
 
     class Meta:
