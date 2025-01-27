@@ -38,9 +38,14 @@ class ProvisionBranchJob(JobRunner):
         logger.setLevel(logging.DEBUG)
         logger.addHandler(ListHandler(queue=get_job_log(self.job)))
 
-        # Provision the Branch
+        # Provision the Branch by copying the main schema
         branch = self.job.object
         branch.provision(user=self.job.user)
+        branch.refresh_from_db()
+
+        # If the Branch specifies an origin, replay changes from it
+        if branch.origin:
+            branch.replay(logger=logger)
 
 
 class SyncBranchJob(JobRunner):
