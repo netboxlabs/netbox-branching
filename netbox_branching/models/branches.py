@@ -459,8 +459,11 @@ class Branch(JobsMixin, PrimaryModel):
                         self.origin_ptr = change.pk
 
         except Exception as e:
-            if err_message := str(e):
-                logger.error(err_message)
+            # Record the replay failure
+            logger.error(str(e))
+            logger.debug(f"Recording branch event: {BranchEventTypeChoices.REPLAY_FAILED}")
+            BranchEvent.objects.create(branch=self, type=BranchEventTypeChoices.REPLAY_FAILED)
+
             # Restore original branch status
             active_branch.set(None)
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY, origin_ptr=self.origin_ptr)
