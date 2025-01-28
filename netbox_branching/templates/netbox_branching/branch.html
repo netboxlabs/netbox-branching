@@ -24,6 +24,7 @@
   {% endif %}
   {% if object.ready %}
     {% branch_sync_button object %}
+    {% branch_replay_button object %}
     {% branch_merge_button object %}
   {% endif %}
   {% if object.merged %}
@@ -76,7 +77,8 @@
             <th scope="row">{% trans "Origin" %}</th>
             <td>
               {% if object.origin %}
-                {{ object.origin|linkify }} ({{ object.origin_ptr }})
+                {{ object.origin|linkify }} ({{ object.origin_ptr }})<br />
+                <a href="{% url 'plugins:netbox_branching:branch_replay_queue' pk=object.pk %}" class="fs-5">{{ object.get_replay_queue.count }} changes to replay</a>
               {% else %}
                 {{ ''|placeholder }}
               {% endif %}

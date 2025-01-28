@@ -1,10 +1,12 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
+from core.models import ObjectChange
 from netbox_branching.models import ChangeDiff
 
 __all__ = (
     'BranchActionForm',
+    'BranchReplayForm',
     'ConfirmationForm',
 )
 
@@ -40,6 +42,19 @@ class BranchActionForm(forms.Form):
             raise forms.ValidationError(_("All conflicts must be acknowledged in order to merge the branch."))
 
         return self.cleaned_data
+
+
+class BranchReplayForm(BranchActionForm):
+    # TODO: Populate via REST API
+    start = forms.ModelChoiceField(
+        queryset=ObjectChange.objects.all(),
+        required=False
+    )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.fields['start'].queryset = self.branch.get_replay_queue()
 
 
 class ConfirmationForm(forms.Form):

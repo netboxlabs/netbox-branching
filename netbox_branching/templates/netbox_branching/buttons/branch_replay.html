@@ -1,0 +1,6 @@
+{% load i18n %}
+{% if branch.origin %}
+  <a href="{% url 'plugins:netbox_branching:branch_replay' pk=branch.pk %}" class="btn btn-primary">
+    <i class="mdi mdi-replay"></i> {% trans "Replay" %}
+  </a>
+{% endif %}

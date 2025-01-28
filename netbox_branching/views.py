@@ -11,7 +11,7 @@ from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
-from .jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
+from .jobs import MergeBranchJob, ReplayBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
 
 
@@ -85,6 +85,24 @@ def _get_diff_count(obj):
     return ChangeDiff.objects.filter(branch=obj).count()
 
 
+@register_model_view(Branch, name='replay_queue', path='replay-queue')
+class BranchReplayQueueView(generic.ObjectChildrenView):
+    queryset = Branch.objects.all()
+    child_model = ObjectChange
+    filterset = ObjectChangeFilterSet
+    table = tables.ReplayTable
+    actions = {}
+    tab = ViewTab(
+        label=_('Replay Queue'),
+        badge=lambda obj: obj.get_replay_queue().count(),
+        permission='netbox_branching.view_branch',
+        hide_if_empty=True
+    )
+
+    def get_children(self, request, parent):
+        return parent.get_replay_queue().order_by('time')
+
+
 @register_model_view(Branch, 'diff')
 class BranchDiffView(generic.ObjectChildrenView):
     queryset = Branch.objects.all()
@@ -136,10 +154,6 @@ class BranchChangesAheadView(generic.ObjectChildrenView):
         return parent.get_unmerged_changes().order_by('time')
 
 
-def _get_change_count(obj):
-    return obj.get_unmerged_changes().count()
-
-
 @register_model_view(Branch, 'changes-merged')
 class BranchChangesMergedView(generic.ObjectChildrenView):
     queryset = Branch.objects.all()
@@ -187,7 +201,7 @@ class BaseBranchActionView(generic.ObjectView):
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
         action_permitted = getattr(branch, f'can_{self.action}')
-        form = self.form(branch, allow_commit=action_permitted)
+        form = self.form(branch, allow_commit=action_permitted, initial=request.GET)
 
         return render(request, self.template_name, {
             'branch': branch,
@@ -195,6 +209,7 @@ class BaseBranchActionView(generic.ObjectView):
             'form': form,
             'action_permitted': action_permitted,
             'conflicts_table': self._get_conflicts_table(branch),
+            **self.get_extra_context(request, branch),
         })
 
     def post(self, request, **kwargs):
@@ -215,6 +230,7 @@ class BaseBranchActionView(generic.ObjectView):
             'form': form,
             'action_permitted': action_permitted,
             'conflicts_table': self._get_conflicts_table(branch),
+            **self.get_extra_context(request, branch),
         })
 
 
@@ -230,6 +246,27 @@ class BranchSyncView(BaseBranchActionView):
             commit=form.cleaned_data['commit']
         )
         messages.success(request, _("Syncing of branch {branch} in progress").format(branch=branch))
+
+        return redirect(branch.get_absolute_url())
+
+
+@register_model_view(Branch, 'replay')
+class BranchReplayView(BaseBranchActionView):
+    action = 'replay'
+    form = forms.BranchReplayForm
+    template_name = 'netbox_branching/branch_replay.html'
+
+    def do_action(self, branch, request, form):
+        # Enqueue a background job to replay changes from origin onto the Branch
+        ReplayBranchJob.enqueue(
+            instance=branch,
+            user=request.user,
+            start=form.cleaned_data['start'],
+            commit=form.cleaned_data['commit']
+        )
+        messages.success(request, _("Replaying changes from branch {branch.origin} onto {branch}").format(
+            branch=branch
+        ))
 
         return redirect(branch.get_absolute_url())
 
