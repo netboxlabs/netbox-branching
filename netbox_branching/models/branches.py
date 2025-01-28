@@ -235,6 +235,17 @@ class Branch(JobsMixin, PrimaryModel):
             time__gt=self.synced_time
         )
 
+    def get_replay_queue(self):
+        """
+        Return a queryset of all ObjectChange records from the origin Branch which have yet to be replayed onto
+        this Branch.
+        """
+        if not self.origin:
+            return ObjectChange.objects.none()
+        return ObjectChange.objects.using(self.origin.connection_name).filter(
+            pk__gt=self.origin_ptr or 0
+        ).order_by('pk')
+
     def get_unmerged_changes(self):
         """
         Return a queryset of all unmerged ObjectChange records within the Branch schema.
@@ -290,6 +301,14 @@ class Branch(JobsMixin, PrimaryModel):
         Indicates whether the branch can be synced.
         """
         return self._can_do_action('sync')
+
+    @property
+    def can_replay(self):
+        """
+        Indicates whether changes from origin can be replayed.
+        """
+        # TODO: Determine how to evaluate this
+        return True
 
     @property
     def can_merge(self):
@@ -375,7 +394,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     sync.alters_data = True
 
-    def replay(self, logger=None):
+    def replay(self, user, commit=True, start=None, logger=None):
         """
         Replay changes from the originating Branch onto this Branch.
         """
@@ -389,9 +408,15 @@ class Branch(JobsMixin, PrimaryModel):
             raise Exception(f"Branch {self} is not ready for replay")
 
         # Fetch changes to apply from originating Branch
+        if start:
+            start_pk = start.pk
+        elif self.origin_ptr:
+            start_pk = self.origin_ptr + 1
+        else:
+            start_pk = 0
         changes = ObjectChange.objects.using(self.origin.connection_name).filter(
             changed_object_type__in=get_branchable_object_types(),
-            pk__gt=self.origin_ptr or 0
+            pk__gte=start_pk
         ).order_by('pk')
         if changes:
             logger.info(f"Found {len(changes)} changes to replay")
@@ -411,16 +436,21 @@ class Branch(JobsMixin, PrimaryModel):
                         request.user = change.user
                         change.apply(using=self.connection_name, logger=logger)
                         self.origin_ptr = change.pk
+                    if not commit:
+                        raise AbortTransaction()
 
         except Exception as e:
-            # Record the replay failure
-            logger.error(str(e))
-            logger.debug(f"Recording branch event: {BranchEventTypeChoices.REPLAY_FAILED}")
-            BranchEvent.objects.create(branch=self, type=BranchEventTypeChoices.REPLAY_FAILED)
-
             # Restore original branch status
             active_branch.set(None)
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY, origin_ptr=self.origin_ptr)
+
+            if type(e) is AbortTransaction:
+                raise e
+
+            # Record the replay failure
+            logger.error(str(e))
+            logger.debug(f"Recording branch event: {BranchEventTypeChoices.REPLAY_FAILED}")
+            BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.REPLAY_FAILED)
 
         # Record the branch's last_synced time & update its status
         logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
