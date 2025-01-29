@@ -1,12 +1,11 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from core.models import ObjectChange
-from netbox_branching.models import ChangeDiff
+from netbox_branching.models import Branch, ChangeDiff
 
 __all__ = (
     'BranchActionForm',
-    'BranchMergeForm',
+    'BranchPullForm',
     'ConfirmationForm',
 )
 
@@ -14,7 +13,8 @@ __all__ = (
 class BranchActionForm(forms.Form):
     pk = forms.ModelMultipleChoiceField(
         queryset=ChangeDiff.objects.all(),
-        required=False
+        required=False,
+        widget=forms.HiddenInput()
     )
     commit = forms.BooleanField(
         required=False,
@@ -44,17 +44,20 @@ class BranchActionForm(forms.Form):
         return self.cleaned_data
 
 
-class BranchMergeForm(BranchActionForm):
-    # TODO: Populate via REST API
-    start = forms.ModelChoiceField(
-        queryset=ObjectChange.objects.all(),
-        required=False
+class BranchPullForm(BranchActionForm):
+    source = forms.ModelChoiceField(
+        queryset=Branch.objects.all()
     )
+    # start = forms.ModelChoiceField(
+    #     queryset=ObjectChange.objects.all(),
+    #     required=False
+    # )
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
 
-        self.fields['start'].queryset = self.branch.get_replay_queue()
+        self.fields['source'].queryset = Branch.objects.exclude(pk=self.branch.pk)
+        # self.fields['start'].queryset = self.branch.get_replay_queue()
 
 
 class ConfirmationForm(forms.Form):

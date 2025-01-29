@@ -12,6 +12,10 @@ The time at which the event occurred.
 
 The [branch](./branch.md) to which this event pertains.
 
+### Related Branch
+
+The related branch affected by this event, where applicable. (This is relevant only when one branch is merged into another.)
+
 ### User
 
 The NetBox user responsible for triggering this event. This field may be null if the event was triggered by an internal process.

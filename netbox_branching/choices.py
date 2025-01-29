@@ -43,6 +43,7 @@ class BranchStatusChoices(ChoiceSet):
 class BranchEventTypeChoices(ChoiceSet):
     PROVISIONED = 'provisioned'
     SYNCED = 'synced'
+    PULLED = 'pulled'
     MERGED = 'merged'
     REVERTED = 'reverted'
     ARCHIVED = 'archived'
@@ -50,6 +51,7 @@ class BranchEventTypeChoices(ChoiceSet):
     CHOICES = (
         (PROVISIONED, _('Provisioned'), 'green'),
         (SYNCED, _('Synced'), 'cyan'),
+        (PULLED, _('Pulled'), 'blue'),
         (MERGED, _('Merged'), 'blue'),
         (REVERTED, _('Reverted'), 'orange'),
         (ARCHIVED, _('Archived'), 'gray'),

@@ -1,10 +1,11 @@
 from django import template
 
 __all__ = (
-    'branch_sync_button',
-    'branch_merge_button',
-    'branch_revert_button',
     'branch_archive_button',
+    'branch_merge_button',
+    'branch_pull_button',
+    'branch_revert_button',
+    'branch_sync_button',
 )
 
 register = template.Library()
@@ -12,6 +13,14 @@ register = template.Library()
 
 @register.inclusion_tag('netbox_branching/buttons/branch_sync.html', takes_context=True)
 def branch_sync_button(context, branch):
+    return {
+        'branch': branch,
+        'perms': context.get('perms'),
+    }
+
+
+@register.inclusion_tag('netbox_branching/buttons/branch_pull.html', takes_context=True)
+def branch_pull_button(context, branch):
     return {
         'branch': branch,
         'perms': context.get('perms'),

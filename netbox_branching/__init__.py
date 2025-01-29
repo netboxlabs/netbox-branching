@@ -33,6 +33,7 @@ class AppConfig(PluginConfig):
 
         # Branch action validators
         'sync_validators': [],
+        'pull_validators': [],
         'merge_validators': [],
         'revert_validators': [],
         'archive_validators': [],
