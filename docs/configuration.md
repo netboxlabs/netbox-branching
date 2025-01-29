@@ -66,7 +66,15 @@ Note that a valid prefix is required, as the randomly-generated branch ID alone 
 
 Default: `[]` (empty list)
 
-A list of import paths to functions which validate whether a branch is permitted to be synced.
+A list of import paths to functions which validate whether a branch is permitted to be synced from main.
+
+---
+
+## `pull_validators`
+
+Default: `[]` (empty list)
+
+A list of import paths to functions which validate whether changes from other branches can be pulled into a branch.
 
 ---
 
@@ -74,7 +82,7 @@ A list of import paths to functions which validate whether a branch is permitted
 
 Default: `[]` (empty list)
 
-A list of import paths to functions which validate whether a branch is permitted to be merged.
+A list of import paths to functions which validate whether a branch is permitted to be merged into main.
 
 ---
 
@@ -82,7 +90,7 @@ A list of import paths to functions which validate whether a branch is permitted
 
 Default: `[]` (empty list)
 
-A list of import paths to functions which validate whether a branch is permitted to be reverted.
+A list of import paths to functions which validate whether a previously merged branch is permitted to be reverted.
 
 ---
 

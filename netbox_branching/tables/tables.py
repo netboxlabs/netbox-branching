@@ -183,33 +183,3 @@ class ChangesTable(NetBoxTable):
         fields = (
             'pk', 'time', 'action', 'model', 'changed_object_type', 'object_repr', 'request_id', 'before', 'after',
         )
-
-
-# class ReplayTable(NetBoxTable):
-#     time = columns.DateTimeColumn(
-#         verbose_name=_('Time'),
-#         timespec='minutes',
-#         linkify=True
-#     )
-#     action = columns.ChoiceFieldColumn(
-#         verbose_name=_('Action'),
-#     )
-#     changed_object_type = columns.ContentTypeColumn(
-#         verbose_name=_('Type')
-#     )
-#     object_repr = tables.TemplateColumn(
-#         accessor=tables.A('changed_object'),
-#         template_code=OBJECTCHANGE_OBJECT,
-#         verbose_name=_('Object'),
-#         orderable=False
-#     )
-#     actions = columns.ActionsColumn(
-#         actions=(),
-#         extra_buttons=REPLAY_CHANGE
-#     )
-#
-#     class Meta(NetBoxTable.Meta):
-#         model = ObjectChange
-#         fields = (
-#             'pk', 'time', 'action', 'changed_object_type', 'object_repr',
-#         )

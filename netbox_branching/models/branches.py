@@ -118,7 +118,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     def clone(self):
         """
-        Override CloningMixin's clone() method to nullify active branch and set origin ID.
+        Override CloningMixin's clone() method to nullify active branch and populate clone_from field.
         """
         return {
             '_branch': '',
@@ -191,6 +191,7 @@ class Branch(JobsMixin, PrimaryModel):
                 user=request.user if request else None
             )
 
+            # If cloning from an existing Branch, also enqueue a PullBranchJob
             if clone_source := getattr(self, '_clone_source', None):
                 PullBranchJob.enqueue(
                     instance=self,
@@ -459,7 +460,7 @@ class Branch(JobsMixin, PrimaryModel):
         if not source.ready:
             raise Exception(f"Changes cannot be pulled from branch {source} at this time.")
         if commit and not self.can_pull:
-            raise Exception("Pulling this branch is not permitted.")
+            raise Exception("Pulling changes to this branch is not permitted.")
 
         # Emit pre-pull signal
         pre_pull.send(sender=self.__class__, branch=self, user=user)
@@ -505,7 +506,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     def merge(self, user, commit=True):
         """
-        Apply all changes from this Branch to the target Branch (or to the main schema) by replaying them in
+        Apply all changes in the Branch to the main schema by replaying them in
         chronological order.
         """
         logger = logging.getLogger('netbox_branching.branch.merge')
