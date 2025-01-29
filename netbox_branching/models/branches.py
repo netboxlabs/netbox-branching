@@ -425,10 +425,6 @@ class Branch(JobsMixin, PrimaryModel):
         # Create a dummy request for the event_tracking() context manager
         request = RequestFactory().get(reverse('home'))
 
-        # Prep & connect the signal receiver for recording AppliedChanges
-        handler = partial(record_applied_change, branch=self)
-        post_save.connect(handler, sender=ObjectChange_, weak=False)
-
         try:
             with transaction.atomic():
                 # Apply each change from the Branch
@@ -443,8 +439,7 @@ class Branch(JobsMixin, PrimaryModel):
         except Exception as e:
             if err_message := str(e):
                 logger.error(err_message)
-            # Disconnect signal receiver & restore original branch status
-            post_save.disconnect(handler, sender=ObjectChange_)
+            # Restore original branch status
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
             raise e
 
@@ -456,9 +451,6 @@ class Branch(JobsMixin, PrimaryModel):
         post_pull.send(sender=self.__class__, branch=self, user=user)
 
         logger.info('Pull completed')
-
-        # Disconnect the signal receiver
-        post_save.disconnect(handler, sender=ObjectChange_)
 
     pull.alters_data = True
 
