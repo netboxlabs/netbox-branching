@@ -77,6 +77,11 @@ class BranchEventSerializer(NetBoxModelSerializer):
         nested=True,
         read_only=True
     )
+    related_branch = BranchSerializer(
+        nested=True,
+        read_only=True,
+        allow_null=True
+    )
     user = UserSerializer(
         nested=True,
         read_only=True
@@ -89,7 +94,7 @@ class BranchEventSerializer(NetBoxModelSerializer):
     class Meta:
         model = BranchEvent
         fields = [
-            'id', 'url', 'display', 'time', 'branch', 'user', 'type',
+            'id', 'url', 'display', 'time', 'branch', 'related_branch', 'user', 'type',
         ]
         brief_fields = ('id', 'url', 'display')
 

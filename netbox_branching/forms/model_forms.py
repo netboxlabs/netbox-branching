@@ -12,10 +12,10 @@ __all__ = (
 
 class BranchForm(NetBoxModelForm):
     fieldsets = (
-        FieldSet('name', 'origin', 'description', 'tags'),
+        FieldSet('name', 'clone_from', 'description', 'tags'),
     )
-    origin = DynamicModelChoiceField(
-        label=_('Origin'),
+    clone_from = DynamicModelChoiceField(
+        label=_('Clone from'),
         queryset=Branch.objects.all(),
         required=False
     )
@@ -23,11 +23,11 @@ class BranchForm(NetBoxModelForm):
 
     class Meta:
         model = Branch
-        fields = ('name', 'origin', 'description', 'comments', 'tags')
+        fields = ('name', 'clone_from', 'description', 'comments', 'tags')
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
+    def save(self, *args, **kwargs):
 
-        if self.instance.pk:
-            # Originating branch is cannot be modified
-            self.fields['origin'].disabled = True
+        if clone_from := self.cleaned_data.get('clone_from'):
+            self.instance._clone_from = clone_from
+
+        return super().save(*args, **kwargs)
