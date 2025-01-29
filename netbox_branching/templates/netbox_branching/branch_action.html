@@ -50,7 +50,9 @@
       {% endif %}
       <div class="row">
         <div class="col col-6 offset-3">
-          {% render_form form %}
+          <div id="form_fields" hx-disinherit="hx-select hx-swap">
+            {% render_form form %}
+          </div>
           <div class="text-center my-3">
             <a href="{{ branch.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
             <button type="submit" name="_update" class="btn btn-primary">

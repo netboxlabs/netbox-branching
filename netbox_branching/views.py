@@ -241,10 +241,11 @@ class BranchPullView(BaseBranchActionView):
         # Enqueue a background job to replay changes from origin onto the Branch
         PullBranchJob.enqueue(
             instance=branch,
+            user=request.user,
             source=form.cleaned_data['source'],
             atomic=form.cleaned_data['atomic'],
-            user=request.user,
-            # start=form.cleaned_data['start'],
+            start=form.cleaned_data['start'],
+            end=form.cleaned_data['end'],
             commit=form.cleaned_data['commit']
         )
         messages.success(request, _("Pulling changes from branch {source} onto {branch}").format(
