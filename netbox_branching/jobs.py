@@ -33,7 +33,7 @@ class ProvisionBranchJob(JobRunner):
     class Meta:
         name = 'Provision branch'
 
-    def run(self, origin=None, *args, **kwargs):
+    def run(self, *args, **kwargs):
         # Initialize logging
         logger = logging.getLogger('netbox_branching.branch.provision')
         logger.setLevel(logging.DEBUG)
@@ -42,7 +42,6 @@ class ProvisionBranchJob(JobRunner):
         # Provision the Branch by copying the main schema
         branch = self.job.object
         branch.provision(user=self.job.user)
-        branch.refresh_from_db()
 
 
 class SyncBranchJob(JobRunner):

@@ -4,7 +4,7 @@ from rest_framework import serializers
 from core.choices import ObjectChangeActionChoices
 from netbox.api.exceptions import SerializerNotFound
 from netbox.api.fields import ChoiceField, ContentTypeField
-from netbox.api.serializers import NetBoxModelSerializer, WritableNestedSerializer
+from netbox.api.serializers import NetBoxModelSerializer
 from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.models import ChangeDiff, Branch, BranchEvent
 from users.api.serializers import UserSerializer
@@ -15,25 +15,7 @@ __all__ = (
     'BranchEventSerializer',
     'ChangeDiffSerializer',
     'CommitSerializer',
-    'NestedBranchSerializer',
 )
-
-
-class NestedBranchSerializer(WritableNestedSerializer):
-    url = serializers.HyperlinkedIdentityField(
-        view_name='plugins-api:netbox_branching-api:branch-detail'
-    )
-    status = ChoiceField(
-        choices=BranchStatusChoices
-    )
-    owner = UserSerializer(
-        nested=True,
-        read_only=True
-    )
-
-    class Meta:
-        model = Branch
-        fields = ['id', 'url', 'display_url', 'display', 'name', 'status', 'owner', 'description']
 
 
 class BranchSerializer(NetBoxModelSerializer):
