@@ -7,13 +7,11 @@ from netbox.tables import NetBoxTable, columns
 from netbox_branching.models import Branch, ChangeDiff
 from utilities.templatetags.builtins.filters import placeholder
 from .columns import ConflictsColumn, DiffColumn
-from .template_code import *
 
 __all__ = (
     'ChangeDiffTable',
     'BranchTable',
     'ChangesTable',
-    'ReplayTable',
 )
 
 
@@ -61,13 +59,6 @@ class BranchTable(NetBoxTable):
     status = columns.ChoiceFieldColumn(
         verbose_name=_('Status'),
     )
-    origin = tables.Column(
-        linkify=True,
-        verbose_name=_('Origin')
-    )
-    origin_ptr = tables.Column(
-        verbose_name=_('Origin Pointer')
-    )
     conflicts = ConflictsColumn(
         verbose_name=_('Conflicts')
     )
@@ -81,11 +72,11 @@ class BranchTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = Branch
         fields = (
-            'pk', 'id', 'name', 'is_active', 'status', 'origin', 'origin_ptr', 'conflicts', 'schema_id', 'description',
-            'owner', 'tags', 'created', 'last_updated',
+            'pk', 'id', 'name', 'is_active', 'status', 'conflicts', 'schema_id', 'description', 'owner', 'tags',
+            'created', 'last_updated',
         )
         default_columns = (
-            'pk', 'name', 'is_active', 'status', 'origin', 'owner', 'conflicts', 'schema_id', 'description',
+            'pk', 'name', 'is_active', 'status', 'owner', 'conflicts', 'schema_id', 'description',
         )
 
     def render_is_active(self, value):
@@ -186,31 +177,31 @@ class ChangesTable(NetBoxTable):
         )
 
 
-class ReplayTable(NetBoxTable):
-    time = columns.DateTimeColumn(
-        verbose_name=_('Time'),
-        timespec='minutes',
-        linkify=True
-    )
-    action = columns.ChoiceFieldColumn(
-        verbose_name=_('Action'),
-    )
-    changed_object_type = columns.ContentTypeColumn(
-        verbose_name=_('Type')
-    )
-    object_repr = tables.TemplateColumn(
-        accessor=tables.A('changed_object'),
-        template_code=OBJECTCHANGE_OBJECT,
-        verbose_name=_('Object'),
-        orderable=False
-    )
-    actions = columns.ActionsColumn(
-        actions=(),
-        extra_buttons=REPLAY_CHANGE
-    )
-
-    class Meta(NetBoxTable.Meta):
-        model = ObjectChange
-        fields = (
-            'pk', 'time', 'action', 'changed_object_type', 'object_repr',
-        )
+# class ReplayTable(NetBoxTable):
+#     time = columns.DateTimeColumn(
+#         verbose_name=_('Time'),
+#         timespec='minutes',
+#         linkify=True
+#     )
+#     action = columns.ChoiceFieldColumn(
+#         verbose_name=_('Action'),
+#     )
+#     changed_object_type = columns.ContentTypeColumn(
+#         verbose_name=_('Type')
+#     )
+#     object_repr = tables.TemplateColumn(
+#         accessor=tables.A('changed_object'),
+#         template_code=OBJECTCHANGE_OBJECT,
+#         verbose_name=_('Object'),
+#         orderable=False
+#     )
+#     actions = columns.ActionsColumn(
+#         actions=(),
+#         extra_buttons=REPLAY_CHANGE
+#     )
+#
+#     class Meta(NetBoxTable.Meta):
+#         model = ObjectChange
+#         fields = (
+#             'pk', 'time', 'action', 'changed_object_type', 'object_repr',
+#         )

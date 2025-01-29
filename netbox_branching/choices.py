@@ -46,7 +46,6 @@ class BranchEventTypeChoices(ChoiceSet):
     MERGED = 'merged'
     REVERTED = 'reverted'
     ARCHIVED = 'archived'
-    REPLAY_FAILED = 'replay-failed'
 
     CHOICES = (
         (PROVISIONED, _('Provisioned'), 'green'),
@@ -54,5 +53,4 @@ class BranchEventTypeChoices(ChoiceSet):
         (MERGED, _('Merged'), 'blue'),
         (REVERTED, _('Reverted'), 'orange'),
         (ARCHIVED, _('Archived'), 'gray'),
-        (REPLAY_FAILED, _('Replay failed'), 'red'),
     )

@@ -44,12 +44,6 @@ class BranchSerializer(NetBoxModelSerializer):
         nested=True,
         read_only=True
     )
-    origin = NestedBranchSerializer(
-        read_only=True
-    )
-    origin_ptr = serializers.IntegerField(
-        read_only=True
-    )
     merged_by = UserSerializer(
         nested=True,
         read_only=True
@@ -61,8 +55,8 @@ class BranchSerializer(NetBoxModelSerializer):
     class Meta:
         model = Branch
         fields = [
-            'id', 'url', 'display', 'name', 'origin', 'origin_ptr', 'status', 'owner', 'description', 'schema_id',
-            'last_sync', 'merged_time', 'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated',
+            'id', 'url', 'display', 'name', 'status', 'owner', 'description', 'schema_id', 'last_sync', 'merged_time',
+            'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated',
         ]
         brief_fields = ('id', 'url', 'display', 'name', 'status', 'description')
 
