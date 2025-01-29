@@ -10,7 +10,6 @@ from .utilities import ListHandler
 __all__ = (
     'MergeBranchJob',
     'ProvisionBranchJob',
-    'ReplayBranchJob',
     'RevertBranchJob',
     'SyncBranchJob',
 )
@@ -33,7 +32,7 @@ class ProvisionBranchJob(JobRunner):
     class Meta:
         name = 'Provision branch'
 
-    def run(self, *args, **kwargs):
+    def run(self, origin=None, *args, **kwargs):
         # Initialize logging
         logger = logging.getLogger('netbox_branching.branch.provision')
         logger.setLevel(logging.DEBUG)
@@ -45,8 +44,8 @@ class ProvisionBranchJob(JobRunner):
         branch.refresh_from_db()
 
         # If the Branch specifies an origin, replay changes from it
-        if branch.origin:
-            branch.replay(user=self.job.user, logger=logger)
+        if origin:
+            origin.merge(target=branch, user=self.job.user)
 
 
 class SyncBranchJob(JobRunner):
@@ -95,27 +94,6 @@ class SyncBranchJob(JobRunner):
 
         # Reconnect signal handlers
         self._reconnect_signal_receivers()
-
-
-class ReplayBranchJob(JobRunner):
-    """
-    Replay changes from an origin branch onto a Branch.
-    """
-    class Meta:
-        name = 'Replay branch'
-
-    def run(self, commit=True, start=None, *args, **kwargs):
-        # Initialize logging
-        logger = logging.getLogger('netbox_branching.branch.replay')
-        logger.setLevel(logging.DEBUG)
-        logger.addHandler(ListHandler(queue=get_job_log(self.job)))
-
-        # Replay changes
-        try:
-            branch = self.job.object
-            branch.replay(user=self.job.user, commit=commit, start=start)
-        except AbortTransaction:
-            logger.info("Dry run completed; rolling back changes")
 
 
 class MergeBranchJob(JobRunner):

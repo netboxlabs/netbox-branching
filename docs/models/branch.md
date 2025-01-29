@@ -32,14 +32,6 @@ The current status of the branch. This must be one of the following values.
 | Archived     | A merged branch which has been deprovisioned in the database      |
 | Failed       | Provisioning the schema for this branch has failed                |
 
-### Origin
-
-The branch from which this branch was cloned (if any).
-
-### Origin Pointer
-
-The last change record belonging to the origin branch successfully applied to this branch.
-
 ### Last Sync
 
 The time at which this branch was most recently synchronized with main. This value will be null if the branch has never been synchronized.

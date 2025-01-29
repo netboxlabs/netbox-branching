@@ -11,7 +11,7 @@ from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
-from .jobs import MergeBranchJob, ReplayBranchJob, RevertBranchJob, SyncBranchJob
+from .jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
 
 
@@ -83,24 +83,6 @@ class BranchDeleteView(generic.ObjectDeleteView):
 
 def _get_diff_count(obj):
     return ChangeDiff.objects.filter(branch=obj).count()
-
-
-@register_model_view(Branch, name='replay_queue', path='replay-queue')
-class BranchReplayQueueView(generic.ObjectChildrenView):
-    queryset = Branch.objects.all()
-    child_model = ObjectChange
-    filterset = ObjectChangeFilterSet
-    table = tables.ReplayTable
-    actions = {}
-    tab = ViewTab(
-        label=_('Replay Queue'),
-        badge=lambda obj: obj.get_replay_queue().count(),
-        permission='netbox_branching.view_branch',
-        hide_if_empty=True
-    )
-
-    def get_children(self, request, parent):
-        return parent.get_replay_queue().order_by('time')
 
 
 @register_model_view(Branch, 'diff')
@@ -250,30 +232,10 @@ class BranchSyncView(BaseBranchActionView):
         return redirect(branch.get_absolute_url())
 
 
-@register_model_view(Branch, 'replay')
-class BranchReplayView(BaseBranchActionView):
-    action = 'replay'
-    form = forms.BranchReplayForm
-    template_name = 'netbox_branching/branch_replay.html'
-
-    def do_action(self, branch, request, form):
-        # Enqueue a background job to replay changes from origin onto the Branch
-        ReplayBranchJob.enqueue(
-            instance=branch,
-            user=request.user,
-            start=form.cleaned_data['start'],
-            commit=form.cleaned_data['commit']
-        )
-        messages.success(request, _("Replaying changes from branch {branch.origin} onto {branch}").format(
-            branch=branch
-        ))
-
-        return redirect(branch.get_absolute_url())
-
-
 @register_model_view(Branch, 'merge')
 class BranchMergeView(BaseBranchActionView):
     action = 'merge'
+    form = forms.BranchMergeForm
 
     def do_action(self, branch, request, form):
         # Enqueue a background job to merge the Branch

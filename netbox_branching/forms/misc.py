@@ -6,7 +6,7 @@ from netbox_branching.models import ChangeDiff
 
 __all__ = (
     'BranchActionForm',
-    'BranchReplayForm',
+    'BranchMergeForm',
     'ConfirmationForm',
 )
 
@@ -44,7 +44,7 @@ class BranchActionForm(forms.Form):
         return self.cleaned_data
 
 
-class BranchReplayForm(BranchActionForm):
+class BranchMergeForm(BranchActionForm):
     # TODO: Populate via REST API
     start = forms.ModelChoiceField(
         queryset=ObjectChange.objects.all(),

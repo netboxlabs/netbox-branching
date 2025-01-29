@@ -56,19 +56,6 @@ class Branch(JobsMixin, PrimaryModel):
         null=True,
         related_name='branches'
     )
-    origin = models.ForeignKey(
-        to='self',
-        on_delete=models.PROTECT,
-        blank=True,
-        null=True,
-        related_name='clones',
-        help_text=_("The branch from which this branch was cloned.")
-    )
-    origin_ptr = models.PositiveBigIntegerField(
-        blank=True,
-        null=True,
-        help_text=_("The last successfully applied change from the original branch.")
-    )
     schema_id = models.CharField(
         max_length=8,
         unique=True,
@@ -254,16 +241,16 @@ class Branch(JobsMixin, PrimaryModel):
             )
         return ObjectChange.objects.none()
 
-    def get_replay_queue(self):
-        """
-        Return a queryset of all ObjectChange records from the origin Branch which have yet to be replayed onto
-        this Branch.
-        """
-        if not self.origin:
-            return ObjectChange.objects.none()
-        return ObjectChange.objects.using(self.origin.connection_name).filter(
-            pk__gt=self.origin_ptr or 0
-        ).order_by('pk')
+    # def get_replay_queue(self):
+    #     """
+    #     Return a queryset of all ObjectChange records from the origin Branch which have yet to be replayed onto
+    #     this Branch.
+    #     """
+    #     if not self.origin:
+    #         return ObjectChange.objects.none()
+    #     return ObjectChange.objects.using(self.origin.connection_name).filter(
+    #         pk__gt=self.origin_ptr or 0
+    #     ).order_by('pk')
 
     def get_unmerged_changes(self):
         """
@@ -339,14 +326,6 @@ class Branch(JobsMixin, PrimaryModel):
         Indicates whether the branch can be synced.
         """
         return self._can_do_action('sync')
-
-    @cached_property
-    def can_replay(self):
-        """
-        Indicates whether changes from origin can be replayed.
-        """
-        # TODO: Determine how to evaluate this
-        return True
 
     @cached_property
     def can_merge(self):
@@ -440,73 +419,73 @@ class Branch(JobsMixin, PrimaryModel):
 
     sync.alters_data = True
 
-    def replay(self, user, commit=True, start=None, logger=None):
-        """
-        Replay changes from the originating Branch onto this Branch.
-        """
-        logger = logger or logging.getLogger('netbox_branching.branch.replay')
-
-        if not self.origin:
-            raise Exception(f"Cannot replay changes onto branch {self}: No origin branch is defined.")
-        logger.info(f'Replaying changes from branch {self.origin} onto branch {self} ({self.schema_name})')
-
-        if not self.ready:
-            raise Exception(f"Branch {self} is not ready for replay")
-
-        # Fetch changes to apply from originating Branch
-        if start:
-            start_pk = start.pk
-        elif self.origin_ptr:
-            start_pk = self.origin_ptr + 1
-        else:
-            start_pk = 0
-        changes = ObjectChange.objects.using(self.origin.connection_name).filter(
-            changed_object_type__in=get_branchable_object_types(),
-            pk__gte=start_pk
-        ).order_by('pk')
-        if changes:
-            logger.info(f"Found {len(changes)} changes to replay")
-        else:
-            logger.info("No changes found; aborting.")
-            return
-
-        # Create a dummy request for the event_tracking() context manager
-        request = RequestFactory().get(reverse('home'))
-
-        # Apply each change from the origin schema
-        try:
-            with activate_branch(self):
-                with event_tracking(request):
-                    for change in changes:
-                        request.id = change.request_id
-                        request.user = change.user
-                        change.apply(using=self.connection_name, logger=logger)
-                        self.origin_ptr = change.pk
-                    if not commit:
-                        raise AbortTransaction()
-
-        except Exception as e:
-            # Restore original branch status
-            active_branch.set(None)
-            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY, origin_ptr=self.origin_ptr)
-
-            if type(e) is AbortTransaction:
-                raise e
-
-            # Record the replay failure
-            logger.error(str(e))
-            logger.debug(f"Recording branch event: {BranchEventTypeChoices.REPLAY_FAILED}")
-            BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.REPLAY_FAILED)
-
-        # Record the branch's last_synced time & update its status
-        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
-        self.last_sync = timezone.now()
-        self.status = BranchStatusChoices.READY
-        self.save()
-
-        logger.info('Replay completed')
-
-    replay.alters_data = True
+    # def replay(self, user, commit=True, start=None, logger=None):
+    #     """
+    #     Replay changes from the originating Branch onto this Branch.
+    #     """
+    #     logger = logger or logging.getLogger('netbox_branching.branch.replay')
+    #
+    #     if not self.origin:
+    #         raise Exception(f"Cannot replay changes onto branch {self}: No origin branch is defined.")
+    #     logger.info(f'Replaying changes from branch {self.origin} onto branch {self} ({self.schema_name})')
+    #
+    #     if not self.ready:
+    #         raise Exception(f"Branch {self} is not ready for replay")
+    #
+    #     # Fetch changes to apply from originating Branch
+    #     if start:
+    #         start_pk = start.pk
+    #     elif self.origin_ptr:
+    #         start_pk = self.origin_ptr + 1
+    #     else:
+    #         start_pk = 0
+    #     changes = ObjectChange.objects.using(self.origin.connection_name).filter(
+    #         changed_object_type__in=get_branchable_object_types(),
+    #         pk__gte=start_pk
+    #     ).order_by('pk')
+    #     if changes:
+    #         logger.info(f"Found {len(changes)} changes to replay")
+    #     else:
+    #         logger.info(f"No changes found; aborting.")
+    #         return
+    #
+    #     # Create a dummy request for the event_tracking() context manager
+    #     request = RequestFactory().get(reverse('home'))
+    #
+    #     # Apply each change from the origin schema
+    #     try:
+    #         with activate_branch(self):
+    #             with event_tracking(request):
+    #                 for change in changes:
+    #                     request.id = change.request_id
+    #                     request.user = change.user
+    #                     change.apply(using=self.connection_name, logger=logger)
+    #                     self.origin_ptr = change.pk
+    #                 if not commit:
+    #                     raise AbortTransaction()
+    #
+    #     except Exception as e:
+    #         # Restore original branch status
+    #         active_branch.set(None)
+    #         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY, origin_ptr=self.origin_ptr)
+    #
+    #         if type(e) is AbortTransaction:
+    #             raise e
+    #
+    #         # Record the replay failure
+    #         logger.error(str(e))
+    #         logger.debug(f"Recording branch event: {BranchEventTypeChoices.REPLAY_FAILED}")
+    #         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.REPLAY_FAILED)
+    #
+    #     # Record the branch's last_synced time & update its status
+    #     logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
+    #     self.last_sync = timezone.now()
+    #     self.status = BranchStatusChoices.READY
+    #     self.save()
+    #
+    #     logger.info('Replay completed')
+    #
+    # replay.alters_data = True
 
     def merge(self, user, commit=True):
         """
