@@ -194,9 +194,9 @@ class Branch(JobsMixin, PrimaryModel):
             if clone_source := getattr(self, '_clone_source', None):
                 PullBranchJob.enqueue(
                     instance=self,
+                    user=request.user,
                     source=clone_source,
                     atomic=getattr(self, '_clone_atomic', True),
-                    user=request.user,
                     commit=True
                 )
 
@@ -269,7 +269,7 @@ class Branch(JobsMixin, PrimaryModel):
             )
         return ObjectChange.objects.none()
 
-    def get_unpulled_changes(self, source):
+    def get_unpulled_changes(self, source, start=None, end=None):
         """
         Return a queryset of all ObjectChange records from the source Branch which have yet to be replayed onto
         this Branch.
@@ -279,14 +279,16 @@ class Branch(JobsMixin, PrimaryModel):
 
         changes = ObjectChange.objects.using(source.connection_name).order_by('time')
 
-        # Return only the changes from this Branch which have not yet been pulled from the source Branch
-        last_pull = BranchEvent.objects.filter(
-            branch=self,
-            related_branch=source,
-            type=BranchEventTypeChoices.PULLED
-        ).order_by('-time').first()
-        if last_pull:
-            return changes.filter(time__gt=last_pull.time)
+        # Filter by starting change (if specified), or the time of the most recent pull event.
+        if start:
+            changes = changes.filter(pk__gte=start.pk)
+        elif last_pull := self.events.filter(related_branch=source, type=BranchEventTypeChoices.PULLED).first():
+            changes = changes.filter(time__gt=last_pull.time)
+
+        # Filter by end change (if specified)
+        if end:
+            changes = changes.filter(pk__lte=end.pk)
+
         return changes
 
     def get_event_history(self):
@@ -445,7 +447,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     sync.alters_data = True
 
-    def pull(self, source, user, atomic=True, commit=True):
+    def pull(self, source, user, atomic=True, start=None, end=None, commit=True):
         """
         Replicate all unpulled changes from the source branch into this one.
         """
@@ -463,7 +465,7 @@ class Branch(JobsMixin, PrimaryModel):
         pre_pull.send(sender=self.__class__, branch=self, user=user)
 
         # Retrieve staged changes before we update the Branch's status
-        if changes := self.get_unpulled_changes(source):
+        if changes := self.get_unpulled_changes(source, start=start, end=end):
             logger.info(f"Found {len(changes)} changes to pull")
         else:
             logger.info("No changes found; aborting.")

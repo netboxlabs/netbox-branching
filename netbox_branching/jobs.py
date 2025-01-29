@@ -121,7 +121,7 @@ class PullBranchJob(JobRunner):
     class Meta:
         name = 'Pull branch'
 
-    def run(self, source, atomic=True, commit=True, *args, **kwargs):
+    def run(self, **kwargs):
         # Initialize logging
         logger = logging.getLogger('netbox_branching.branch.pull')
         logger.setLevel(logging.DEBUG)
@@ -130,7 +130,7 @@ class PullBranchJob(JobRunner):
         # Pull changes from the source Branch
         try:
             branch = self.job.object
-            branch.pull(source, atomic=atomic, user=self.job.user, commit=commit)
+            branch.pull(user=self.job.user, **kwargs)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
 
