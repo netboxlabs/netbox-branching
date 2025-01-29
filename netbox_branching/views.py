@@ -236,13 +236,13 @@ class BranchSyncView(BaseBranchActionView):
 class BranchPullView(BaseBranchActionView):
     action = 'pull'
     form = forms.BranchPullForm
-    # template_name = 'netbox_branching/branch_pull.html'
 
     def do_action(self, branch, request, form):
         # Enqueue a background job to replay changes from origin onto the Branch
         PullBranchJob.enqueue(
             instance=branch,
             source=form.cleaned_data['source'],
+            atomic=form.cleaned_data['atomic'],
             user=request.user,
             # start=form.cleaned_data['start'],
             commit=form.cleaned_data['commit']

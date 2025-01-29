@@ -1,6 +1,7 @@
 import logging
 import random
 import string
+from contextlib import nullcontext
 from functools import cached_property, partial
 
 from django.conf import settings
@@ -184,10 +185,11 @@ class Branch(JobsMixin, PrimaryModel):
                 user=request.user if request else None
             )
 
-            if clone_from := getattr(self, '_clone_from', None):
+            if clone_source := getattr(self, '_clone_source', None):
                 PullBranchJob.enqueue(
                     instance=self,
-                    source=clone_from,
+                    source=clone_source,
+                    atomic=getattr(self, '_clone_atomic', True),
                     user=request.user,
                     commit=True
                 )
@@ -398,7 +400,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     sync.alters_data = True
 
-    def pull(self, source, user, commit=True):
+    def pull(self, source, user, atomic=True, commit=True):
         """
         Replicate all unpulled changes from the source branch into this one.
         """
@@ -409,8 +411,8 @@ class Branch(JobsMixin, PrimaryModel):
             raise Exception(f"Branch {self} is not ready for changes.")
         if not source.ready:
             raise Exception(f"Changes cannot be pulled from branch {source} at this time.")
-        # if commit and not self.can_pull:
-        #     raise Exception(f"Pulling this branch is not permitted.")
+        if commit and not self.can_pull:
+            raise Exception(f"Pulling this branch is not permitted.")
 
         # Emit pre-pull signal
         pre_pull.send(sender=self.__class__, branch=self, user=user)
@@ -426,7 +428,8 @@ class Branch(JobsMixin, PrimaryModel):
         request = RequestFactory().get(reverse('home'))
 
         try:
-            with transaction.atomic():
+            use_atomic = atomic or not commit
+            with transaction.atomic(using=self.connection_name) if use_atomic else nullcontext():
                 # Apply each change from the Branch
                 for change in changes:
                     with event_tracking(request):
@@ -439,9 +442,8 @@ class Branch(JobsMixin, PrimaryModel):
         except Exception as e:
             if err_message := str(e):
                 logger.error(err_message)
-            # Restore original branch status
-            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
-            raise e
+            if atomic:
+                raise e
 
         # Record a branch event for the merge
         logger.debug(f"Recording branch event: {BranchEventTypeChoices.PULLED}")
