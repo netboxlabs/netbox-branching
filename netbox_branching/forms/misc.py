@@ -48,10 +48,18 @@ class BranchPullForm(BranchActionForm):
     source = forms.ModelChoiceField(
         queryset=Branch.objects.all()
     )
+    atomic = forms.BooleanField(
+        label=_('Atomic'),
+        required=False,
+        initial=True,
+        help_text=_('Complete only if all changes from the source branch are applied successfully.')
+    )
     # start = forms.ModelChoiceField(
     #     queryset=ObjectChange.objects.all(),
     #     required=False
     # )
+
+    field_order = ('source', 'atomic', 'commit')
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
