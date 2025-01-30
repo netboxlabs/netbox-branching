@@ -11,7 +11,7 @@ menu = PluginMenu(
                 link_text=_('Branches'),
                 buttons=(
                     PluginMenuButton('plugins:netbox_branching:branch_add', _('Add'), 'mdi mdi-plus-thick'),
-                    PluginMenuButton('plugins:netbox_branching:branch_import', _('Import'), 'mdi mdi-upload'),
+                    PluginMenuButton('plugins:netbox_branching:branch_bulk_import', _('Import'), 'mdi mdi-upload'),
                 )
             ),
             PluginMenuItem(
