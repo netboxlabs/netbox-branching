@@ -1,7 +1,6 @@
 from django.contrib.contenttypes.models import ContentType
-from extras.models.scripts import Script
-from netbox.plugins import PluginTemplateExtension
 
+from netbox.plugins import PluginTemplateExtension
 from .choices import BranchStatusChoices
 from .contextvars import active_branch
 from .models import Branch, ChangeDiff
@@ -9,6 +8,8 @@ from .models import Branch, ChangeDiff
 __all__ = (
     'BranchNotification',
     'BranchSelector',
+    'ScriptNotification',
+    'ShareButton',
     'template_extensions',
 )
 
@@ -36,11 +37,6 @@ class BranchNotification(PluginTemplateExtension):
         if not (instance := self.context['object']):
             return ''
 
-        if isinstance(instance, Script):
-            return self.render('netbox_branching/inc/script_branch.html', extra_context={
-                'active_branch': active_branch.get(),
-            })
-
         ct = ContentType.objects.get_for_model(instance)
         relevant_changes = ChangeDiff.objects.filter(
             object_type=ct,
@@ -58,4 +54,18 @@ class BranchNotification(PluginTemplateExtension):
         })
 
 
-template_extensions = [BranchSelector, ShareButton, BranchNotification]
+class ScriptNotification(PluginTemplateExtension):
+    models = ['extras.script']
+
+    def alerts(self):
+        return self.render('netbox_branching/inc/script_alert.html', extra_context={
+            'active_branch': active_branch.get(),
+        })
+
+
+template_extensions = (
+    BranchSelector,
+    BranchNotification,
+    ScriptNotification,
+    ShareButton,
+)
