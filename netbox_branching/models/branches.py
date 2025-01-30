@@ -159,9 +159,6 @@ class Branch(JobsMixin, PrimaryModel):
 
         _provision = provision and self.pk is None
 
-        if active_branch.get():
-            raise AbortRequest(_("Cannot create or modify a branch while a branch is active."))
-
         super().save(*args, **kwargs)
 
         if _provision:
@@ -173,8 +170,8 @@ class Branch(JobsMixin, PrimaryModel):
             )
 
     def delete(self, *args, **kwargs):
-        if active_branch.get():
-            raise AbortRequest(_("Cannot delete a branch while a branch is active."))
+        if active_branch.get() == self:
+            raise AbortRequest(_("The active branch cannot be deleted."))
 
         # Deprovision the schema
         self.deprovision()
