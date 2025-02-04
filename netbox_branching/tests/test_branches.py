@@ -1,8 +1,10 @@
 import re
+from datetime import timedelta
 
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import TransactionTestCase, override_settings
+from django.utils import timezone
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import MAIN_SCHEMA
@@ -125,3 +127,18 @@ class BranchTestCase(TransactionTestCase):
         branch = Branch(name='Branch 4')
         with self.assertRaises(ValidationError):
             branch.full_clean()
+
+    @override_settings(CHANGELOG_RETENTION=10)
+    def test_is_stale(self):
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+
+        # Set creation time to 9 days in the past
+        branch.last_sync = timezone.now() - timedelta(days=9)
+        branch.save()
+        self.assertFalse(branch.is_stale)
+
+        # Set creation time to 11 days in the past
+        branch.last_sync = timezone.now() - timedelta(days=11)
+        branch.save()
+        self.assertTrue(branch.is_stale)
