@@ -1,6 +1,7 @@
 import logging
 import random
 import string
+from datetime import timedelta
 from functools import cached_property, partial
 
 from django.conf import settings
@@ -15,6 +16,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from core.models import ObjectChange as ObjectChange_
+from netbox.config import get_config
 from netbox.context import current_request
 from netbox.context_managers import event_tracking
 from netbox.models import PrimaryModel
@@ -121,7 +123,7 @@ class Branch(JobsMixin, PrimaryModel):
     def connection_name(self):
         return f'schema_{self.schema_name}'
 
-    @cached_property
+    @property
     def synced_time(self):
         return self.last_sync or self.created
 
@@ -240,6 +242,16 @@ class Branch(JobsMixin, PrimaryModel):
             last_time = event.time
         return history
 
+    @property
+    def is_stale(self):
+        """
+        Indicates whether the branch is too far out of date to be synced.
+        """
+        if not (changelog_retention := get_config().CHANGELOG_RETENTION):
+            # Changelog retention is disabled
+            return False
+        return self.synced_time < timezone.now() - timedelta(days=changelog_retention)
+
     def sync(self, user, commit=True):
         """
         Apply changes from the main schema onto the Branch's schema.
@@ -249,6 +261,8 @@ class Branch(JobsMixin, PrimaryModel):
 
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to sync")
+        if self.is_stale:
+            raise Exception(f"Branch {self} is stale and can no longer be synced")
 
         # Emit pre-sync signal
         pre_sync.send(sender=self.__class__, branch=self, user=user)

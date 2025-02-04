@@ -82,11 +82,24 @@
           </tr>
           <tr>
             <th scope="row">{% trans "Last synced" %}</th>
-            <td>{{ object.synced_time|isodatetime }}</td>
+            <td>
+              {{ object.synced_time|isodatetime }}
+              {% if object.is_stale %}
+                <span class="text-danger" title="{% trans "Branch is stale and can no longer be synced" %}">
+                  <i class="mdi mdi-alert-circle"></i>
+                </span>
+              {% endif %}
+              <div class="small text-muted">{{ object.synced_time|timesince }} {% trans "ago" %}</div>
+            </td>
           </tr>
           <tr>
             <th scope="row">{% trans "Last activity" %}</th>
-            <td>{{ latest_change.time|isodatetime|placeholder }}</td>
+            <td>
+              {{ latest_change.time|isodatetime|placeholder }}
+              {% if latest_change %}
+                <div class="small text-muted">{{ latest_change.time|timesince }} {% trans "ago" %}</div>
+              {% endif %}
+            </td>
           </tr>
           <tr>
             <th scope="row">{% trans "Conflicts" %}</th>
