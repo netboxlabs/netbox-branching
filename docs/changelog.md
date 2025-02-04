@@ -1,5 +1,19 @@
 # Change Log
 
+## v0.5.3
+
+### Enhancements
+
+* [#209](https://github.com/netboxlabs/netbox-branching/issues/209) - Prevent merging branches whose `last_sync` time exceeds the configured changelog retention window
+
+### Bug Fixes
+
+* [#87](https://github.com/netboxlabs/netbox-branching/issues/87) - Deactivate the active branch (if any) when creating a new branch
+* [#148](https://github.com/netboxlabs/netbox-branching/issues/148) - Fix `IntegrityError` exception raised when executing custom scripts within a branch
+* [#178](https://github.com/netboxlabs/netbox-branching/issues/178) - Fix display of assigned tags in the branches list
+
+---
+
 ## v0.5.2
 
 ### Bug Fixes
