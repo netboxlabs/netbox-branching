@@ -1,6 +1,7 @@
 import logging
 import random
 import string
+from datetime import timedelta
 from functools import cached_property, partial
 
 from django.conf import settings
@@ -16,6 +17,7 @@ from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
 from core.models import ObjectChange as ObjectChange_
+from netbox.config import get_config
 from netbox.context import current_request
 from netbox.context_managers import event_tracking
 from netbox.models import PrimaryModel
@@ -123,7 +125,7 @@ class Branch(JobsMixin, PrimaryModel):
     def connection_name(self):
         return f'schema_{self.schema_name}'
 
-    @cached_property
+    @property
     def synced_time(self):
         return self.last_sync or self.created
 
@@ -161,9 +163,6 @@ class Branch(JobsMixin, PrimaryModel):
 
         _provision = provision and self.pk is None
 
-        if active_branch.get():
-            raise AbortRequest(_("Cannot create or modify a branch while a branch is active."))
-
         super().save(*args, **kwargs)
 
         if _provision:
@@ -175,8 +174,8 @@ class Branch(JobsMixin, PrimaryModel):
             )
 
     def delete(self, *args, **kwargs):
-        if active_branch.get():
-            raise AbortRequest(_("Cannot delete a branch while a branch is active."))
+        if active_branch.get() == self:
+            raise AbortRequest(_("The active branch cannot be deleted."))
 
         # Deprovision the schema
         self.deprovision()
@@ -245,6 +244,16 @@ class Branch(JobsMixin, PrimaryModel):
             last_time = event.time
         return history
 
+    @property
+    def is_stale(self):
+        """
+        Indicates whether the branch is too far out of date to be synced.
+        """
+        if not (changelog_retention := get_config().CHANGELOG_RETENTION):
+            # Changelog retention is disabled
+            return False
+        return self.synced_time < timezone.now() - timedelta(days=changelog_retention)
+
     #
     # Branch action indicators
     #
@@ -302,6 +311,8 @@ class Branch(JobsMixin, PrimaryModel):
 
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to sync")
+        if self.is_stale:
+            raise Exception(f"Branch {self} is stale and can no longer be synced")
         if commit and not self.can_sync:
             raise Exception(f"Syncing this branch is not permitted.")
 

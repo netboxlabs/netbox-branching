@@ -56,8 +56,16 @@ class BranchTable(NetBoxTable):
         verbose_name=_('Name'),
         linkify=True
     )
+    is_active = columns.BooleanColumn(
+        verbose_name=_('Active')
+    )
     status = columns.ChoiceFieldColumn(
-        verbose_name=_('Status'),
+        verbose_name=_('Status')
+    )
+    is_stale = columns.BooleanColumn(
+        true_mark=mark_safe('<span class="text-danger"><i class="mdi mdi-alert-circle"></i></span>'),
+        false_mark=None,
+        verbose_name=_('Stale')
     )
     conflicts = ConflictsColumn(
         verbose_name=_('Conflicts')
@@ -72,11 +80,11 @@ class BranchTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = Branch
         fields = (
-            'pk', 'id', 'name', 'is_active', 'status', 'conflicts', 'schema_id', 'description', 'owner', 'tags',
-            'created', 'last_updated',
+            'pk', 'id', 'name', 'is_active', 'status', 'is_stale', 'conflicts', 'schema_id', 'description', 'owner',
+            'tags', 'created', 'last_updated',
         )
         default_columns = (
-            'pk', 'name', 'is_active', 'status', 'owner', 'conflicts', 'schema_id', 'description',
+            'pk', 'name', 'is_active', 'status', 'is_stale', 'owner', 'conflicts', 'schema_id', 'description',
         )
 
     def render_is_active(self, value):

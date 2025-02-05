@@ -1,0 +1,8 @@
+{% load i18n %}
+{% if active_branch %}
+  <div class="alert alert-warning" role="alert">
+    <i class="mdi mdi-alert"></i>
+    {% trans "This script will be run in branch" %}
+      <a href="{{ active_branch.get_absolute_url }}">{{ active_branch.name }}</a>
+  </div>
+{% endif %}

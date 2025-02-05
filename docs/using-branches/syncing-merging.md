@@ -6,6 +6,9 @@ Synchronizing a branch replicates all recent changes from main into the branch. 
 
 To synchronize a branch, click the "Sync" button. (If this button is not visible, verify that the branch status shows "ready" and that you have permission to synchronize the branch.)
 
+!!! warning
+    A branch must be synchronized frequently enough to avoid exceeding NetBox's configured [changelog retention period](https://netboxlabs.com/docs/netbox/en/stable/configuration/miscellaneous/#changelog_retention) (which defaults to 90 days). This is to protect against data loss when replicating changes from main. A branch whose `last_sync` time exceeds the configured retention window can no longer be synced.
+
 While a branch is being synchronized, its status will show "synchronizing."
 
 !!! tip
