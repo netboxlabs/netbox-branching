@@ -54,6 +54,9 @@ class AppConfig(PluginConfig):
                 "netbox_branching: DATABASE_ROUTERS must contain 'netbox_branching.database.BranchAwareRouter'."
             )
 
+        # Register models which support branching
+        register_models()
+
         # Validate & register configured branch action validators
         for action in BRANCH_ACTIONS:
             for validator_path in get_plugin_config('netbox_branching', f'{action}_validators'):
@@ -62,9 +65,6 @@ class AppConfig(PluginConfig):
                 except ImportError:
                     raise ImproperlyConfigured(f"Branch {action} validator not found: {validator_path}")
                 Branch.register_preaction_check(func, action)
-
-        # Register models which support branching
-        register_models()
 
 
 config = AppConfig
