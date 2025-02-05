@@ -2,12 +2,7 @@ name: Release
 
 on:
   release:
-    types: [published]
-  workflow_dispatch:
-
-concurrency:
-  group: ${{ github.workflow }}
-  cancel-in-progress: false
+    types: [released]
 
 jobs:
   build:
@@ -34,7 +29,7 @@ jobs:
         if-no-files-found: error
 
   publish:
-    name: Publish to Test PyPI
+    name: Publish to PyPI
     needs:
       - build
     runs-on: ubuntu-latest
@@ -48,5 +43,3 @@ jobs:
         path: dist/
     - name: Publish distribution to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
-      with:
-        repository-url: https://test.pypi.org/legacy/
