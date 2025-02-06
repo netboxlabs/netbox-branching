@@ -41,6 +41,7 @@ class AppConfig(PluginConfig):
     def ready(self):
         super().ready()
         from . import constants, events, search, signal_receivers
+        from .models import Branch
         from .utilities import DynamicSchemaDict
 
         # Validate required settings
@@ -56,13 +57,14 @@ class AppConfig(PluginConfig):
         # Register models which support branching
         register_models()
 
-        # Validate branch action validators
+        # Validate & register configured branch action validators
         for action in BRANCH_ACTIONS:
             for validator_path in get_plugin_config('netbox_branching', f'{action}_validators'):
                 try:
-                    import_string(validator_path)
+                    func = import_string(validator_path)
                 except ImportError:
                     raise ImproperlyConfigured(f"Branch {action} validator not found: {validator_path}")
+                Branch.register_preaction_check(func, action)
 
 
 config = AppConfig

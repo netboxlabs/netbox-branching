@@ -20,9 +20,8 @@
     {% if not action_permitted %}
       <div class="alert alert-warning">
         <i class="mdi mdi-alert-circle"></i>
-        {% blocktrans %}
-          This action is disallowed per policy, however dry runs are permitted.
-        {% endblocktrans %}
+        {{ action_permitted.message }}
+        {% blocktrans %}Only dry runs are permitted.{% endblocktrans %}
       </div>
     {% endif %}
     {% if conflicts_table.rows %}

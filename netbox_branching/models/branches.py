@@ -28,7 +28,8 @@ from netbox_branching.constants import BRANCH_ACTIONS
 from netbox_branching.contextvars import active_branch
 from netbox_branching.signals import *
 from netbox_branching.utilities import (
-    ChangeSummary, activate_branch, get_branchable_object_types, get_tables_to_replicate, record_applied_change,
+    BranchActionIndicator, ChangeSummary, activate_branch, get_branchable_object_types, get_tables_to_replicate,
+    record_applied_change,
 )
 from utilities.exceptions import AbortRequest, AbortTransaction
 from .changes import ObjectChange
@@ -82,6 +83,13 @@ class Branch(JobsMixin, PrimaryModel):
         null=True,
         related_name='+'
     )
+
+    _preaction_validators = {
+        'sync': set(),
+        'merge': set(),
+        'revert': set(),
+        'archive': set(),
+    }
 
     class Meta:
         ordering = ('name',)
@@ -190,6 +198,15 @@ class Branch(JobsMixin, PrimaryModel):
         chars = [*string.ascii_lowercase, *string.digits]
         return ''.join(random.choices(chars, k=length))
 
+    @classmethod
+    def register_preaction_check(cls, func, action):
+        """
+        Register a validator to run before a specific branch action (i.e. sync or merge).
+        """
+        if action not in BRANCH_ACTIONS:
+            raise ValueError(f"Invalid branch action: {action}")
+        cls._preaction_validators[action].add(func)
+
     def get_changes(self):
         """
         Return a queryset of all ObjectChange records created within the Branch.
@@ -265,33 +282,39 @@ class Branch(JobsMixin, PrimaryModel):
         """
         if action not in BRANCH_ACTIONS:
             raise Exception(f"Unrecognized branch action: {action}")
-        for validator_path in get_plugin_config('netbox_branching', f'{action}_validators'):
-            if not import_string(validator_path)(self):
-                return False
-        return True
 
-    @property
+        # Run any pre-action validators
+        for func in self._preaction_validators[action]:
+            if not (indicator := func(self)):
+                # Backward compatibility for pre-v0.6.0 validators
+                if type(indicator) is not BranchActionIndicator:
+                    return BranchActionIndicator(False, _(f"Validation failed for {action}: {func}"))
+                return indicator
+
+        return BranchActionIndicator(True)
+
+    @cached_property
     def can_sync(self):
         """
         Indicates whether the branch can be synced.
         """
         return self._can_do_action('sync')
 
-    @property
+    @cached_property
     def can_merge(self):
         """
         Indicates whether the branch can be merged.
         """
         return self._can_do_action('merge')
 
-    @property
+    @cached_property
     def can_revert(self):
         """
         Indicates whether the branch can be reverted.
         """
         return self._can_do_action('revert')
 
-    @property
+    @cached_property
     def can_archive(self):
         """
         Indicates whether the branch can be archived.

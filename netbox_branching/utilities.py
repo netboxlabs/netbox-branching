@@ -17,6 +17,7 @@ from .constants import BRANCH_HEADER, COOKIE_NAME, EXEMPT_MODELS, INCLUDE_MODELS
 from .contextvars import active_branch
 
 __all__ = (
+    'BranchActionIndicator',
     'ChangeSummary',
     'DynamicSchemaDict',
     'ListHandler',
@@ -261,3 +262,15 @@ def ActiveBranchContextManager(request):
     if branch := get_active_branch(request):
         return activate_branch(branch)
     return nullcontext()
+
+
+@dataclass
+class BranchActionIndicator:
+    """
+    An indication of whether a particular branch action is permitted. If not, an explanatory message must be provided.
+    """
+    permitted: bool
+    message: str = ''
+
+    def __bool__(self):
+        return self.permitted
