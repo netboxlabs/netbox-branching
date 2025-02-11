@@ -31,7 +31,7 @@ class AppConfig(PluginConfig):
 
     def ready(self):
         super().ready()
-        from . import constants, events, search, signal_receivers
+        from . import constants, events, search, signal_receivers  # noqa: F401
         from .utilities import DynamicSchemaDict
 
         # Validate required settings
