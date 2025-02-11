@@ -244,7 +244,7 @@ def get_active_branch(request):
                 messages.error(request, f"Branch {branch} is not ready for use (status: {branch.status})")
                 return None
         else:
-            messages.success(request, f"Deactivated branch")
+            messages.success(request, "Deactivated branch")
             request.COOKIES.pop(COOKIE_NAME, None)  # Delete cookie if set
             return None
 
