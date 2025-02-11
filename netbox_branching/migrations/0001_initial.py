@@ -7,7 +7,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
     dependencies = [
@@ -20,8 +19,7 @@ class Migration(migrations.Migration):
     operations = [
         migrations.CreateModel(
             name='ObjectChange',
-            fields=[
-            ],
+            fields=[],
             options={
                 'proxy': True,
                 'indexes': [],
@@ -35,7 +33,10 @@ class Migration(migrations.Migration):
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False)),
                 ('created', models.DateTimeField(auto_now_add=True, null=True)),
                 ('last_updated', models.DateTimeField(auto_now=True, null=True)),
-                ('custom_field_data', models.JSONField(blank=True, default=dict, encoder=utilities.json.CustomFieldJSONEncoder)),
+                (
+                    'custom_field_data',
+                    models.JSONField(blank=True, default=dict, encoder=utilities.json.CustomFieldJSONEncoder),
+                ),
                 ('description', models.CharField(blank=True, max_length=200)),
                 ('comments', models.TextField(blank=True)),
                 ('name', models.CharField(max_length=100, unique=True)),
@@ -43,8 +44,26 @@ class Migration(migrations.Migration):
                 ('status', models.CharField(default='new', editable=False, max_length=50)),
                 ('last_sync', models.DateTimeField(blank=True, editable=False, null=True)),
                 ('merged_time', models.DateTimeField(blank=True, null=True)),
-                ('merged_by', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to=settings.AUTH_USER_MODEL)),
-                ('owner', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='branches', to=settings.AUTH_USER_MODEL)),
+                (
+                    'merged_by',
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name='+',
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
+                (
+                    'owner',
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name='branches',
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
                 ('tags', taggit.managers.TaggableManager(through='extras.TaggedItem', to='extras.Tag')),
             ],
             options={
@@ -57,8 +76,20 @@ class Migration(migrations.Migration):
             name='AppliedChange',
             fields=[
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False)),
-                ('change', models.OneToOneField(on_delete=django.db.models.deletion.CASCADE, related_name='application', to='core.objectchange')),
-                ('branch', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='applied_changes', to='netbox_branching.branch')),
+                (
+                    'change',
+                    models.OneToOneField(
+                        on_delete=django.db.models.deletion.CASCADE, related_name='application', to='core.objectchange'
+                    ),
+                ),
+                (
+                    'branch',
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name='applied_changes',
+                        to='netbox_branching.branch',
+                    ),
+                ),
             ],
             options={
                 'verbose_name': 'applied change',
@@ -72,8 +103,22 @@ class Migration(migrations.Migration):
                 ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False)),
                 ('time', models.DateTimeField(auto_now_add=True)),
                 ('type', models.CharField(editable=False, max_length=50)),
-                ('branch', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='events', to='netbox_branching.branch')),
-                ('user', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='branch_events', to=settings.AUTH_USER_MODEL)),
+                (
+                    'branch',
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE, related_name='events', to='netbox_branching.branch'
+                    ),
+                ),
+                (
+                    'user',
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name='branch_events',
+                        to=settings.AUTH_USER_MODEL,
+                    ),
+                ),
             ],
             options={
                 'verbose_name': 'branch event',
@@ -92,9 +137,22 @@ class Migration(migrations.Migration):
                 ('original', models.JSONField(blank=True, null=True)),
                 ('modified', models.JSONField(blank=True, null=True)),
                 ('current', models.JSONField(blank=True, null=True)),
-                ('conflicts', django.contrib.postgres.fields.ArrayField(base_field=models.CharField(max_length=100), blank=True, editable=False, null=True, size=None)),
-                ('branch', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='netbox_branching.branch')),
-                ('object_type', models.ForeignKey(on_delete=django.db.models.deletion.PROTECT, related_name='+', to='contenttypes.contenttype')),
+                (
+                    'conflicts',
+                    django.contrib.postgres.fields.ArrayField(
+                        base_field=models.CharField(max_length=100), blank=True, editable=False, null=True, size=None
+                    ),
+                ),
+                (
+                    'branch',
+                    models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, to='netbox_branching.branch'),
+                ),
+                (
+                    'object_type',
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.PROTECT, related_name='+', to='contenttypes.contenttype'
+                    ),
+                ),
             ],
             options={
                 'verbose_name': 'change diff',

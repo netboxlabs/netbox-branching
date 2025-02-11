@@ -271,7 +271,7 @@ class Branch(JobsMixin, PrimaryModel):
         if changes := self.get_unsynced_changes().order_by('time'):
             logger.info(f"Found {len(changes)} changes to sync")
         else:
-            logger.info(f"No changes found; aborting.")
+            logger.info("No changes found; aborting.")
             return
 
         # Update Branch status
@@ -329,7 +329,7 @@ class Branch(JobsMixin, PrimaryModel):
         if changes := self.get_unmerged_changes().order_by('time'):
             logger.info(f"Found {len(changes)} changes to merge")
         else:
-            logger.info(f"No changes found; aborting.")
+            logger.info("No changes found; aborting.")
             return
 
         # Update Branch status
@@ -392,7 +392,7 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info(f'Reverting branch {self} ({self.schema_name})')
 
         if not self.merged:
-            raise Exception(f"Only merged branches can be reverted.")
+            raise Exception("Only merged branches can be reverted.")
 
         # Emit pre-revert signal
         pre_revert.send(sender=self.__class__, branch=self, user=user)
@@ -401,7 +401,7 @@ class Branch(JobsMixin, PrimaryModel):
         if changes := self.get_changes().order_by('-time'):
             logger.info(f"Found {len(changes)} changes to revert")
         else:
-            logger.info(f"No changes found; aborting.")
+            logger.info("No changes found; aborting.")
             return
 
         # Update Branch status
