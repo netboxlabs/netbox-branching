@@ -86,6 +86,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     _preaction_validators = {
         'sync': set(),
+        'pull': set(),
         'merge': set(),
         'revert': set(),
         'archive': set(),
