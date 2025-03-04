@@ -27,6 +27,14 @@ class ObjectChange(ObjectChange_):
     class Meta:
         proxy = True
 
+    def __str__(self):
+        return '{}: {} {} by {}'.format(
+            self.pk,
+            self.object_repr,
+            self.get_action_display().lower(),
+            self.user_name
+        )
+
     def apply(self, using=DEFAULT_DB_ALIAS, logger=None):
         """
         Apply the change using the specified database connection.
