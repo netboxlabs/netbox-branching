@@ -2,6 +2,7 @@ import logging
 import random
 import string
 from contextlib import nullcontext
+from datetime import timedelta
 from functools import cached_property, partial
 
 from django.conf import settings
@@ -13,10 +14,10 @@ from django.db.utils import ProgrammingError
 from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
 
 from core.models import ObjectChange as ObjectChange_
+from netbox.config import get_config
 from netbox.context import current_request
 from netbox.context_managers import event_tracking
 from netbox.models import PrimaryModel
@@ -27,7 +28,8 @@ from netbox_branching.constants import BRANCH_ACTIONS
 from netbox_branching.contextvars import active_branch
 from netbox_branching.signals import *
 from netbox_branching.utilities import (
-    ChangeSummary, activate_branch, get_branchable_object_types, get_tables_to_replicate, record_applied_change,
+    BranchActionIndicator, ChangeSummary, activate_branch, get_branchable_object_types, get_tables_to_replicate,
+    record_applied_change,
 )
 from utilities.exceptions import AbortRequest, AbortTransaction
 from .changes import ObjectChange
@@ -82,6 +84,13 @@ class Branch(JobsMixin, PrimaryModel):
         related_name='+'
     )
 
+    _preaction_validators = {
+        'sync': set(),
+        'merge': set(),
+        'revert': set(),
+        'archive': set(),
+    }
+
     class Meta:
         ordering = ('name',)
         verbose_name = _('branch')
@@ -134,7 +143,7 @@ class Branch(JobsMixin, PrimaryModel):
     def connection_name(self):
         return f'schema_{self.schema_name}'
 
-    @cached_property
+    @property
     def synced_time(self):
         return self.last_sync or self.created
 
@@ -172,9 +181,6 @@ class Branch(JobsMixin, PrimaryModel):
 
         _provision = provision and self.pk is None
 
-        if active_branch.get():
-            raise AbortRequest(_("Cannot create or modify a branch while a branch is active."))
-
         super().save(*args, **kwargs)
 
         if _provision:
@@ -196,8 +202,8 @@ class Branch(JobsMixin, PrimaryModel):
                 )
 
     def delete(self, *args, **kwargs):
-        if active_branch.get():
-            raise AbortRequest(_("Cannot delete a branch while a branch is active."))
+        if active_branch.get() == self:
+            raise AbortRequest(_("The active branch cannot be deleted."))
 
         # Deprovision the schema
         self.deprovision()
@@ -211,6 +217,15 @@ class Branch(JobsMixin, PrimaryModel):
         """
         chars = [*string.ascii_lowercase, *string.digits]
         return ''.join(random.choices(chars, k=length))
+
+    @classmethod
+    def register_preaction_check(cls, func, action):
+        """
+        Register a validator to run before a specific branch action (i.e. sync or merge).
+        """
+        if action not in BRANCH_ACTIONS:
+            raise ValueError(f"Invalid branch action: {action}")
+        cls._preaction_validators[action].add(func)
 
     def get_changes(self):
         """
@@ -288,6 +303,16 @@ class Branch(JobsMixin, PrimaryModel):
             last_time = event.time
         return history
 
+    @property
+    def is_stale(self):
+        """
+        Indicates whether the branch is too far out of date to be synced.
+        """
+        if not (changelog_retention := get_config().CHANGELOG_RETENTION):
+            # Changelog retention is disabled
+            return False
+        return self.synced_time < timezone.now() - timedelta(days=changelog_retention)
+
     #
     # Branch action indicators
     #
@@ -299,40 +324,46 @@ class Branch(JobsMixin, PrimaryModel):
         """
         if action not in BRANCH_ACTIONS:
             raise Exception(f"Unrecognized branch action: {action}")
-        for validator_path in get_plugin_config('netbox_branching', f'{action}_validators'):
-            if not import_string(validator_path)(self):
-                return False
-        return True
 
-    @property
+        # Run any pre-action validators
+        for func in self._preaction_validators[action]:
+            if not (indicator := func(self)):
+                # Backward compatibility for pre-v0.6.0 validators
+                if type(indicator) is not BranchActionIndicator:
+                    return BranchActionIndicator(False, _(f"Validation failed for {action}: {func}"))
+                return indicator
+
+        return BranchActionIndicator(True)
+
+    @cached_property
     def can_sync(self):
         """
         Indicates whether the branch can be synced.
         """
         return self._can_do_action('sync')
 
-    @property
+    @cached_property
     def can_pull(self):
         """
         Indicates whether changes can be pulled in from another Branch.
         """
         return self._can_do_action('pull')
 
-    @property
+    @cached_property
     def can_merge(self):
         """
         Indicates whether the branch can be merged.
         """
         return self._can_do_action('merge')
 
-    @property
+    @cached_property
     def can_revert(self):
         """
         Indicates whether the branch can be reverted.
         """
         return self._can_do_action('revert')
 
-    @property
+    @cached_property
     def can_archive(self):
         """
         Indicates whether the branch can be archived.
@@ -352,6 +383,8 @@ class Branch(JobsMixin, PrimaryModel):
 
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to sync")
+        if self.is_stale:
+            raise Exception(f"Branch {self} is stale and can no longer be synced")
         if commit and not self.can_sync:
             raise Exception(f"Syncing this branch is not permitted.")
 

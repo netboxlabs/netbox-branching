@@ -1,23 +1,30 @@
 import datetime
 import logging
 from collections import defaultdict
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
+from django.contrib import messages
 from django.db.models import ForeignKey, ManyToManyField
+from django.http import HttpResponseBadRequest
 from django.urls import reverse
 
 from netbox.plugins import get_plugin_config
 from netbox.registry import registry
-from .constants import EXEMPT_MODELS, INCLUDE_MODELS
+from netbox.utils import register_request_processor
+from .choices import BranchStatusChoices
+from .constants import BRANCH_HEADER, COOKIE_NAME, EXEMPT_MODELS, INCLUDE_MODELS, QUERY_PARAM
 from .contextvars import active_branch
 
 __all__ = (
+    'BranchActionIndicator',
     'ChangeSummary',
     'DynamicSchemaDict',
     'ListHandler',
+    'ActiveBranchContextManager',
     'activate_branch',
     'deactivate_branch',
+    'get_active_branch',
     'get_branchable_object_types',
     'get_tables_to_replicate',
     'is_api_request',
@@ -209,4 +216,61 @@ def is_api_request(request):
     """
     Returns True if the given request is a REST or GraphQL API request.
     """
+    if not hasattr(request, 'path_info'):
+        return False
+
     return request.path_info.startswith(reverse('api-root')) or request.path_info.startswith(reverse('graphql'))
+
+
+def get_active_branch(request):
+    """
+    Return the active Branch (if any).
+    """
+    # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
+    from .models import Branch
+    if is_api_request(request) and BRANCH_HEADER in request.headers:
+        branch = Branch.objects.get(schema_id=request.headers.get(BRANCH_HEADER))
+        if not branch.ready:
+            return HttpResponseBadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
+        return branch
+
+    # Branch activated/deactivated by URL query parameter
+    elif QUERY_PARAM in request.GET:
+        if schema_id := request.GET.get(QUERY_PARAM):
+            branch = Branch.objects.get(schema_id=schema_id)
+            if branch.ready:
+                messages.success(request, f"Activated branch {branch}")
+                return branch
+            else:
+                messages.error(request, f"Branch {branch} is not ready for use (status: {branch.status})")
+                return None
+        else:
+            messages.success(request, f"Deactivated branch")
+            request.COOKIES.pop(COOKIE_NAME, None)  # Delete cookie if set
+            return None
+
+    # Branch set by cookie
+    elif schema_id := request.COOKIES.get(COOKIE_NAME):
+        return Branch.objects.filter(schema_id=schema_id, status=BranchStatusChoices.READY).first()
+
+
+@register_request_processor
+def ActiveBranchContextManager(request):
+    """
+    Activate a branch if indicated by the request.
+    """
+    if branch := get_active_branch(request):
+        return activate_branch(branch)
+    return nullcontext()
+
+
+@dataclass
+class BranchActionIndicator:
+    """
+    An indication of whether a particular branch action is permitted. If not, an explanatory message must be provided.
+    """
+    permitted: bool
+    message: str = ''
+
+    def __bool__(self):
+        return self.permitted
