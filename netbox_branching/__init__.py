@@ -36,11 +36,6 @@ class AppConfig(PluginConfig):
             "default_create": 1,  # seconds
             "default_update": .3,  # seconds
             "default_delete": 1,  # seconds
-            "dcim.device": {
-                "create": 1,  # seconds
-                "update": .3,  # seconds
-                "delete": 1,  # seconds
-            }
         },
 
         # This will display a warning if the active branch or viewing branch details when the job timeout (plus padding) exceeds this set value.

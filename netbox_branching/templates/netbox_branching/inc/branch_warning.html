@@ -2,13 +2,13 @@
 {% if active_job_timeout and active_job_timeout > job_timeout_warning%}
   <div class="alert alert-warning" role="alert">
     <i class="mdi mdi-alert"></i>
-    {% trans "The active branch may take upto" %} {{ active_job_timeout_minutes }} {% trans " minutes to merge - please consider splitting large changer into smaller branches" %}
+    {% trans "The active branch may take upto" %} {{ active_job_timeout_minutes }} {% trans " minutes to merge - please consider splitting large changes into smaller branches" %}
   </div>
 {% endif %}
 {% if job_timeout and job_timeout > job_timeout_warning %}
 <div class="alert alert-warning" role="alert">
   <i class="mdi mdi-alert"></i>
-  {% trans "This branch may take upto" %} {{ job_timeout_minutes }} {% trans " minutes to merge - please consider splitting large changer into smaller branches" %}
+  {% trans "This branch may take upto" %} {{ job_timeout_minutes }} {% trans " minutes to merge - please consider splitting large changes into smaller branches" %}
 </div>
 {% endif %}
-<div class="alert alert-warning" role="alert">
+<div class="alert alert-warning" role="alert">s
