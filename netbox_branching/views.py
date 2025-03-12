@@ -223,7 +223,8 @@ class BranchSyncView(BaseBranchActionView):
         SyncBranchJob.enqueue(
             instance=branch,
             user=request.user,
-            commit=form.cleaned_data['commit']
+            commit=form.cleaned_data['commit'],
+            job_timeout=branch.job_timeout
         )
         messages.success(request, _("Syncing of branch {branch} in progress").format(branch=branch))
 
@@ -239,7 +240,8 @@ class BranchMergeView(BaseBranchActionView):
         MergeBranchJob.enqueue(
             instance=branch,
             user=request.user,
-            commit=form.cleaned_data['commit']
+            commit=form.cleaned_data['commit'],
+            job_timeout=branch.job_timeout
         )
         messages.success(request, _("Merging of branch {branch} in progress").format(branch=branch))
 
@@ -258,7 +260,8 @@ class BranchRevertView(BaseBranchActionView):
         RevertBranchJob.enqueue(
             instance=branch,
             user=request.user,
-            commit=form.cleaned_data['commit']
+            commit=form.cleaned_data['commit'],
+            job_timeout=branch.job_timeout
         )
         messages.success(request, _("Reverting branch {branch}").format(branch=branch))
 

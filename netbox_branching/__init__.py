@@ -27,6 +27,24 @@ class AppConfig(PluginConfig):
 
         # This string is prefixed to the name of each new branch schema during provisioning
         'schema_prefix': 'branch_',
+        
+        # The maximum execution time of a background task.
+        'job_timeout': 5 * 60,  # seconds
+
+        # This will add additional job timeout padding into the `job_timeout` based on the count of objects changed in a branch.
+        'job_timeout_modifier':{
+            "default_create": 1,  # seconds
+            "default_update": .3,  # seconds
+            "default_delete": 1,  # seconds
+            "dcim.device": {
+                "create": 1,  # seconds
+                "update": .3,  # seconds
+                "delete": 1,  # seconds
+            }
+        },
+
+        # This will display a warning if the active branch or viewing branch details when the job timeout (plus padding) exceeds this set value.
+        'job_timeout_warning': 15 * 60,  # seconds
     }
 
     def ready(self):

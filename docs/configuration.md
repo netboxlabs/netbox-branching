@@ -26,7 +26,45 @@ exempt_models = (
 )
 ```
 
----
+## `job_timeout`
+
+Default: 300
+
+The maximum execution time of a background task.  Sync, Merge and Revert jobs will also be given additional modifiers below multiplied by the count of changes in the branch.
+
+## `job_timeout_modifier`
+
+Default: 
+```
+{
+    "default_create": 1,  # seconds
+    "default_update": .3,  # seconds
+    "default_delete": 1,  # seconds
+},
+```
+
+This will add additional job timeout padding into the `job_timeout` based on the count of objects changed in a branch.  You can also individually set model's time padding based on your own database performance.
+
+### Example for padding DCIM Devices
+```
+{
+    "default_create": 1,  # seconds
+    "default_update": .3,  # seconds
+    "default_delete": 1,  # seconds
+    "dcim.device": {
+        "create": 2,  # seconds
+        "update": 1,  # seconds
+        "delete": 2,  # seconds
+    }
+},
+```
+
+## `job_timeout_warning`
+
+Default: 900
+
+This will display a warning if the active branch or viewing branch details when the job timeout (plus padding) exceeds this set value.  The warning can be suppressed if set to `None`
+
 
 ## `max_working_branches`
 

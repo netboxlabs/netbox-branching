@@ -49,7 +49,8 @@ class BranchViewSet(ModelViewSet):
         job = SyncBranchJob.enqueue(
             instance=branch,
             user=request.user,
-            commit=commit
+            commit=commit,
+            job_timeout=branch.job_timeout
         )
 
         return Response(JobSerializer(job, context={'request': request}).data)
@@ -78,7 +79,8 @@ class BranchViewSet(ModelViewSet):
         job = MergeBranchJob.enqueue(
             instance=branch,
             user=request.user,
-            commit=commit
+            commit=commit,
+            job_timeout=branch.job_timeout
         )
 
         return Response(JobSerializer(job, context={'request': request}).data)
@@ -107,7 +109,8 @@ class BranchViewSet(ModelViewSet):
         job = RevertBranchJob.enqueue(
             instance=branch,
             user=request.user,
-            commit=commit
+            commit=commit,
+            job_timeout=branch.job_timeout
         )
 
         return Response(JobSerializer(job, context={'request': request}).data)
