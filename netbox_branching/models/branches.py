@@ -133,16 +133,16 @@ class Branch(JobsMixin, PrimaryModel):
     def job_timeout(self):
         # Get the count of changes for each action and content type then try an calculate a more true job timeout
         qs = self.get_changes().values_list('changed_object_type', 'action').annotate(count=Count('pk'))
-        job_timeout_modifier = get_plugin_config('netbox_branching',"job_timeout_modifier",{})
-        timeout = get_plugin_config('netbox_branching',"job_timeout")
+        job_timeout_modifier = get_plugin_config('netbox_branching', "job_timeout_modifier", {})
+        timeout = get_plugin_config('netbox_branching', "job_timeout")
         for ct, action, count in qs:
-                ct = ContentType.objects.get(pk=ct)
-                key = ct.natural_key()
-                model = f"{key[0]}.{key[1]}"
-                if model in job_timeout_modifier and action in job_timeout_modifier[model]:
-                    timeout += job_timeout_modifier[model][action] * count
-                else:
-                    timeout += job_timeout_modifier[f"default_{action}"]*count
+            ct = ContentType.objects.get(pk=ct)
+            key = ct.natural_key()
+            model = f"{key[0]}.{key[1]}"
+            if model in job_timeout_modifier and action in job_timeout_modifier[model]:
+                timeout += job_timeout_modifier[model][action] * count
+            else:
+                timeout += job_timeout_modifier[f"default_{action}"] * count
         return int(timeout)
 
     def clean(self):
