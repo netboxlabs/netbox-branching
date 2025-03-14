@@ -163,6 +163,8 @@ class BranchTestCase(TransactionTestCase):
         }
     })
     def test_branch_timeout(self):
+        import logging
+        logger = logging.getLogger('netbox_branching')
         site_a, _ = Site.objects.get_or_create(name="Site A",
                                                slug="site_a",
                                                description="site_a_description")
@@ -182,10 +184,13 @@ class BranchTestCase(TransactionTestCase):
 
         with self.subTest("Create a device role with default timeout"):
             branch = Branch(name='Branch Device Role Create')
+            logger.critical(f"Branch: {branch}")
+            logger.critical(f"{ branch.schema_name = }")
+            logger.critical(f"{ branch.connection_name = }")
             branch.full_clean()
             branch.save(provision=False)
-            branch.provision(user=None)
             branch.refresh_from_db()
+            branch.provision(user=None)
             with activate_branch(self):
                 device_role_create, _ = DeviceRole.objects.get_or_create(name="Device Role Create",
                                                                          slug="device_role_create")
@@ -195,8 +200,8 @@ class BranchTestCase(TransactionTestCase):
             branch = Branch(name='Branch Role Update')
             branch.full_clean()
             branch.save(provision=False)
-            branch.provision(user=None)
             branch.refresh_from_db()
+            branch.provision(user=None)
             with activate_branch(self):
                 device_role_existing.name = "Device Role Update"
                 device_role_existing.save()
@@ -206,8 +211,8 @@ class BranchTestCase(TransactionTestCase):
             branch = Branch(name='Branch Role Delete')
             branch.full_clean()
             branch.save(provision=False)
-            branch.provision(user=None)
             branch.refresh_from_db()
+            branch.provision(user=None)
             with activate_branch(self):
                 device_role_existing.delete()
             self.assertEqual(branch.job_timeout, 4)
@@ -216,8 +221,8 @@ class BranchTestCase(TransactionTestCase):
             branch = Branch(name='Branch Device Create')
             branch.full_clean()
             branch.save(provision=False)
-            branch.provision(user=None)
             branch.refresh_from_db()
+            branch.provision(user=None)
             with activate_branch(self):
                 device_create, _ = Device.objects.get_or_create(name="Device Create",
                                                                 site=site_a,
@@ -229,8 +234,8 @@ class BranchTestCase(TransactionTestCase):
             branch = Branch(name='Branch Device Update')
             branch.full_clean()
             branch.save(provision=False)
-            branch.provision(user=None)
             branch.refresh_from_db()
+            branch.provision(user=None)
             with activate_branch(self):
                 device_existing.name = "Device Update"
                 device_existing.save()
@@ -240,8 +245,8 @@ class BranchTestCase(TransactionTestCase):
             branch = Branch(name='Branch Device Delete')
             branch.full_clean()
             branch.save(provision=False)
-            branch.provision(user=None)
             branch.refresh_from_db()
+            branch.provision(user=None)
             with activate_branch(self):
                 device_existing.delete()
             self.assertEqual(branch.job_timeout, 32)
