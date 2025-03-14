@@ -148,18 +148,18 @@ class BranchTestCase(TransactionTestCase):
 
     @override_settings(PLUGINS_CONFIG={
         'netbox_branching': {
-            'max_branches': 2,
+            'max_branches': 32,
             'job_timeout': 0,
             'job_timeout_modifier': {
-    "default_create": 1,  # seconds
-    "default_update": 2,  # seconds
-    "default_delete": 4,  # seconds
-    "dcim.device": {
-        "create": 8,  # seconds
-        "update": 16,  # seconds
-        "delete": 32,  # seconds
-    }
-},
+                "default_create": 1,  # seconds
+                "default_update": 2,  # seconds
+                "default_delete": 4,  # seconds
+                "dcim.device": {
+                    "create": 8,  # seconds
+                    "update": 16,  # seconds
+                    "delete": 32,  # seconds
+                }
+            },
         }
     })
     def test_branch_timeout(self):
@@ -182,6 +182,7 @@ class BranchTestCase(TransactionTestCase):
 
         with self.subTest("Create a device role with default timeout"):
             branch = Branch(name='Branch Device Role Create')
+            branch.full_clean()
             branch.save(provision=False)
             branch.provision(user=None)
             branch.refresh_from_db()
@@ -192,6 +193,7 @@ class BranchTestCase(TransactionTestCase):
 
         with self.subTest("Update a device role with default timeout"):
             branch = Branch(name='Branch Role Update')
+            branch.full_clean()
             branch.save(provision=False)
             branch.provision(user=None)
             branch.refresh_from_db()
@@ -202,6 +204,7 @@ class BranchTestCase(TransactionTestCase):
 
         with self.subTest("Delete a device role with default timeout"):
             branch = Branch(name='Branch Role Delete')
+            branch.full_clean()
             branch.save(provision=False)
             branch.provision(user=None)
             branch.refresh_from_db()
@@ -211,6 +214,7 @@ class BranchTestCase(TransactionTestCase):
 
         with self.subTest("Create a device"):
             branch = Branch(name='Branch Device Create')
+            branch.full_clean()
             branch.save(provision=False)
             branch.provision(user=None)
             branch.refresh_from_db()
@@ -223,6 +227,7 @@ class BranchTestCase(TransactionTestCase):
 
         with self.subTest("Update a device"):
             branch = Branch(name='Branch Device Update')
+            branch.full_clean()
             branch.save(provision=False)
             branch.provision(user=None)
             branch.refresh_from_db()
@@ -233,6 +238,7 @@ class BranchTestCase(TransactionTestCase):
 
         with self.subTest("Delete a device"):
             branch = Branch(name='Branch Device Delete')
+            branch.full_clean()
             branch.save(provision=False)
             branch.provision(user=None)
             branch.refresh_from_db()
