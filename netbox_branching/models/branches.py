@@ -186,7 +186,8 @@ class Branch(JobsMixin, PrimaryModel):
             request = current_request.get()
             ProvisionBranchJob.enqueue(
                 instance=self,
-                user=request.user if request else None
+                user=request.user if request else None,
+                job_timeout=self.job_timeout
             )
 
     def delete(self, *args, **kwargs):
