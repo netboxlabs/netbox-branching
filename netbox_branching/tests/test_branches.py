@@ -13,6 +13,7 @@ from netbox_branching.utilities import get_tables_to_replicate, activate_branch
 from .utils import fetchall, fetchone
 from dcim.models import Site, Device, DeviceRole, Manufacturer, DeviceType
 
+
 class BranchTestCase(TransactionTestCase):
     serialized_rollback = True
 
@@ -149,7 +150,7 @@ class BranchTestCase(TransactionTestCase):
         'netbox_branching': {
             'max_branches': 2,
             'job_timeout': 0,
-            'job_timeout_modifier':{
+            'job_timeout_modifier': {
     "default_create": 1,  # seconds
     "default_update": 2,  # seconds
     "default_delete": 4,  # seconds
@@ -162,44 +163,79 @@ class BranchTestCase(TransactionTestCase):
         }
     })
     def test_branch_timeout(self):
-        branch = Branch(name='Branch 1')
-        branch.save(provision=False)
-        branch.provision(user=None)
-        site_a, _ = Site.objects.get_or_create(name="Site A", slug="site_a", description="site_a_description")
-        device_manufacturer, _ = Manufacturer.objects.get_or_create(name="Device Manufacturer", slug="device_manufacturer")
-        device_role, _ = DeviceRole.objects.get_or_create(name="Device Role", slug="device_role")
-        device_role_existing, _ = DeviceRole.objects.get_or_create(name="Device Role Existing", slug="device_role_existing")
-        device_type, _ = DeviceType.objects.get_or_create(manufacturer=device_manufacturer, model="Device Model", slug="device_model")
-        device_existing, _ = Device.objects.get_or_create(name="Device Existing", site=site_a, role=device_role, device_type=device_type)
-        
+        site_a, _ = Site.objects.get_or_create(name="Site A",
+                                               slug="site_a",
+                                               description="site_a_description")
+        device_manufacturer, _ = Manufacturer.objects.get_or_create(name="Device Manufacturer",
+                                                                    slug="device_manufacturer")
+        device_role, _ = DeviceRole.objects.get_or_create(name="Device Role",
+                                                          slug="device_role")
+        device_role_existing, _ = DeviceRole.objects.get_or_create(name="Device Role Existing",
+                                                                   slug="device_role_existing")
+        device_type, _ = DeviceType.objects.get_or_create(manufacturer=device_manufacturer,
+                                                          model="Device Model",
+                                                          slug="device_model")
+        device_existing, _ = Device.objects.get_or_create(name="Device Existing",
+                                                          site=site_a,
+                                                          role=device_role,
+                                                          device_type=device_type)
+
         with self.subTest("Create a device role with default timeout"):
+            branch = Branch(name='Branch 1')
+            branch.save(provision=False)
+            branch.provision(user=None)
+            branch.refresh_from_db()
             with activate_branch(self):
-                device_role_create, _ = DeviceRole.objects.get_or_create(name="Device Role Create", slug="device_role_create")
+                device_role_create, _ = DeviceRole.objects.get_or_create(name="Device Role Create",
+                                                                         slug="device_role_create")
             self.assertEqual(branch.job_timeout, 1)
-        
+
         with self.subTest("Update a device role with default timeout"):
+            branch = Branch(name='Branch 1')
+            branch.save(provision=False)
+            branch.provision(user=None)
+            branch.refresh_from_db()
             with activate_branch(self):
                 device_role_existing.name = "Device Role Update"
                 device_role_existing.save()
             self.assertEqual(branch.job_timeout, 2)
-        
+
         with self.subTest("Delete a device role with default timeout"):
+            branch = Branch(name='Branch 1')
+            branch.save(provision=False)
+            branch.provision(user=None)
+            branch.refresh_from_db()
             with activate_branch(self):
                 device_role_existing.delete()
             self.assertEqual(branch.job_timeout, 4)
-        
+
         with self.subTest("Create a device"):
+            branch = Branch(name='Branch 1')
+            branch.save(provision=False)
+            branch.provision(user=None)
+            branch.refresh_from_db()
             with activate_branch(self):
-                device_create, _ = Device.objects.get_or_create(name="Device Create", site=site_a, role=device_role, device_type=device_type)
+                device_create, _ = Device.objects.get_or_create(name="Device Create",
+                                                                site=site_a,
+                                                                role=device_role,
+                                                                device_type=device_type)
             self.assertEqual(branch.job_timeout, 8)
-        
+
         with self.subTest("Update a device"):
+            branch = Branch(name='Branch 1')
+            branch.save(provision=False)
+            branch.provision(user=None)
+            branch.refresh_from_db()
             with activate_branch(self):
                 device_existing.name = "Device Update"
                 device_existing.save()
             self.assertEqual(branch.job_timeout, 16)
-        
+
         with self.subTest("Delete a device"):
+            branch = Branch(name='Branch 1')
+            branch.save(provision=False)
+            branch.provision(user=None)
+            branch.refresh_from_db()
             with activate_branch(self):
                 device_existing.delete()
             self.assertEqual(branch.job_timeout, 32)
