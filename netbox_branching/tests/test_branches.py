@@ -181,7 +181,7 @@ class BranchTestCase(TransactionTestCase):
                                                           device_type=device_type)
 
         with self.subTest("Create a device role with default timeout"):
-            branch = Branch(name='Branch 1')
+            branch = Branch(name='Branch Device Role Create')
             branch.save(provision=False)
             branch.provision(user=None)
             branch.refresh_from_db()
@@ -191,7 +191,7 @@ class BranchTestCase(TransactionTestCase):
             self.assertEqual(branch.job_timeout, 1)
 
         with self.subTest("Update a device role with default timeout"):
-            branch = Branch(name='Branch 1')
+            branch = Branch(name='Branch Role Update')
             branch.save(provision=False)
             branch.provision(user=None)
             branch.refresh_from_db()
@@ -201,7 +201,7 @@ class BranchTestCase(TransactionTestCase):
             self.assertEqual(branch.job_timeout, 2)
 
         with self.subTest("Delete a device role with default timeout"):
-            branch = Branch(name='Branch 1')
+            branch = Branch(name='Branch Role Delete')
             branch.save(provision=False)
             branch.provision(user=None)
             branch.refresh_from_db()
@@ -210,7 +210,7 @@ class BranchTestCase(TransactionTestCase):
             self.assertEqual(branch.job_timeout, 4)
 
         with self.subTest("Create a device"):
-            branch = Branch(name='Branch 1')
+            branch = Branch(name='Branch Device Create')
             branch.save(provision=False)
             branch.provision(user=None)
             branch.refresh_from_db()
@@ -222,7 +222,7 @@ class BranchTestCase(TransactionTestCase):
             self.assertEqual(branch.job_timeout, 8)
 
         with self.subTest("Update a device"):
-            branch = Branch(name='Branch 1')
+            branch = Branch(name='Branch Device Update')
             branch.save(provision=False)
             branch.provision(user=None)
             branch.refresh_from_db()
@@ -232,7 +232,7 @@ class BranchTestCase(TransactionTestCase):
             self.assertEqual(branch.job_timeout, 16)
 
         with self.subTest("Delete a device"):
-            branch = Branch(name='Branch 1')
+            branch = Branch(name='Branch Device Delete')
             branch.save(provision=False)
             branch.provision(user=None)
             branch.refresh_from_db()
