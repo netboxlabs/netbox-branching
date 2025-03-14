@@ -179,7 +179,8 @@ class BranchTestCase(TransactionTestCase):
                                                           site=site_a,
                                                           role=device_role,
                                                           device_type=device_type)
-
+        import logging
+        logger = logging.getLogger(__name__)
         with self.subTest("Create a device role with default timeout"):
             branch = Branch(name='Branch Device Role Create')
             branch.full_clean()
@@ -187,8 +188,11 @@ class BranchTestCase(TransactionTestCase):
             branch.refresh_from_db()
             branch.provision(user=None)
             with activate_branch(branch):
-                device_role_create, _ = DeviceRole.objects.using(branch.connection_name).get_or_create(name="Device Role Create",
-                                                                         slug="device_role_create")
+                device_role_create, _ = DeviceRole.objects.using(branch.connection_name).get_or_create(
+                                                                        name="Device Role Create",
+                                                                        slug="device_role_create")
+            logger.critical(f"{branch.job_timeout = }")
+            logger.critical(f"{branch.get_changes() = }")
             self.assertEqual(branch.job_timeout, 1)
 
         # with self.subTest("Update a device role with default timeout"):
@@ -223,7 +227,10 @@ class BranchTestCase(TransactionTestCase):
                                                                 site=site_a,
                                                                 role=device_role,
                                                                 device_type=device_type)
-            self.assertEqual(branch.job_timeout, 8)
+                logger.critical(f"{branch.job_timeout = }")
+                logger.critical(f"{branch.get_changes() = }")
+                
+                self.assertEqual(branch.job_timeout, 8)
 
         # with self.subTest("Update a device"):
         #     branch = Branch(name='Branch Device Update')
