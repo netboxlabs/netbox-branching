@@ -35,10 +35,6 @@ class ShareButton(PluginTemplateExtension):
 class BranchWarning(PluginTemplateExtension):
 
     def alerts(self):
-        active_job_timeout = None
-        active_job_timeout_minutes = None
-        job_timeout = None
-        job_timeout_minutes = None
         # Warn the use if the branch being displayed or the active branch has a job timeout that is extremely long
         if (job_timeout_warning := get_plugin_config("netbox_branching", "job_timeout_warning")) is None:
             # If the platform owner wants to suppress the warning return nothing
@@ -47,7 +43,12 @@ class BranchWarning(PluginTemplateExtension):
             # The current view is a Branch, Let see what the job timeout is
             job_timeout = self.context['object'].job_timeout
             job_timeout_minutes = job_timeout // 60
+        else:
+            job_timeout = None
+            job_timeout_minutes = None
 
+        active_job_timeout = None
+        active_job_timeout_minutes = None
         if hasattr(active_branch.get(), 'job_timeout'):
             # There is an Active Branch, Let see what the job timeout is
             if not (hasattr(self.context['object'], 'id') and active_branch.get().id == self.context['object'].id):
@@ -55,9 +56,6 @@ class BranchWarning(PluginTemplateExtension):
                 # the active branch job timeout waning too
                 active_job_timeout = active_branch.get().job_timeout
                 active_job_timeout_minutes = active_job_timeout // 60
-        if job_timeout is None and active_job_timeout is None:
-            # If we don't have any job timeout, we can't show the warning
-            return ''
         if (
                 (job_timeout is not None and job_timeout > job_timeout_warning)
                 or
