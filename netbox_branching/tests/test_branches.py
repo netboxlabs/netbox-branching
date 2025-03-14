@@ -9,8 +9,8 @@ from django.utils import timezone
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import MAIN_SCHEMA
 from netbox_branching.models import Branch
-from netbox_branching.utilities import get_tables_to_replicate
-from .utils import fetchall, fetchone, activate_branch
+from netbox_branching.utilities import get_tables_to_replicate, activate_branch
+from .utils import fetchall, fetchone
 from dcim.models import Site, Device, DeviceRole, Manufacturer, DeviceType
 
 class BranchTestCase(TransactionTestCase):
