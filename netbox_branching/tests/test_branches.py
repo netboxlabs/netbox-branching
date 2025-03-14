@@ -83,6 +83,7 @@ class BranchTestCase(TransactionTestCase):
     @override_settings(PLUGINS_CONFIG={
         'netbox_branching': {
             'max_working_branches': 2,
+            'job_timeout': 300,
         }
     })
     def test_max_working_branches(self):
@@ -107,6 +108,7 @@ class BranchTestCase(TransactionTestCase):
     @override_settings(PLUGINS_CONFIG={
         'netbox_branching': {
             'max_branches': 2,
+            'job_timeout': 300,
         }
     })
     def test_max_branches(self):
