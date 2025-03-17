@@ -159,7 +159,8 @@ class ChangeDiff(models.Model):
 
     def save(self, *args, **kwargs):
         self._update_conflicts()
-        self.object_repr = str(self.object)
+        if self.object:
+            self.object_repr = str(self.object)
 
         super().save(*args, **kwargs)
 
