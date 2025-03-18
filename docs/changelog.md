@@ -1,5 +1,17 @@
 # Change Log
 
+## v0.5.4
+
+### Bug Fixes
+
+* [#169](https://github.com/netboxlabs/netbox-branching/issues/169) - Fix global search caching function when a branch is active
+* [#179](https://github.com/netboxlabs/netbox-branching/issues/179) - Avoid nullifying object representation when updating a ChangeDiff
+* [#222](https://github.com/netboxlabs/netbox-branching/issues/222) - Avoid off-screen overflow of long branch names
+* [#225](https://github.com/netboxlabs/netbox-branching/issues/225) - Branch status field should not be required in REST API serializer
+* [#227](https://github.com/netboxlabs/netbox-branching/issues/227) - Fix scripts triggered via an event rule when the branching plugin is installed
+
+---
+
 ## v0.5.3
 
 ### Enhancements
