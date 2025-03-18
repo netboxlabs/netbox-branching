@@ -4,6 +4,7 @@ import string
 from datetime import timedelta
 from functools import cached_property, partial
 
+from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
@@ -518,15 +519,15 @@ class Branch(JobsMixin, PrimaryModel):
                     cursor.execute(
                         f"INSERT INTO {schema_table} SELECT * FROM {main_table}"
                     )
-                    # Get the name of the sequence used for object ID allocations
+                    # Get the name of the sequence used for object ID allocations (if one exists)
                     cursor.execute(
                         "SELECT pg_get_serial_sequence(%s, 'id')", [table]
                     )
-                    sequence_name = cursor.fetchone()[0]
                     # Set the default value for the ID column to the sequence associated with the source table
-                    cursor.execute(
-                        f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
-                    )
+                    if sequence_name := cursor.fetchone()[0]:
+                        cursor.execute(
+                            f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
+                        )
 
                 # Commit the transaction
                 cursor.execute("COMMIT")
