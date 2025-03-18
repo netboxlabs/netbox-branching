@@ -14,6 +14,7 @@ QUERY_PARAM = '_branch'
 # must be replicated for each branch to ensure proper functionality
 INCLUDE_MODELS = (
     'dcim.cablepath',
+    'extras.cachedvalue',
 )
 
 # Models for which branching support is explicitly disabled
