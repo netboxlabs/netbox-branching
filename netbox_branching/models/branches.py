@@ -4,7 +4,6 @@ import string
 from datetime import timedelta
 from functools import cached_property, partial
 
-from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
