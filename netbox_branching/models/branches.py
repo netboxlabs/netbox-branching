@@ -14,6 +14,7 @@ from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from mptt.models import MPTTModel
 
 from core.models import ObjectChange as ObjectChange_
 from netbox.config import get_config
@@ -281,11 +282,17 @@ class Branch(JobsMixin, PrimaryModel):
         try:
             with activate_branch(self):
                 with transaction.atomic(using=self.connection_name):
+                    models = set()
+
                     # Apply each change from the main schema
                     for change in changes:
+                        models.add(change.changed_object_type.model_class())
                         change.apply(using=self.connection_name, logger=logger)
                     if not commit:
                         raise AbortTransaction()
+
+                    # Perform cleanup tasks
+                    self._cleanup(models)
 
         except Exception as e:
             if err_message := str(e):
@@ -345,14 +352,20 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
+                models = set()
+
                 # Apply each change from the Branch
                 for change in changes:
+                    models.add(change.changed_object_type.model_class())
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
                         change.apply(using=DEFAULT_DB_ALIAS, logger=logger)
                 if not commit:
                     raise AbortTransaction()
+
+                # Perform cleanup tasks
+                self._cleanup(models)
 
         except Exception as e:
             if err_message := str(e):
@@ -417,14 +430,20 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
+                models = set()
+
                 # Undo each change from the Branch
                 for change in changes:
+                    models.add(change.changed_object_type.model_class())
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
                         change.undo(logger=logger)
                 if not commit:
                     raise AbortTransaction()
+
+                # Perform cleanup tasks
+                self._cleanup(models)
 
         except Exception as e:
             if err_message := str(e):
@@ -454,6 +473,19 @@ class Branch(JobsMixin, PrimaryModel):
         post_save.disconnect(handler, sender=ObjectChange_)
 
     revert.alters_data = True
+
+    def _cleanup(self, models):
+        """
+        Called after syncing, merging, or reverting a branch.
+        """
+        logger = logging.getLogger('netbox_branching.branch')
+
+        for model in models:
+
+            # Recalculate MPTT as needed
+            if issubclass(model, MPTTModel):
+                logger.debug(f"Recalculating MPTT for model {model}")
+                model.objects.rebuild()
 
     def provision(self, user):
         """
