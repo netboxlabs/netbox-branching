@@ -5,13 +5,12 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.fields import ArrayField
 from django.db import DEFAULT_DB_ALIAS, models
 from django.utils.translation import gettext_lazy as _
-from mptt.models import MPTTModel
 
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
+from netbox_branching.utilities import update_object
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
-from netbox_branching.utilities import update_object
 
 __all__ = (
     'AppliedChange',
