@@ -39,3 +39,16 @@ class BranchAwareRouter:
     def allow_relation(self, obj1, obj2, **hints):
         # Permit relations from the branch schema to the main schema
         return True
+
+    def allow_migrate(self, db, app_label, model_name=None, **hints):
+        if not db.startswith('schema_'):
+            return
+
+        if app_label == 'netbox_branching':
+            # print(f'post_migrate_state({app_label}, {model_name}): False')
+            return False
+
+        # Disallow migrations for models which don't support branching
+        if model_name and model_name not in registry['model_features']['branching'].get(app_label, []):
+            # print(f'post_migrate_state({app_label}, {model_name}): False')
+            return False
