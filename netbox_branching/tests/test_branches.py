@@ -42,6 +42,19 @@ class BranchTestCase(TransactionTestCase):
             tables_found = {row.table_name for row in fetchall(cursor)}
             self.assertSetEqual(tables_expected, tables_found)
 
+            # Check that all indexes were renamed to match the main schema
+            cursor.execute(
+                "SELECT idx_a.schemaname AS schema_a, idx_a.tablename AS table_a, idx_a.indexname AS index_in_a "
+                "FROM pg_indexes idx_a "
+                "WHERE idx_a.schemaname=%s "
+                "AND NOT EXISTS ("
+                "    SELECT 1 FROM pg_indexes idx_b "
+                "    WHERE idx_b.schemaname=%s AND idx_b.indexname=idx_a.indexname"
+                ") ORDER BY idx_a.indexname",
+                [branch.schema_name, MAIN_SCHEMA]
+            )
+            self.assertListEqual(fetchall(cursor), [], "Found indexes with unique names in branch schema.")
+
             # Check that object counts match the main schema for each table
             for table_name in tables_to_replicate:
                 cursor.execute(f"SELECT COUNT(id) FROM {MAIN_SCHEMA}.{table_name}")
