@@ -540,6 +540,7 @@ class Branch(JobsMixin, PrimaryModel):
         """
         logger = logging.getLogger('netbox_branching.branch.provision')
         logger.info(f'Provisioning branch {self} ({self.schema_name})')
+        main_schema = get_plugin_config('netbox_branching', 'main_schema')
 
         # Emit pre-provision signal
         pre_provision.send(sender=self.__class__, branch=self, user=user)
@@ -572,21 +573,21 @@ class Branch(JobsMixin, PrimaryModel):
                 # Create an empty copy of the global change log. Share the ID sequence from the main table to avoid
                 # reusing change record IDs.
                 table = ObjectChange_._meta.db_table
-                main_table = f'public.{table}'
+                main_table = f'{main_schema}.{table}'
                 schema_table = f'{schema}.{table}'
                 logger.debug(f'Creating table {schema_table}')
                 cursor.execute(
                     f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
                 )
                 # Set the default value for the ID column to the sequence associated with the source table
-                sequence_name = f'public.{table}_id_seq'
+                sequence_name = f'{main_schema}.{table}_id_seq'
                 cursor.execute(
                     f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
                 )
 
                 # Replicate relevant tables from the main schema
                 for table in get_tables_to_replicate():
-                    main_table = f'public.{table}'
+                    main_table = f'{main_schema}.{table}'
                     schema_table = f'{schema}.{table}'
                     logger.debug(f'Creating table {schema_table}')
                     # Create the table in the new schema

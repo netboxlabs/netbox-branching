@@ -28,6 +28,9 @@ class AppConfig(PluginConfig):
         # Models from other plugins which should be excluded from branching support
         'exempt_models': [],
 
+        # The name of the main schema
+        'main_schema': 'public',
+
         # This string is prefixed to the name of each new branch schema during provisioning
         'schema_prefix': 'branch_',
 
