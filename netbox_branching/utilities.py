@@ -1,6 +1,6 @@
 import datetime
 import logging
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
@@ -25,6 +25,7 @@ __all__ = (
     'deactivate_branch',
     'get_active_branch',
     'get_branchable_object_types',
+    'get_sql_results',
     'get_tables_to_replicate',
     'is_api_request',
     'record_applied_change',
@@ -251,6 +252,13 @@ def get_active_branch(request):
     # Branch set by cookie
     elif schema_id := request.COOKIES.get(COOKIE_NAME):
         return Branch.objects.filter(schema_id=schema_id, status=BranchStatusChoices.READY).first()
+
+
+def get_sql_results(cursor):
+    Result = namedtuple("Result", [col[0] for col in cursor.description])
+    return [
+        Result(*row) for row in cursor.fetchall()
+    ]
 
 
 @register_request_processor

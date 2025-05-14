@@ -24,10 +24,12 @@ from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
+from netbox_branching.constants import MAIN_SCHEMA
 from netbox_branching.contextvars import active_branch
 from netbox_branching.signals import *
 from netbox_branching.utilities import (
-    ChangeSummary, activate_branch, get_branchable_object_types, get_tables_to_replicate, record_applied_change,
+    ChangeSummary, activate_branch, get_branchable_object_types, get_sql_results, get_tables_to_replicate,
+    record_applied_change,
 )
 from utilities.exceptions import AbortRequest, AbortTransaction
 from .changes import ObjectChange
@@ -525,31 +527,34 @@ class Branch(JobsMixin, PrimaryModel):
                 # Create an empty copy of the global change log. Share the ID sequence from the main table to avoid
                 # reusing change record IDs.
                 table = ObjectChange_._meta.db_table
-                main_table = f'public.{table}'
+                main_table = f'{MAIN_SCHEMA}.{table}'
                 schema_table = f'{schema}.{table}'
                 logger.debug(f'Creating table {schema_table}')
                 cursor.execute(
                     f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
                 )
                 # Set the default value for the ID column to the sequence associated with the source table
-                sequence_name = f'public.{table}_id_seq'
+                sequence_name = f'{MAIN_SCHEMA}.{table}_id_seq'
                 cursor.execute(
                     f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
                 )
 
                 # Replicate relevant tables from the main schema
                 for table in get_tables_to_replicate():
-                    main_table = f'public.{table}'
+                    main_table = f'{MAIN_SCHEMA}.{table}'
                     schema_table = f'{schema}.{table}'
                     logger.debug(f'Creating table {schema_table}')
+
                     # Create the table in the new schema
                     cursor.execute(
                         f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
                     )
+
                     # Copy data from the source table
                     cursor.execute(
                         f"INSERT INTO {schema_table} SELECT * FROM {main_table}"
                     )
+
                     # Get the name of the sequence used for object ID allocations (if one exists)
                     cursor.execute(
                         "SELECT pg_get_serial_sequence(%s, 'id')", [table]
@@ -558,6 +563,37 @@ class Branch(JobsMixin, PrimaryModel):
                     if sequence_name := cursor.fetchone()[0]:
                         cursor.execute(
                             f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
+                        )
+
+                # Rename indexes to ensure consistency with the main schema for migration compatibility
+                cursor.execute(
+                    f"SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = '{schema}'"
+                )
+                for index in get_sql_results(cursor):
+                    # Find the matching index in main based on its table & definition
+                    definition = index.indexdef.split(' USING ', maxsplit=1)[1]
+                    cursor.execute(
+                        "SELECT indexname FROM pg_indexes "
+                        "WHERE schemaname=%s "
+                        "AND tablename=%s "
+                        "AND indexdef LIKE %s",
+                        [MAIN_SCHEMA, index.tablename, f'% {definition}']
+                    )
+                    if result := cursor.fetchone():
+                        # Rename the branch schema index (if needed)
+                        original_name = index.indexname
+                        new_name = result[0]
+                        if new_name != original_name:
+                            sql = f"ALTER INDEX {schema}.{original_name} RENAME TO {new_name}"
+                            try:
+                                cursor.execute(sql)
+                                logger.debug(sql)
+                            except Exception as e:
+                                logger.error(sql)
+                                raise e
+                    else:
+                        logger.warning(
+                            f"Found no matching index in main for branch index {index.indexname}."
                         )
 
                 # Commit the transaction
