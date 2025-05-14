@@ -1,5 +1,3 @@
-from collections import namedtuple
-
 from django.db import connection, migrations
 
 from netbox.plugins import get_plugin_config
@@ -52,7 +50,6 @@ def rename_indexes(apps, schema_editor):
                 )
                 if not (result := cursor.fetchone()):
                     print(f"{branch_index.indexname}: No matching index found!")
-                    print(sql)
                     continue
                 new_name = result[0]
 
