@@ -2,9 +2,8 @@ from django.db import connection, migrations
 
 from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.constants import MAIN_SCHEMA
 from netbox_branching.utilities import get_sql_results
-
-MAIN_SCHEMA = 'public'
 
 # Indexes to ignore as they are removed in a NetBox v4.3 migration
 SKIP = (
@@ -42,25 +41,18 @@ def rename_indexes(apps, schema_editor):
                 # Find the matching index in main based on its table & definition
                 definition = branch_index.indexdef.split(' USING ', maxsplit=1)[1]
                 cursor.execute(
-                    "SELECT indexname FROM pg_indexes "
-                    "WHERE schemaname=%s "
-                    "AND tablename=%s "
-                    "AND indexdef LIKE %s",
+                    "SELECT indexname FROM pg_indexes WHERE schemaname=%s AND tablename=%s AND indexdef LIKE %s",
                     [MAIN_SCHEMA, branch_index.tablename, f'% {definition}']
                 )
-                if not (result := cursor.fetchone()):
-                    print(f"{branch_index.indexname}: No matching index found!")
-                    continue
-                new_name = result[0]
-
-                # Rename the branch schema index (if needed)
-                if new_name != branch_index.indexname:
-                    sql = f"ALTER INDEX {schema_name}.{branch_index.indexname} RENAME TO {new_name}"
-                    try:
-                        cursor.execute(sql)
-                    except Exception as e:
-                        print(sql)
-                        raise e
+                if result := cursor.fetchone():
+                    new_name = result[0]
+                    if new_name != branch_index.indexname:
+                        sql = f"ALTER INDEX {schema_name}.{branch_index.indexname} RENAME TO {new_name}"
+                        try:
+                            cursor.execute(sql)
+                        except Exception as e:
+                            print(sql)
+                            raise e
 
     print('\n ', end='')  # Padding for final "OK"
 

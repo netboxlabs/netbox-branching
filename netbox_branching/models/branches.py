@@ -573,10 +573,7 @@ class Branch(JobsMixin, PrimaryModel):
                     # Find the matching index in main based on its table & definition
                     definition = index.indexdef.split(' USING ', maxsplit=1)[1]
                     cursor.execute(
-                        "SELECT indexname FROM pg_indexes "
-                        "WHERE schemaname=%s "
-                        "AND tablename=%s "
-                        "AND indexdef LIKE %s",
+                        "SELECT indexname FROM pg_indexes WHERE schemaname=%s AND tablename=%s AND indexdef LIKE %s",
                         [MAIN_SCHEMA, index.tablename, f'% {definition}']
                     )
                     if result := cursor.fetchone():

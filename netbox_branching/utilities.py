@@ -255,6 +255,9 @@ def get_active_branch(request):
 
 
 def get_sql_results(cursor):
+    """
+    Return the results of the most recent SQL query as a list of named tuples.
+    """
     Result = namedtuple("Result", [col[0] for col in cursor.description])
     return [
         Result(*row) for row in cursor.fetchall()
