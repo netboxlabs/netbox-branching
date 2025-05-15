@@ -9,6 +9,7 @@ from .utilities import ListHandler
 
 __all__ = (
     'MergeBranchJob',
+    'MigrateBranchJob',
     'ProvisionBranchJob',
     'RevertBranchJob',
     'SyncBranchJob',
@@ -131,3 +132,21 @@ class RevertBranchJob(JobRunner):
             branch.revert(user=self.job.user, commit=commit)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
+
+
+class MigrateBranchJob(JobRunner):
+    """
+    Apply any outstanding migrations from the main schema to the Branch.
+    """
+    class Meta:
+        name = 'Migrate branch'
+
+    def run(self, *args, **kwargs):
+        # Initialize logging
+        logger = logging.getLogger('netbox_branching.branch.migrate')
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(ListHandler(queue=get_job_log(self.job)))
+
+        # Migrate the Branch
+        branch = self.job.object
+        branch.migrate()
