@@ -7,7 +7,9 @@ from functools import cached_property, partial
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
+from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
+from django.db.migrations.executor import MigrationExecutor
+from django.db.migrations.recorder import MigrationRecorder
 from django.db.models.signals import post_save
 from django.db.utils import ProgrammingError
 from django.test import RequestFactory
@@ -88,6 +90,7 @@ class Branch(JobsMixin, PrimaryModel):
     _preaction_validators = {
         'sync': set(),
         'merge': set(),
+        'migrate': set(),
         'revert': set(),
         'archive': set(),
     }
@@ -273,6 +276,23 @@ class Branch(JobsMixin, PrimaryModel):
         return self.synced_time < timezone.now() - timedelta(days=changelog_retention)
 
     #
+    # Migration handling
+    #
+
+    @property
+    def unapplied_migrations(self):
+        """
+        Return a list of migrations which have been applied in main but not the branch.
+        """
+        connection = connections[self.connection_name]
+        executor = MigrationExecutor(connection)
+        targets = executor.loader.graph.leaf_nodes()
+        plan = executor.migration_plan(targets)
+        return [
+            (migration.app_label, migration.name) for migration, backward in plan
+        ]
+
+    #
     # Branch action indicators
     #
 
@@ -321,6 +341,13 @@ class Branch(JobsMixin, PrimaryModel):
         Indicates whether the branch can be archived.
         """
         return self._can_do_action('archive')
+
+    @cached_property
+    def can_migrate(self):
+        """
+        Indicates whether the branch can be migrated.
+        """
+        return self._can_do_action('migrate')
 
     #
     # Branch actions
@@ -733,6 +760,32 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info('Deprovisioning completed')
 
     deprovision.alters_data = True
+
+    def migrate(self):
+        """
+        Apply any unapplied schema migrations to the branch.
+        """
+        logger = logging.getLogger('netbox_branching.branch.migrate')
+        logger.info(f'Migrating branch {self} ({self.schema_name})')
+
+        # Emit pre-migration signal
+        pre_migrate.send(sender=self.__class__, branch=self)
+
+        # Generate migration plan & apply any migrations
+        connection = connections[self.connection_name]
+        executor = MigrationExecutor(connection)
+        targets = executor.loader.graph.leaf_nodes()
+        if plan := executor.migration_plan(targets):
+            executor.migrate(targets)
+        else:
+            logger.info("Found no migrations to apply")
+
+        # Emit post-migration signal
+        post_migrate.send(sender=self.__class__, branch=self)
+
+        logger.info('Migration completed')
+
+    migrate.alters_data = True
 
 
 class BranchEvent(models.Model):

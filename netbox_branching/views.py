@@ -11,7 +11,7 @@ from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
-from .jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
+from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
 
 
@@ -314,6 +314,22 @@ class BranchArchiveView(generic.ObjectView):
             'branch': branch,
             'form': form,
         })
+
+
+@register_model_view(Branch, 'migrate')
+class BranchSyncView(BaseBranchActionView):
+    action = 'migrate'
+
+    def do_action(self, branch, request, form):
+        # Enqueue a background job to migrate the Branch
+        MigrateBranchJob.enqueue(
+            instance=branch,
+            user=request.user,
+            commit=form.cleaned_data['commit']
+        )
+        messages.success(request, _("Migration of branch {branch} in progress").format(branch=branch))
+
+        return redirect(branch.get_absolute_url())
 
 
 class BranchBulkImportView(generic.BulkImportView):
