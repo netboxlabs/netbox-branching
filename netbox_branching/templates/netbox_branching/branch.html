@@ -42,6 +42,15 @@
       <div class="text-secondary">{{ last_job.error }}</div>
     </div>
   {% endif %}
+  {% if object.unapplied_migrations %}
+    <div class="alert alert-danger d-flex justify-content-between align-items-center" role="alert">
+      <h4 class="alert-title mb-0">
+        <i class="mdi mdi-alert"></i>
+        {{ object.unapplied_migrations|length }} {% trans "unapplied migrations detected" %}
+      </h4>
+      {% branch_migrate_button object %}
+    </div>
+  {% endif %}
   <div class="row">
 	  <div class="col col-md-6">
       <div class="card">

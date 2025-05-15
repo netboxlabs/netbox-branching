@@ -11,6 +11,7 @@ BRANCH_HEADER = 'X-NetBox-Branch'
 BRANCH_ACTIONS = (
     'sync',
     'merge',
+    'migrate',
     'revert',
     'archive',
 )
