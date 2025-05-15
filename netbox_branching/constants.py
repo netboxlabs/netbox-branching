@@ -1,6 +1,3 @@
-# Name of the main (non-branch) PostgreSQL schema
-MAIN_SCHEMA = 'public'
-
 # HTTP cookie
 COOKIE_NAME = 'active_branch'
 

@@ -3,6 +3,7 @@ import logging
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from functools import cached_property
 
 from django.contrib import messages
 from django.db.models import ForeignKey, ManyToManyField
@@ -39,6 +40,10 @@ class DynamicSchemaDict(dict):
     Behaves like a normal dictionary, except for keys beginning with "schema_". Any lookup for
     "schema_*" will return the default configuration extended to include the search_path option.
     """
+    @cached_property
+    def main_schema(self):
+        return get_plugin_config('netbox_branching', 'main_schema')
+
     def __getitem__(self, item):
         if type(item) is str and item.startswith('schema_'):
             if schema := item.removeprefix('schema_'):
@@ -46,7 +51,7 @@ class DynamicSchemaDict(dict):
                 return {
                     **default_config,
                     'OPTIONS': {
-                        'options': f'-c search_path={schema},public'
+                        'options': f'-c search_path={schema},{self.main_schema}'
                     }
                 }
         return super().__getitem__(item)

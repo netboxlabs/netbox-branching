@@ -37,5 +37,5 @@ class BranchAwareRouter:
         return self._get_db(model, **hints)
 
     def allow_relation(self, obj1, obj2, **hints):
-        # Permit relations from the branch schema to the main (public) schema
+        # Permit relations from the branch schema to the main schema
         return True

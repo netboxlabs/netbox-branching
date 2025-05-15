@@ -28,6 +28,14 @@ exempt_models = (
 
 ---
 
+## `main_schema`
+
+Default: `"public"`
+
+The name of the main (primary) PostgreSQL schema. (Use the `\dn` command in the PostgreSQL CLI to list all schemas.)
+
+---
+
 ## `max_working_branches`
 
 Default: None
@@ -46,7 +54,7 @@ The maximum total number of branches that can exist simultaneously, including me
 
 ## `schema_prefix`
 
-Default: `branch_`
+Default: `"branch_"`
 
 The string to prefix to the unique branch ID when provisioning the PostgreSQL schema for a branch. Per [the PostgreSQL documentation](https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS), this string must begin with a letter or underscore.
 

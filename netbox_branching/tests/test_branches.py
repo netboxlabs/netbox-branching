@@ -6,8 +6,8 @@ from django.db import connection
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 
+from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchStatusChoices
-from netbox_branching.constants import MAIN_SCHEMA
 from netbox_branching.models import Branch
 from netbox_branching.utilities import get_tables_to_replicate
 from .utils import fetchall, fetchone
@@ -21,6 +21,7 @@ class BranchTestCase(TransactionTestCase):
         branch.save(provision=False)
         branch.provision(user=None)
 
+        main_schema = get_plugin_config('netbox_branching', 'main_schema')
         tables_to_replicate = get_tables_to_replicate()
 
         with connection.cursor() as cursor:
@@ -44,7 +45,7 @@ class BranchTestCase(TransactionTestCase):
 
             # Check that object counts match the main schema for each table
             for table_name in tables_to_replicate:
-                cursor.execute(f"SELECT COUNT(id) FROM {MAIN_SCHEMA}.{table_name}")
+                cursor.execute(f"SELECT COUNT(id) FROM {main_schema}.{table_name}")
                 main_count = fetchone(cursor).count
                 cursor.execute(f"SELECT COUNT(id) FROM {branch.schema_name}.{table_name}")
                 branch_count = fetchone(cursor).count
