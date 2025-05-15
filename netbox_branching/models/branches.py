@@ -32,6 +32,7 @@ from netbox_branching.utilities import (
     record_applied_change,
 )
 from utilities.exceptions import AbortRequest, AbortTransaction
+from utilities.querysets import RestrictedQuerySet
 from .changes import ObjectChange
 
 __all__ = (
@@ -676,6 +677,8 @@ class BranchEvent(models.Model):
         choices=BranchEventTypeChoices,
         editable=False
     )
+
+    objects = RestrictedQuerySet.as_manager()
 
     class Meta:
         ordering = ('-time',)
