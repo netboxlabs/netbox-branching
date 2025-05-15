@@ -1,5 +1,15 @@
 # Change Log
 
+## v0.5.5
+
+### Bug Fixes
+
+* [#242](https://github.com/netboxlabs/netbox-branching/issues/242) - Use RestrictedQuerySet for BranchEvent objects
+* [#243](https://github.com/netboxlabs/netbox-branching/issues/243) - Defer MPTT recalculation until all changes have been applied
+* [#251](https://github.com/netboxlabs/netbox-branching/issues/251) - Preserve SQL index names when provisioning a branch
+
+---
+
 ## v0.5.4
 
 ### Bug Fixes
