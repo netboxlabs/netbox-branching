@@ -1,6 +1,7 @@
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
+from core.api.serializers import ObjectChangeSerializer
 from core.choices import ObjectChangeActionChoices
 from netbox.api.exceptions import SerializerNotFound
 from netbox.api.fields import ChoiceField, ContentTypeField
@@ -13,6 +14,7 @@ from utilities.api import get_serializer_for_model
 __all__ = (
     'BranchSerializer',
     'BranchEventSerializer',
+    'BranchPullSerializer',
     'ChangeDiffSerializer',
     'CommitSerializer',
 )
@@ -58,6 +60,11 @@ class BranchEventSerializer(NetBoxModelSerializer):
         nested=True,
         read_only=True
     )
+    related_branch = BranchSerializer(
+        nested=True,
+        read_only=True,
+        allow_null=True
+    )
     user = UserSerializer(
         nested=True,
         read_only=True
@@ -70,7 +77,7 @@ class BranchEventSerializer(NetBoxModelSerializer):
     class Meta:
         model = BranchEvent
         fields = [
-            'id', 'url', 'display', 'time', 'branch', 'user', 'type',
+            'id', 'url', 'display', 'time', 'branch', 'related_branch', 'user', 'type',
         ]
         brief_fields = ('id', 'url', 'display')
 
@@ -138,4 +145,29 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
 
 
 class CommitSerializer(serializers.Serializer):
-    commit = serializers.BooleanField(required=False)
+    commit = serializers.BooleanField(
+        required=False,
+        default=False
+    )
+
+
+class BranchPullSerializer(CommitSerializer):
+    source = BranchSerializer(
+        nested=True
+    )
+    atomic = serializers.BooleanField(
+        required=False,
+        default=True
+    )
+    start = ObjectChangeSerializer(
+        nested=True,
+        required=False,
+        allow_null=True,
+        default=None
+    )
+    end = ObjectChangeSerializer(
+        nested=True,
+        required=False,
+        allow_null=True,
+        default=None
+    )
