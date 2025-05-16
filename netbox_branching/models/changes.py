@@ -5,13 +5,12 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.fields import ArrayField
 from django.db import DEFAULT_DB_ALIAS, models
 from django.utils.translation import gettext_lazy as _
-from mptt.models import MPTTModel
 
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
+from netbox_branching.utilities import update_object
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
-from netbox_branching.utilities import update_object
 
 __all__ = (
     'AppliedChange',
@@ -56,10 +55,6 @@ class ObjectChange(ObjectChange_):
             except model.DoesNotExist:
                 logger.debug(f'{model._meta.verbose_name} ID {self.changed_object_id} already deleted; skipping')
 
-        # Rebuild the MPTT tree where applicable
-        if issubclass(model, MPTTModel):
-            model.objects.rebuild()
-
     apply.alters_data = True
 
     def undo(self, using=DEFAULT_DB_ALIAS, logger=None):
@@ -90,10 +85,6 @@ class ObjectChange(ObjectChange_):
             logger.debug(f'Restoring {model._meta.verbose_name} {instance}')
             instance.object.full_clean()
             instance.save(using=using)
-
-        # Rebuild the MPTT tree where applicable
-        if issubclass(model, MPTTModel):
-            model.objects.rebuild()
 
     undo.alters_data = True
 
@@ -159,7 +150,8 @@ class ChangeDiff(models.Model):
 
     def save(self, *args, **kwargs):
         self._update_conflicts()
-        self.object_repr = str(self.object)
+        if self.object:
+            self.object_repr = str(self.object)
 
         super().save(*args, **kwargs)
 

@@ -12,7 +12,7 @@ class AppConfig(PluginConfig):
     name = 'netbox_branching'
     verbose_name = 'NetBox Branching'
     description = 'A git-like branching implementation for NetBox'
-    version = '0.5.3'
+    version = '0.5.5'
     base_url = 'branching'
     min_version = '4.2.3'
     middleware = [
@@ -43,7 +43,7 @@ class AppConfig(PluginConfig):
 
     def ready(self):
         super().ready()
-        from . import constants, events, search, signal_receivers
+        from . import constants, events, search, signal_receivers  # noqa: F401
         from .models import Branch
         from .utilities import DynamicSchemaDict
 

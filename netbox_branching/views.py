@@ -278,7 +278,7 @@ class BranchArchiveView(generic.ObjectView):
     template_name = 'netbox_branching/branch_archive.html'
 
     def get_required_permission(self):
-        return f'netbox_branching.archive_branch'
+        return 'netbox_branching.archive_branch'
 
     @staticmethod
     def _validate(request, branch):

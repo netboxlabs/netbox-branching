@@ -4,7 +4,7 @@
     <i class="mdi mdi-source-branch"></i>
     {{ active_branch|default:"Main" }}
   </button>
-  <div class="dropdown-menu">
+  <div class="dropdown-menu dropdown-menu-end">
     <a class="dropdown-item d-flex justify-content-between" href="?_branch=">
       Main {% if not active_branch %}<span class="badge bg-green ms-auto"></span>{% endif %}
     </a>

@@ -1,6 +1,6 @@
 import datetime
 import logging
-from collections import defaultdict
+from collections import defaultdict, namedtuple
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from functools import cached_property
@@ -27,6 +27,7 @@ __all__ = (
     'deactivate_branch',
     'get_active_branch',
     'get_branchable_object_types',
+    'get_sql_results',
     'get_tables_to_replicate',
     'is_api_request',
     'record_applied_change',
@@ -250,7 +251,7 @@ def get_active_branch(request):
                 messages.error(request, f"Branch {branch} is not ready for use (status: {branch.status})")
                 return None
         else:
-            messages.success(request, f"Deactivated branch")
+            messages.success(request, "Deactivated branch")
             request.COOKIES.pop(COOKIE_NAME, None)  # Delete cookie if set
             return None
 
@@ -259,12 +260,22 @@ def get_active_branch(request):
         return Branch.objects.filter(schema_id=schema_id, status=BranchStatusChoices.READY).first()
 
 
+def get_sql_results(cursor):
+    """
+    Return the results of the most recent SQL query as a list of named tuples.
+    """
+    Result = namedtuple("Result", [col[0] for col in cursor.description])
+    return [
+        Result(*row) for row in cursor.fetchall()
+    ]
+
+
 @register_request_processor
 def ActiveBranchContextManager(request):
     """
     Activate a branch if indicated by the request.
     """
-    if branch := get_active_branch(request):
+    if request and (branch := get_active_branch(request)):
         return activate_branch(branch)
     return nullcontext()
 

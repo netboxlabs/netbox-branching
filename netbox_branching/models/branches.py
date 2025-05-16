@@ -13,8 +13,8 @@ from django.db.utils import ProgrammingError
 from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.module_loading import import_string
 from django.utils.translation import gettext_lazy as _
+from mptt.models import MPTTModel
 
 from core.models import ObjectChange as ObjectChange_
 from netbox.config import get_config
@@ -28,10 +28,11 @@ from netbox_branching.constants import BRANCH_ACTIONS
 from netbox_branching.contextvars import active_branch
 from netbox_branching.signals import *
 from netbox_branching.utilities import (
-    BranchActionIndicator, ChangeSummary, activate_branch, get_branchable_object_types, get_tables_to_replicate,
-    record_applied_change,
+    BranchActionIndicator, ChangeSummary, activate_branch, get_branchable_object_types, get_sql_results,
+    get_tables_to_replicate, record_applied_change,
 )
 from utilities.exceptions import AbortRequest, AbortTransaction
+from utilities.querysets import RestrictedQuerySet
 from .changes import ObjectChange
 
 __all__ = (
@@ -346,7 +347,7 @@ class Branch(JobsMixin, PrimaryModel):
         if changes := self.get_unsynced_changes().order_by('time'):
             logger.info(f"Found {len(changes)} changes to sync")
         else:
-            logger.info(f"No changes found; aborting.")
+            logger.info("No changes found; aborting.")
             return
 
         # Update Branch status
@@ -356,11 +357,17 @@ class Branch(JobsMixin, PrimaryModel):
         try:
             with activate_branch(self):
                 with transaction.atomic(using=self.connection_name):
+                    models = set()
+
                     # Apply each change from the main schema
                     for change in changes:
+                        models.add(change.changed_object_type.model_class())
                         change.apply(using=self.connection_name, logger=logger)
                     if not commit:
                         raise AbortTransaction()
+
+                    # Perform cleanup tasks
+                    self._cleanup(models)
 
         except Exception as e:
             if err_message := str(e):
@@ -406,7 +413,7 @@ class Branch(JobsMixin, PrimaryModel):
         if changes := self.get_unmerged_changes().order_by('time'):
             logger.info(f"Found {len(changes)} changes to merge")
         else:
-            logger.info(f"No changes found; aborting.")
+            logger.info("No changes found; aborting.")
             return
 
         # Update Branch status
@@ -422,14 +429,20 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
+                models = set()
+
                 # Apply each change from the Branch
                 for change in changes:
+                    models.add(change.changed_object_type.model_class())
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
                         change.apply(using=DEFAULT_DB_ALIAS, logger=logger)
                 if not commit:
                     raise AbortTransaction()
+
+                # Perform cleanup tasks
+                self._cleanup(models)
 
         except Exception as e:
             if err_message := str(e):
@@ -480,7 +493,7 @@ class Branch(JobsMixin, PrimaryModel):
         if changes := self.get_changes().order_by('-time'):
             logger.info(f"Found {len(changes)} changes to revert")
         else:
-            logger.info(f"No changes found; aborting.")
+            logger.info("No changes found; aborting.")
             return
 
         # Update Branch status
@@ -496,14 +509,20 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
+                models = set()
+
                 # Undo each change from the Branch
                 for change in changes:
+                    models.add(change.changed_object_type.model_class())
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
                         change.undo(logger=logger)
                 if not commit:
                     raise AbortTransaction()
+
+                # Perform cleanup tasks
+                self._cleanup(models)
 
         except Exception as e:
             if err_message := str(e):
@@ -533,6 +552,19 @@ class Branch(JobsMixin, PrimaryModel):
         post_save.disconnect(handler, sender=ObjectChange_)
 
     revert.alters_data = True
+
+    def _cleanup(self, models):
+        """
+        Called after syncing, merging, or reverting a branch.
+        """
+        logger = logging.getLogger('netbox_branching.branch')
+
+        for model in models:
+
+            # Recalculate MPTT as needed
+            if issubclass(model, MPTTModel):
+                logger.debug(f"Recalculating MPTT for model {model}")
+                model.objects.rebuild()
 
     def provision(self, user):
         """
@@ -590,23 +622,54 @@ class Branch(JobsMixin, PrimaryModel):
                     main_table = f'{main_schema}.{table}'
                     schema_table = f'{schema}.{table}'
                     logger.debug(f'Creating table {schema_table}')
+
                     # Create the table in the new schema
                     cursor.execute(
                         f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
                     )
+
                     # Copy data from the source table
                     cursor.execute(
                         f"INSERT INTO {schema_table} SELECT * FROM {main_table}"
                     )
-                    # Get the name of the sequence used for object ID allocations
+
+                    # Get the name of the sequence used for object ID allocations (if one exists)
                     cursor.execute(
                         "SELECT pg_get_serial_sequence(%s, 'id')", [table]
                     )
-                    sequence_name = cursor.fetchone()[0]
                     # Set the default value for the ID column to the sequence associated with the source table
+                    if sequence_name := cursor.fetchone()[0]:
+                        cursor.execute(
+                            f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
+                        )
+
+                # Rename indexes to ensure consistency with the main schema for migration compatibility
+                cursor.execute(
+                    f"SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = '{schema}'"
+                )
+                for index in get_sql_results(cursor):
+                    # Find the matching index in main based on its table & definition
+                    definition = index.indexdef.split(' USING ', maxsplit=1)[1]
                     cursor.execute(
-                        f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
+                        "SELECT indexname FROM pg_indexes WHERE schemaname=%s AND tablename=%s AND indexdef LIKE %s",
+                        [main_schema, index.tablename, f'% {definition}']
                     )
+                    if result := cursor.fetchone():
+                        # Rename the branch schema index (if needed)
+                        original_name = index.indexname
+                        new_name = result[0]
+                        if new_name != original_name:
+                            sql = f"ALTER INDEX {schema}.{original_name} RENAME TO {new_name}"
+                            try:
+                                cursor.execute(sql)
+                                logger.debug(sql)
+                            except Exception as e:
+                                logger.error(sql)
+                                raise e
+                    else:
+                        logger.warning(
+                            f"Found no matching index in main for branch index {index.indexname}."
+                        )
 
                 # Commit the transaction
                 cursor.execute("COMMIT")
@@ -695,6 +758,8 @@ class BranchEvent(models.Model):
         choices=BranchEventTypeChoices,
         editable=False
     )
+
+    objects = RestrictedQuerySet.as_manager()
 
     class Meta:
         ordering = ('-time',)
