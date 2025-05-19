@@ -790,24 +790,40 @@ class Branch(JobsMixin, PrimaryModel):
 
     deprovision.alters_data = True
 
-    def migrate(self):
+    def migrate(self, commit=True):
         """
         Apply any unapplied schema migrations to the branch.
         """
         logger = logging.getLogger('netbox_branching.branch.migrate')
         logger.info(f'Migrating branch {self} ({self.schema_name})')
 
+        def migration_progress_callback(action, migration=None, fake=False):
+            if action == "apply_start":
+                logger.info(f"Applying migration {migration}")
+
         # Emit pre-migration signal
         pre_migrate.send(sender=self.__class__, branch=self)
 
+        # Set Branch status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.MIGRATING}")
+        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MIGRATING)
+
         # Generate migration plan & apply any migrations
         connection = connections[self.connection_name]
-        executor = MigrationExecutor(connection)
+        executor = MigrationExecutor(connection, progress_callback=migration_progress_callback)
         targets = executor.loader.graph.leaf_nodes()
-        if plan := executor.migration_plan(targets):
-            executor.migrate(targets)
-        else:
-            logger.info("Found no migrations to apply")
+        with transaction.atomic(using=self.connection_name):
+            if plan := executor.migration_plan(targets):
+                executor.migrate(targets, plan)
+            else:
+                logger.info("Found no migrations to apply")
+            if not commit:
+                raise AbortTransaction()
+
+        # Reset Branch status to ready
+        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
+        self.status = BranchStatusChoices.READY
+        self.save()
 
         # Emit post-migration signal
         post_migrate.send(sender=self.__class__, branch=self)

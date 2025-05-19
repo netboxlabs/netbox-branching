@@ -10,6 +10,7 @@ class BranchStatusChoices(ChoiceSet):
     SYNCING = 'syncing'
     MERGING = 'merging'
     REVERTING = 'reverting'
+    MIGRATING = 'migrating'
     MERGED = 'merged'
     ARCHIVED = 'archived'
     FAILED = 'failed'
@@ -21,6 +22,7 @@ class BranchStatusChoices(ChoiceSet):
         (SYNCING, _('Syncing'), 'orange'),
         (MERGING, _('Merging'), 'orange'),
         (REVERTING, _('Reverting'), 'orange'),
+        (MIGRATING, _('Migrating'), 'orange'),
         (MERGED, _('Merged'), 'blue'),
         (ARCHIVED, _('Archived'), 'gray'),
         (FAILED, _('Failed'), 'red'),
@@ -31,6 +33,7 @@ class BranchStatusChoices(ChoiceSet):
         SYNCING,
         MERGING,
         REVERTING,
+        MIGRATING,
     )
 
     WORKING = (
