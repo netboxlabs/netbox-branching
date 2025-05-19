@@ -316,8 +316,9 @@ class BranchArchiveView(generic.ObjectView):
         })
 
 
+# TODO: Report on conflicting migrations
 @register_model_view(Branch, 'migrate')
-class BranchSyncView(BaseBranchActionView):
+class BranchMigrateView(BaseBranchActionView):
     action = 'migrate'
 
     def do_action(self, branch, request, form):
