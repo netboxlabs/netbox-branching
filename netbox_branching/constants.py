@@ -35,3 +35,12 @@ EXEMPT_MODELS = (
     'netbox_branching.*',
     'netbox_changes.*',
 )
+
+# Indexes to ignore as they are removed in a NetBox v4.3 migration, but might be present
+# in earlier NetBox releases.
+# TODO: Remove in v0.6.0
+SKIP_INDEXES = (
+    'dcim_cabletermination_termination_type_id_termination_id_idx',     # Removed in dcim.0207_remove_redundant_indexes
+    'vpn_l2vpntermination_assigned_object_type_id_assigned_objec_idx',  # Removed in vpn.0009_remove_redundant_indexes
+    'vpn_tunneltermination_termination_type_id_termination_id_idx',     # Removed in vpn.0009_remove_redundant_indexes
+)

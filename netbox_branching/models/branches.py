@@ -24,7 +24,7 @@ from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
-from netbox_branching.constants import MAIN_SCHEMA
+from netbox_branching.constants import MAIN_SCHEMA, SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
 from netbox_branching.signals import *
 from netbox_branching.utilities import (
@@ -571,6 +571,11 @@ class Branch(JobsMixin, PrimaryModel):
                     f"SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = '{schema}'"
                 )
                 for index in get_sql_results(cursor):
+                    # Skip duplicate indexes
+                    # TODO: Remove in v0.6.0
+                    if index.indexname in SKIP_INDEXES:
+                        continue
+
                     # Find the matching index in main based on its table & definition
                     definition = index.indexdef.split(' USING ', maxsplit=1)[1]
                     cursor.execute(
@@ -579,10 +584,9 @@ class Branch(JobsMixin, PrimaryModel):
                     )
                     if result := cursor.fetchone():
                         # Rename the branch schema index (if needed)
-                        original_name = index.indexname
                         new_name = result[0]
-                        if new_name != original_name:
-                            sql = f"ALTER INDEX {schema}.{original_name} RENAME TO {new_name}"
+                        if new_name != index.indexname:
+                            sql = f"ALTER INDEX {schema}.{index.indexname} RENAME TO {new_name}"
                             try:
                                 cursor.execute(sql)
                                 logger.debug(sql)
