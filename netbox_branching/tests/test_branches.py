@@ -38,7 +38,7 @@ class BranchTestCase(TransactionTestCase):
                 "SELECT * FROM information_schema.tables WHERE table_schema=%s",
                 [branch.schema_name]
             )
-            tables_expected = {*tables_to_replicate, 'core_objectchange'}
+            tables_expected = {*tables_to_replicate, 'core_objectchange', 'django_migrations'}
             tables_found = {row.table_name for row in fetchall(cursor)}
             self.assertSetEqual(tables_expected, tables_found)
 
