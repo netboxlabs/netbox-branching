@@ -541,9 +541,9 @@ class Branch(JobsMixin, PrimaryModel):
                 )
 
                 # Copy the migrations table
-                logger.debug(f'Creating migrations table')
                 main_table = f'{MAIN_SCHEMA}.django_migrations'
                 schema_table = f'{schema}.django_migrations'
+                logger.debug(f'Creating table {schema_table}')
                 cursor.execute(
                     f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
                 )
