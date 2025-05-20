@@ -1,10 +1,13 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from netbox_branching.models import ChangeDiff
+from utilities.forms.utils import get_field_value
+from utilities.forms.widgets import HTMXSelect
+from netbox_branching.models import Branch, ChangeDiff, ObjectChange
 
 __all__ = (
     'BranchActionForm',
+    'BranchPullForm',
     'ConfirmationForm',
 )
 
@@ -12,7 +15,8 @@ __all__ = (
 class BranchActionForm(forms.Form):
     pk = forms.ModelMultipleChoiceField(
         queryset=ChangeDiff.objects.all(),
-        required=False
+        required=False,
+        widget=forms.HiddenInput()
     )
     commit = forms.BooleanField(
         required=False,
@@ -40,6 +44,48 @@ class BranchActionForm(forms.Form):
             raise forms.ValidationError(_("All conflicts must be acknowledged in order to merge the branch."))
 
         return self.cleaned_data
+
+
+class BranchPullForm(BranchActionForm):
+    source = forms.ModelChoiceField(
+        queryset=Branch.objects.all(),
+        widget=HTMXSelect(
+            attrs={
+                'hx-target': 'body'
+            }
+        )
+    )
+    atomic = forms.BooleanField(
+        label=_('Atomic'),
+        required=False,
+        initial=True,
+        help_text=_('Complete only if all changes from the source branch are applied successfully.')
+    )
+    # TODO: Populate choices for start & end fields dynamically
+    start = forms.ModelChoiceField(
+        queryset=ObjectChange.objects.none(),
+        required=False
+    )
+    end = forms.ModelChoiceField(
+        queryset=ObjectChange.objects.none(),
+        required=False
+    )
+
+    field_order = ('source', 'atomic', 'start', 'end', 'commit')
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.fields['source'].queryset = Branch.objects.exclude(pk=self.branch.pk)
+
+        if source_id := get_field_value(self, 'source'):
+            try:
+                source = Branch.objects.get(pk=source_id)
+                unpulled_changes = self.branch.get_unpulled_changes(source)
+                self.fields['start'].queryset = unpulled_changes
+                self.fields['end'].queryset = unpulled_changes
+            except Branch.DoesNotExist:
+                pass
 
 
 class ConfirmationForm(forms.Form):

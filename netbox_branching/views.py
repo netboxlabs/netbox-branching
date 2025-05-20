@@ -11,7 +11,7 @@ from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
-from .jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
+from .jobs import MergeBranchJob, PullBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
 
 
@@ -136,10 +136,6 @@ class BranchChangesAheadView(generic.ObjectChildrenView):
         return parent.get_unmerged_changes().order_by('time')
 
 
-def _get_change_count(obj):
-    return obj.get_unmerged_changes().count()
-
-
 @register_model_view(Branch, 'changes-merged')
 class BranchChangesMergedView(generic.ObjectChildrenView):
     queryset = Branch.objects.all()
@@ -187,7 +183,7 @@ class BaseBranchActionView(generic.ObjectView):
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
         action_permitted = getattr(branch, f'can_{self.action}')
-        form = self.form(branch, allow_commit=action_permitted)
+        form = self.form(branch, allow_commit=action_permitted, initial=request.GET)
 
         return render(request, self.template_name, {
             'branch': branch,
@@ -195,6 +191,7 @@ class BaseBranchActionView(generic.ObjectView):
             'form': form,
             'action_permitted': action_permitted,
             'conflicts_table': self._get_conflicts_table(branch),
+            **self.get_extra_context(request, branch),
         })
 
     def post(self, request, **kwargs):
@@ -215,6 +212,7 @@ class BaseBranchActionView(generic.ObjectView):
             'form': form,
             'action_permitted': action_permitted,
             'conflicts_table': self._get_conflicts_table(branch),
+            **self.get_extra_context(request, branch),
         })
 
 
@@ -230,6 +228,30 @@ class BranchSyncView(BaseBranchActionView):
             commit=form.cleaned_data['commit']
         )
         messages.success(request, _("Syncing of branch {branch} in progress").format(branch=branch))
+
+        return redirect(branch.get_absolute_url())
+
+
+@register_model_view(Branch, 'pull')
+class BranchPullView(BaseBranchActionView):
+    action = 'pull'
+    form = forms.BranchPullForm
+
+    def do_action(self, branch, request, form):
+        # Enqueue a background job to replay changes from origin onto the Branch
+        PullBranchJob.enqueue(
+            instance=branch,
+            user=request.user,
+            source=form.cleaned_data['source'],
+            atomic=form.cleaned_data['atomic'],
+            start=form.cleaned_data['start'],
+            end=form.cleaned_data['end'],
+            commit=form.cleaned_data['commit']
+        )
+        messages.success(request, _("Pulling changes from branch {source} onto {branch}").format(
+            branch=branch,
+            source=form.cleaned_data['source']
+        ))
 
         return redirect(branch.get_absolute_url())
 
