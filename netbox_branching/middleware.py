@@ -2,7 +2,7 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.http import HttpResponseBadRequest
 
 from .constants import COOKIE_NAME, QUERY_PARAM
-from .utilities import activate_branch, is_api_request, get_active_branch
+from .utilities import is_api_request, get_active_branch
 
 __all__ = (
     'BranchMiddleware',

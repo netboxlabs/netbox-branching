@@ -73,7 +73,7 @@ class APITestCase(TransactionTestCase):
         # Branch-aware API query
         header = {
             **self.header,
-            f'HTTP_X_NETBOX_BRANCH': branch.schema_id,
+            'HTTP_X_NETBOX_BRANCH': branch.schema_id,
         }
         response = self.client.get(url, **header)
         results = self.get_results(response)

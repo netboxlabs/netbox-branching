@@ -8,6 +8,7 @@ from django.utils import timezone
 
 from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.models import Branch
 from netbox_branching.utilities import get_tables_to_replicate
 from .utils import fetchall, fetchone
@@ -39,9 +40,27 @@ class BranchTestCase(TransactionTestCase):
                 "SELECT * FROM information_schema.tables WHERE table_schema=%s",
                 [branch.schema_name]
             )
-            tables_expected = {*tables_to_replicate, 'core_objectchange'}
+            tables_expected = {*tables_to_replicate, 'core_objectchange', 'django_migrations'}
             tables_found = {row.table_name for row in fetchall(cursor)}
             self.assertSetEqual(tables_expected, tables_found)
+
+            # Check that all indexes were renamed to match the main schema
+            cursor.execute(
+                "SELECT idx_a.schemaname, idx_a.tablename, idx_a.indexname "
+                "FROM pg_indexes idx_a "
+                "WHERE idx_a.schemaname=%s "
+                "AND NOT EXISTS ("
+                "    SELECT 1 FROM pg_indexes idx_b "
+                "    WHERE idx_b.schemaname=%s AND idx_b.indexname=idx_a.indexname"
+                ") ORDER BY idx_a.indexname",
+                [branch.schema_name, main_schema]
+            )
+            # Omit skipped indexes
+            # TODO: Remove in v0.6.0
+            found_indexes = [
+                idx for idx in fetchall(cursor) if idx.indexname not in SKIP_INDEXES
+            ]
+            self.assertListEqual(found_indexes, [], "Found indexes with unique names in branch schema.")
 
             # Check that object counts match the main schema for each table
             for table_name in tables_to_replicate:
