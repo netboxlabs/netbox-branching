@@ -60,7 +60,7 @@ def rename_indexes(apps, schema_editor):
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('netbox_branching', '0003_copy_migrations'),
+        ('netbox_branching', '0002_branch_schema_id_unique'),
     ]
 
     operations = [
