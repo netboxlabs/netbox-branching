@@ -150,6 +150,6 @@ class MigrateBranchJob(JobRunner):
         # Migrate the Branch
         try:
             branch = self.job.object
-            branch.migrate(commit=commit)
+            branch.migrate(user=self.job.user, commit=commit)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
