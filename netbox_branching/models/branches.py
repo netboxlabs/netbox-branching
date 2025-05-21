@@ -790,7 +790,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     deprovision.alters_data = True
 
-    def migrate(self, commit=True):
+    def migrate(self, user, commit=True):
         """
         Apply any unapplied schema migrations to the branch.
         """
@@ -802,7 +802,7 @@ class Branch(JobsMixin, PrimaryModel):
                 logger.info(f"Applying migration {migration}")
 
         # Emit pre-migration signal
-        pre_migrate.send(sender=self.__class__, branch=self)
+        pre_migrate.send(sender=self.__class__, branch=self, user=user)
 
         # Set Branch status
         logger.debug(f"Setting branch status to {BranchStatusChoices.MIGRATING}")
@@ -825,8 +825,12 @@ class Branch(JobsMixin, PrimaryModel):
         self.status = BranchStatusChoices.READY
         self.save()
 
+        # Record a branch event for the migration
+        logger.debug(f"Recording branch event: {BranchEventTypeChoices.MIGRATED}")
+        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MIGRATED)
+
         # Emit post-migration signal
-        post_migrate.send(sender=self.__class__, branch=self)
+        post_migrate.send(sender=self.__class__, branch=self, user=user)
 
         logger.info('Migration completed')
 
