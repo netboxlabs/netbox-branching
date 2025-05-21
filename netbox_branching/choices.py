@@ -8,6 +8,7 @@ class BranchStatusChoices(ChoiceSet):
     PROVISIONING = 'provisioning'
     READY = 'ready'
     SYNCING = 'syncing'
+    MIGRATING = 'migrating'
     MERGING = 'merging'
     REVERTING = 'reverting'
     MERGED = 'merged'
@@ -19,6 +20,7 @@ class BranchStatusChoices(ChoiceSet):
         (PROVISIONING, _('Provisioning'), 'orange'),
         (READY, _('Ready'), 'green'),
         (SYNCING, _('Syncing'), 'orange'),
+        (MIGRATING, _('Migrating'), 'orange'),
         (MERGING, _('Merging'), 'orange'),
         (REVERTING, _('Reverting'), 'orange'),
         (MERGED, _('Merged'), 'blue'),
@@ -29,6 +31,7 @@ class BranchStatusChoices(ChoiceSet):
     TRANSITIONAL = (
         PROVISIONING,
         SYNCING,
+        MIGRATING,
         MERGING,
         REVERTING,
     )
@@ -43,6 +46,7 @@ class BranchStatusChoices(ChoiceSet):
 class BranchEventTypeChoices(ChoiceSet):
     PROVISIONED = 'provisioned'
     SYNCED = 'synced'
+    MIGRATED = 'migrated'
     MERGED = 'merged'
     REVERTED = 'reverted'
     ARCHIVED = 'archived'
@@ -50,6 +54,7 @@ class BranchEventTypeChoices(ChoiceSet):
     CHOICES = (
         (PROVISIONED, _('Provisioned'), 'green'),
         (SYNCED, _('Synced'), 'cyan'),
+        (MIGRATED, _('Migrated'), 'purple'),
         (MERGED, _('Merged'), 'blue'),
         (REVERTED, _('Reverted'), 'orange'),
         (ARCHIVED, _('Archived'), 'gray'),

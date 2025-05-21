@@ -7,7 +7,8 @@ from functools import cached_property, partial
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
+from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
+from django.db.migrations.executor import MigrationExecutor
 from django.db.models.signals import post_save
 from django.db.utils import ProgrammingError
 from django.test import RequestFactory
@@ -90,6 +91,7 @@ class Branch(JobsMixin, PrimaryModel):
     _preaction_validators = {
         'sync': set(),
         'merge': set(),
+        'migrate': set(),
         'revert': set(),
         'archive': set(),
     }
@@ -275,6 +277,23 @@ class Branch(JobsMixin, PrimaryModel):
         return self.synced_time < timezone.now() - timedelta(days=changelog_retention)
 
     #
+    # Migration handling
+    #
+
+    @property
+    def unapplied_migrations(self):
+        """
+        Return a list of migrations which have been applied in main but not the branch.
+        """
+        connection = connections[self.connection_name]
+        executor = MigrationExecutor(connection)
+        targets = executor.loader.graph.leaf_nodes()
+        plan = executor.migration_plan(targets)
+        return [
+            (migration.app_label, migration.name) for migration, backward in plan
+        ]
+
+    #
     # Branch action indicators
     #
 
@@ -324,6 +343,13 @@ class Branch(JobsMixin, PrimaryModel):
         """
         return self._can_do_action('archive')
 
+    @cached_property
+    def can_migrate(self):
+        """
+        Indicates whether the branch can be migrated.
+        """
+        return self._can_do_action('migrate')
+
     #
     # Branch actions
     #
@@ -340,7 +366,7 @@ class Branch(JobsMixin, PrimaryModel):
         if self.is_stale:
             raise Exception(f"Branch {self} is stale and can no longer be synced")
         if commit and not self.can_sync:
-            raise Exception(f"Syncing this branch is not permitted.")
+            raise Exception("Syncing this branch is not permitted.")
 
         # Emit pre-sync signal
         pre_sync.send(sender=self.__class__, branch=self, user=user)
@@ -406,7 +432,7 @@ class Branch(JobsMixin, PrimaryModel):
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to merge")
         if commit and not self.can_merge:
-            raise Exception(f"Merging this branch is not permitted.")
+            raise Exception("Merging this branch is not permitted.")
 
         # Emit pre-merge signal
         pre_merge.send(sender=self.__class__, branch=self, user=user)
@@ -484,9 +510,9 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info(f'Reverting branch {self} ({self.schema_name})')
 
         if not self.merged:
-            raise Exception(f"Only merged branches can be reverted.")
+            raise Exception("Only merged branches can be reverted.")
         if commit and not self.can_revert:
-            raise Exception(f"Reverting this branch is not permitted.")
+            raise Exception("Reverting this branch is not permitted.")
 
         # Emit pre-revert signal
         pre_revert.send(sender=self.__class__, branch=self, user=user)
@@ -728,7 +754,7 @@ class Branch(JobsMixin, PrimaryModel):
         Deprovision the Branch and set its status to "archived."
         """
         if not self.can_archive:
-            raise Exception(f"Archiving this branch is not permitted.")
+            raise Exception("Archiving this branch is not permitted.")
 
         # Deprovision the branch's schema
         self.deprovision()
@@ -762,6 +788,52 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info('Deprovisioning completed')
 
     deprovision.alters_data = True
+
+    def migrate(self, user, commit=True):
+        """
+        Apply any unapplied schema migrations to the branch.
+        """
+        logger = logging.getLogger('netbox_branching.branch.migrate')
+        logger.info(f'Migrating branch {self} ({self.schema_name})')
+
+        def migration_progress_callback(action, migration=None, fake=False):
+            if action == "apply_start":
+                logger.info(f"Applying migration {migration}")
+
+        # Emit pre-migration signal
+        pre_migrate.send(sender=self.__class__, branch=self, user=user)
+
+        # Set Branch status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.MIGRATING}")
+        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MIGRATING)
+
+        # Generate migration plan & apply any migrations
+        connection = connections[self.connection_name]
+        executor = MigrationExecutor(connection, progress_callback=migration_progress_callback)
+        targets = executor.loader.graph.leaf_nodes()
+        with transaction.atomic(using=self.connection_name):
+            if plan := executor.migration_plan(targets):
+                executor.migrate(targets, plan)
+            else:
+                logger.info("Found no migrations to apply")
+            if not commit:
+                raise AbortTransaction()
+
+        # Reset Branch status to ready
+        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
+        self.status = BranchStatusChoices.READY
+        self.save()
+
+        # Record a branch event for the migration
+        logger.debug(f"Recording branch event: {BranchEventTypeChoices.MIGRATED}")
+        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MIGRATED)
+
+        # Emit post-migration signal
+        post_migrate.send(sender=self.__class__, branch=self, user=user)
+
+        logger.info('Migration completed')
+
+    migrate.alters_data = True
 
 
 class BranchEvent(models.Model):
