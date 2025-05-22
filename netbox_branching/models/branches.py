@@ -811,13 +811,20 @@ class Branch(JobsMixin, PrimaryModel):
         connection = connections[self.connection_name]
         executor = MigrationExecutor(connection, progress_callback=migration_progress_callback)
         targets = executor.loader.graph.leaf_nodes()
-        with transaction.atomic(using=self.connection_name):
-            if plan := executor.migration_plan(targets):
-                executor.migrate(targets, plan)
-            else:
-                logger.info("Found no migrations to apply")
-            if not commit:
-                raise AbortTransaction()
+        try:
+            with transaction.atomic(using=self.connection_name):
+                if plan := executor.migration_plan(targets):
+                    executor.migrate(targets, plan)
+                else:
+                    logger.info("Found no migrations to apply")
+                if not commit:
+                    raise AbortTransaction()
+        except Exception as e:
+            if err_message := str(e):
+                logger.error(err_message)
+            # Restore original branch status
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
+            raise e
 
         # Reset Branch status to ready
         logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
