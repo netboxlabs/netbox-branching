@@ -58,7 +58,7 @@ DATABASES = DynamicSchemaDict({
 
 Make sure to change the parameters as appropriate for your installation.
 
-1. Add `DATABASE_ROUTERS` to `configuration.py`.
+6. Add `DATABASE_ROUTERS` to `configuration.py`.
 
 ```python
 DATABASE_ROUTERS = [
