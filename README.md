@@ -40,7 +40,7 @@ PLUGINS = [
 
 5. Make the following changes to `configuration.py`.
 
-Add `DynamicSchemaDict` to `DATABASES` setting:
+Add `DynamicSchemaDict` to `DATABASES` setting (Make sure to change the parameters as appropriate for your installation):
 
 ```python
 from netbox_branching.utilities import DynamicSchemaDict
@@ -58,8 +58,6 @@ DATABASES = DynamicSchemaDict({
 })
 ```
 
-**Note:** Make sure to change the parameters as appropriate for your installation.
-
 Add `DATABASE_ROUTERS` to `configuration.py`.
 
 ```python
@@ -68,7 +66,7 @@ DATABASE_ROUTERS = [
 ]
 ```
 
-6. Run NetBox migrations:
+1. Run NetBox migrations:
 
 ```
 $ ./manage.py migrate
