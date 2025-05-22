@@ -38,26 +38,6 @@ PLUGINS = [
 ]
 ```
 
-> [!NOTE]
-> If using a version of NetBox older then v4.3, skip steps 5 and 6 below and instead do the following:
-> 
-> Create `local_settings.py` (in the same directory as `settings.py`) to override the `DATABASES` & `DATABASE_ROUTERS` settings. This enables dynamic schema support.
-> 
-> ```python
-> from netbox_branching.utilities import DynamicSchemaDict
-> from .configuration import DATABASE
-> 
-> # Wrap DATABASES with DynamicSchemaDict for dynamic schema support
-> DATABASES = DynamicSchemaDict({
->     'default': DATABASE,
-> })
-> 
-> # Employ our custom database router
-> DATABASE_ROUTERS = [
->     'netbox_branching.database.BranchAwareRouter',
-> ]
-> ```
-
 5. Add `DynamicSchemaDict` to `DATABASES` setting in `configuration.py`.
 
 ```python
@@ -68,7 +48,7 @@ DATABASES = DynamicSchemaDict({
         'ENGINE': 'django.db.backends.postgresql',
         'NAME': 'netbox',               # Database name
         'USER': 'netbox',               # PostgreSQL username
-        'PASSWORD': 'J5brHrAXFLQSif0K', # PostgreSQL password
+        'PASSWORD': 'password',         # PostgreSQL password
         'HOST': 'localhost',            # Database server
         'PORT': '',                     # Database port (leave blank for default)
         'CONN_MAX_AGE': 300,            # Max database connection age
@@ -76,14 +56,15 @@ DATABASES = DynamicSchemaDict({
 })
 ```
 
-6. Add `DATABASE_ROUTERS` to `configuration.py`.
+Make sure to change the parameters as appropriate for your installation.
+
+1. Add `DATABASE_ROUTERS` to `configuration.py`.
 
 ```python
 DATABASE_ROUTERS = [
     'netbox_branching.database.BranchAwareRouter',
 ]
 ```
-
 
 7. Run NetBox migrations:
 
