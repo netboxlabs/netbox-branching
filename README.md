@@ -66,7 +66,7 @@ DATABASE_ROUTERS = [
 ]
 ```
 
-1. Run NetBox migrations:
+6. Run NetBox migrations:
 
 ```
 $ ./manage.py migrate
