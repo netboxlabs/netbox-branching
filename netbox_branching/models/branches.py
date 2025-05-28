@@ -76,6 +76,7 @@ class Branch(JobsMixin, PrimaryModel):
     applied_migrations = ArrayField(
         verbose_name=_('applied migrations'),
         base_field=models.CharField(max_length=100),
+        blank=True,
         default=list,
     )
     last_sync = models.DateTimeField(
