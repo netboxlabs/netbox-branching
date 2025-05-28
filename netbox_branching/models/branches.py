@@ -1,11 +1,14 @@
+import importlib
 import logging
 import random
 import string
+from collections import defaultdict
 from datetime import timedelta
 from functools import cached_property, partial
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
 from django.db.migrations.executor import MigrationExecutor
@@ -69,6 +72,11 @@ class Branch(JobsMixin, PrimaryModel):
         choices=BranchStatusChoices,
         default=BranchStatusChoices.NEW,
         editable=False
+    )
+    applied_migrations = ArrayField(
+        verbose_name=_('applied migrations'),
+        base_field=models.CharField(max_length=100),
+        default=list,
     )
     last_sync = models.DateTimeField(
         blank=True,
@@ -293,6 +301,20 @@ class Branch(JobsMixin, PrimaryModel):
             (migration.app_label, migration.name) for migration, backward in plan
         ]
 
+    @cached_property
+    def migrators(self):
+        """
+        Return a dictionary mapping object types to a list of migrators to be run when syncing, merging, or
+        reverting a Branch.
+        """
+        migrators = defaultdict(list)
+        for migration in self.applied_migrations:
+            app_label, name = migration.split('.')
+            module = importlib.import_module(f'{app_label}.migrations.{name}')
+            for object_type, migrator in getattr(module, 'objectchange_migrators', {}).items():
+                migrators[object_type].append(migrator)
+        return migrators
+
     #
     # Branch action indicators
     #
@@ -390,7 +412,7 @@ class Branch(JobsMixin, PrimaryModel):
                     # Apply each change from the main schema
                     for change in changes:
                         models.add(change.changed_object_type.model_class())
-                        change.apply(using=self.connection_name, logger=logger)
+                        change.apply(self, using=self.connection_name, logger=logger)
                     if not commit:
                         raise AbortTransaction()
 
@@ -465,7 +487,7 @@ class Branch(JobsMixin, PrimaryModel):
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
-                        change.apply(using=DEFAULT_DB_ALIAS, logger=logger)
+                        change.apply(self, using=DEFAULT_DB_ALIAS, logger=logger)
                 if not commit:
                     raise AbortTransaction()
 
@@ -545,7 +567,7 @@ class Branch(JobsMixin, PrimaryModel):
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
-                        change.undo(logger=logger)
+                        change.undo(self, logger=logger)
                 if not commit:
                     raise AbortTransaction()
 
@@ -811,9 +833,10 @@ class Branch(JobsMixin, PrimaryModel):
         connection = connections[self.connection_name]
         executor = MigrationExecutor(connection, progress_callback=migration_progress_callback)
         targets = executor.loader.graph.leaf_nodes()
+        plan = executor.migration_plan(targets)
         try:
             with transaction.atomic(using=self.connection_name):
-                if plan := executor.migration_plan(targets):
+                if plan:
                     executor.migrate(targets, plan)
                 else:
                     logger.info("Found no migrations to apply")
@@ -825,6 +848,13 @@ class Branch(JobsMixin, PrimaryModel):
             # Restore original branch status
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
             raise e
+
+        # Record the applied migrations on the Branch
+        if plan and commit:
+            self.applied_migrations = [
+                f'{migration.app_label}.{migration.name}' for migration, __ in plan
+            ]
+            self.save()
 
         # Reset Branch status to ready
         logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
