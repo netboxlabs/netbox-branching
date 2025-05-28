@@ -141,7 +141,7 @@ class MigrateBranchJob(JobRunner):
     class Meta:
         name = 'Migrate branch'
 
-    def run(self, commit=True, *args, **kwargs):
+    def run(self, *args, **kwargs):
         # Initialize logging
         logger = logging.getLogger('netbox_branching.branch.migrate')
         logger.setLevel(logging.DEBUG)
@@ -150,6 +150,6 @@ class MigrateBranchJob(JobRunner):
         # Migrate the Branch
         try:
             branch = self.job.object
-            branch.migrate(user=self.job.user, commit=commit)
+            branch.migrate(user=self.job.user)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")

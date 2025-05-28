@@ -1,0 +1,38 @@
+{% extends 'generic/_base.html' %}
+{% load form_helpers %}
+{% load i18n %}
+
+{% block title %}
+  {% blocktrans %}Migrate Branch {{ branch }}{% endblocktrans %}
+{% endblock %}
+
+{% block tabs %}
+  <ul class="nav nav-tabs">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" id="action-form-tab" data-bs-toggle="tab" data-bs-target="#action-form" type="button" role="tab" aria-controls="merge-form" aria-selected="true">
+        {% trans "Migrate" %}
+      </button>
+    </li>
+  </ul>
+{% endblock tabs %}
+
+{% block content %}
+  {# Form tab #}
+  <div class="tab-pane show active" id="action-form" role="tabpanel" aria-labelledby="action-form-tab">
+    <form action="" method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <div class="row">
+        <div class="col col-6 offset-3">
+          {% render_field form.confirm %}
+          <div class="text-center my-3">
+            <a href="{{ branch.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
+            <button type="submit" name="_update" class="btn btn-primary">
+              {% trans "Migrate Branch" %}
+            </button>
+          </div>
+        </div>
+      </div>
+    </form>
+  </div>
+  {# /Form tab #}
+{% endblock content %}

@@ -318,19 +318,43 @@ class BranchArchiveView(generic.ObjectView):
 
 # TODO: Report on conflicting migrations
 @register_model_view(Branch, 'migrate')
-class BranchMigrateView(BaseBranchActionView):
-    action = 'migrate'
+class BranchMigrateView(generic.ObjectView):
+    queryset = Branch.objects.all()
+    form = forms.ConfirmationForm
+    template_name = 'netbox_branching/branch_migrate.html'
 
-    def do_action(self, branch, request, form):
-        # Enqueue a background job to migrate the Branch
-        MigrateBranchJob.enqueue(
-            instance=branch,
-            user=request.user,
-            commit=form.cleaned_data['commit']
-        )
-        messages.success(request, _("Migration of branch {branch} in progress").format(branch=branch))
+    def get_required_permission(self):
+        return f'netbox_branching.migrate_branch'
 
-        return redirect(branch.get_absolute_url())
+    def get(self, request, **kwargs):
+        branch = self.get_object(**kwargs)
+        action_permitted = getattr(branch, f'can_merge')
+        form = self.form()
+
+        return render(request, self.template_name, {
+            'branch': branch,
+            'form': form,
+            'action_permitted': action_permitted,
+        })
+
+    def post(self, request, **kwargs):
+        branch = self.get_object(**kwargs)
+        action_permitted = getattr(branch, f'can_merge')
+        form = self.form(request.POST)
+
+        if not branch.ready:
+            messages.error(request, _("The branch is not ready to be migrated."))
+        elif form.is_valid():
+            # Enqueue a background job to migrate the Branch
+            MigrateBranchJob.enqueue(instance=branch, user=request.user)
+            messages.success(request, _("Migration of branch {branch} in progress").format(branch=branch))
+            return redirect(branch.get_absolute_url())
+
+        return render(request, self.template_name, {
+            'branch': branch,
+            'form': form,
+            'action_permitted': action_permitted,
+        })
 
 
 class BranchBulkImportView(generic.BulkImportView):

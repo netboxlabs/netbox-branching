@@ -811,7 +811,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     deprovision.alters_data = True
 
-    def migrate(self, user, commit=True):
+    def migrate(self, user):
         """
         Apply any unapplied schema migrations to the branch.
         """
@@ -821,6 +821,8 @@ class Branch(JobsMixin, PrimaryModel):
         def migration_progress_callback(action, migration=None, fake=False):
             if action == "apply_start":
                 logger.info(f"Applying migration {migration}")
+            elif action == "apply_success" and migration is not None:
+                self.applied_migrations.append(migration)
 
         # Emit pre-migration signal
         pre_migrate.send(sender=self.__class__, branch=self, user=user)
@@ -833,28 +835,19 @@ class Branch(JobsMixin, PrimaryModel):
         connection = connections[self.connection_name]
         executor = MigrationExecutor(connection, progress_callback=migration_progress_callback)
         targets = executor.loader.graph.leaf_nodes()
-        plan = executor.migration_plan(targets)
-        try:
-            with transaction.atomic(using=self.connection_name):
-                if plan:
-                    executor.migrate(targets, plan)
-                else:
-                    logger.info("Found no migrations to apply")
-                if not commit:
-                    raise AbortTransaction()
-        except Exception as e:
-            if err_message := str(e):
-                logger.error(err_message)
-            # Restore original branch status
-            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
-            raise e
-
-        # Record the applied migrations on the Branch
-        if plan and commit:
-            self.applied_migrations = [
-                f'{migration.app_label}.{migration.name}' for migration, __ in plan
-            ]
-            self.save()
+        if plan := executor.migration_plan(targets):
+            try:
+                # Run migrations
+                executor.migrate(targets, plan)
+            except Exception as e:
+                if err_message := str(e):
+                    logger.error(err_message)
+                # Save applied migrations & reset status
+                self.status = BranchStatusChoices.READY
+                self.save()
+                raise e
+        else:
+            logger.info("Found no migrations to apply")
 
         # Reset Branch status to ready
         logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
