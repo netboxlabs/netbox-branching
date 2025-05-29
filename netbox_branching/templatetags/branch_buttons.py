@@ -1,5 +1,7 @@
 from django import template
 
+from netbox_branching.choices import BranchStatusChoices
+
 __all__ = (
     'branch_sync_button',
     'branch_merge_button',

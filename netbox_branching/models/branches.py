@@ -132,7 +132,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     @property
     def ready(self):
-        return self.status == BranchStatusChoices.READY
+        return self.status == BranchStatusChoices.READY and not self.pending_migrations
 
     @property
     def merged(self):
