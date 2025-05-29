@@ -290,7 +290,7 @@ class Branch(JobsMixin, PrimaryModel):
     #
 
     @property
-    def unapplied_migrations(self):
+    def pending_migrations(self):
         """
         Return a list of migrations which have been applied in main but not the branch.
         """

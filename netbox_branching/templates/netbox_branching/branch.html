@@ -42,12 +42,17 @@
       <div class="text-secondary">{{ last_job.error }}</div>
     </div>
   {% endif %}
-  {% if object.unapplied_migrations %}
-    <div class="alert alert-danger d-flex justify-content-between align-items-center" role="alert">
-      <h4 class="alert-title mb-0">
-        <i class="mdi mdi-alert"></i>
-        {{ object.unapplied_migrations|length }} {% trans "unapplied migrations detected" %}
-      </h4>
+  {% if object.pending_migrations %}
+    <div class="alert alert-warning d-flex justify-content-between align-items-center" role="alert">
+      <i class="mdi mdi-alert fs-1 text-warning"></i>
+      <div class="flex-grow-1">
+        <h4 class="alert-title text-warning mb-0">
+          {% with count=object.pending_migrations|length %}
+            {% blocktrans %}{{ count }} pending migrations detected{% endblocktrans %}
+          {% endwith %}
+        </h4>
+        {% blocktrans %}The branch cannot be used until the migrations have been applied.{% endblocktrans %}
+      </div>
       {% branch_migrate_button object %}
     </div>
   {% endif %}

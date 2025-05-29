@@ -316,11 +316,10 @@ class BranchArchiveView(generic.ObjectView):
         })
 
 
-# TODO: Report on conflicting migrations
 @register_model_view(Branch, 'migrate')
 class BranchMigrateView(generic.ObjectView):
     queryset = Branch.objects.all()
-    form = forms.ConfirmationForm
+    form = forms.MigrateBranchForm
     template_name = 'netbox_branching/branch_migrate.html'
 
     def get_required_permission(self):
