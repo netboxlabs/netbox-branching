@@ -19,14 +19,14 @@ __all__ = (
 pre_provision = Signal()
 pre_deprovision = Signal()
 pre_sync = Signal()
-pre_merge = Signal()
 pre_migrate = Signal()
+pre_merge = Signal()
 pre_revert = Signal()
 
 # Post-event signals
 post_provision = Signal()
 post_deprovision = Signal()
 post_sync = Signal()
-post_merge = Signal()
 post_migrate = Signal()
+post_merge = Signal()
 post_revert = Signal()

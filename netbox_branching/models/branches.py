@@ -75,7 +75,7 @@ class Branch(JobsMixin, PrimaryModel):
     )
     applied_migrations = ArrayField(
         verbose_name=_('applied migrations'),
-        base_field=models.CharField(max_length=100),
+        base_field=models.CharField(max_length=200),
         blank=True,
         default=list,
     )
@@ -99,8 +99,8 @@ class Branch(JobsMixin, PrimaryModel):
 
     _preaction_validators = {
         'sync': set(),
-        'merge': set(),
         'migrate': set(),
+        'merge': set(),
         'revert': set(),
         'archive': set(),
     }
@@ -289,10 +289,10 @@ class Branch(JobsMixin, PrimaryModel):
     # Migration handling
     #
 
-    @property
+    @cached_property
     def pending_migrations(self):
         """
-        Return a list of migrations which have been applied in main but not the branch.
+        Return a list of database migrations which have been applied in main but not in the branch.
         """
         connection = connections[self.connection_name]
         executor = MigrationExecutor(connection)
@@ -346,6 +346,13 @@ class Branch(JobsMixin, PrimaryModel):
         return self._can_do_action('sync')
 
     @cached_property
+    def can_migrate(self):
+        """
+        Indicates whether the branch can be migrated.
+        """
+        return self._can_do_action('migrate')
+
+    @cached_property
     def can_merge(self):
         """
         Indicates whether the branch can be merged.
@@ -365,13 +372,6 @@ class Branch(JobsMixin, PrimaryModel):
         Indicates whether the branch can be archived.
         """
         return self._can_do_action('archive')
-
-    @cached_property
-    def can_migrate(self):
-        """
-        Indicates whether the branch can be migrated.
-        """
-        return self._can_do_action('migrate')
 
     #
     # Branch actions
@@ -443,6 +443,60 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info('Syncing completed')
 
     sync.alters_data = True
+
+    def migrate(self, user):
+        """
+        Apply any pending database migrations to the branch schema.
+        """
+        logger = logging.getLogger('netbox_branching.branch.migrate')
+        logger.info(f'Migrating branch {self} ({self.schema_name})')
+
+        def migration_progress_callback(action, migration=None, fake=False):
+            if action == "apply_start":
+                logger.info(f"Applying migration {migration}")
+            elif action == "apply_success" and migration is not None:
+                self.applied_migrations.append(migration)
+
+        # Emit pre-migration signal
+        pre_migrate.send(sender=self.__class__, branch=self, user=user)
+
+        # Set Branch status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.MIGRATING}")
+        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MIGRATING)
+
+        # Generate migration plan & apply any migrations
+        connection = connections[self.connection_name]
+        executor = MigrationExecutor(connection, progress_callback=migration_progress_callback)
+        targets = executor.loader.graph.leaf_nodes()
+        if plan := executor.migration_plan(targets):
+            try:
+                # Run migrations
+                executor.migrate(targets, plan)
+            except Exception as e:
+                if err_message := str(e):
+                    logger.error(err_message)
+                # Save applied migrations & reset status
+                self.status = BranchStatusChoices.READY
+                self.save()
+                raise e
+        else:
+            logger.info("Found no migrations to apply")
+
+        # Reset Branch status to ready
+        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
+        self.status = BranchStatusChoices.READY
+        self.save()
+
+        # Record a branch event for the migration
+        logger.debug(f"Recording branch event: {BranchEventTypeChoices.MIGRATED}")
+        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MIGRATED)
+
+        # Emit post-migration signal
+        post_migrate.send(sender=self.__class__, branch=self, user=user)
+
+        logger.info('Migration completed')
+
+    migrate.alters_data = True
 
     def merge(self, user, commit=True):
         """
@@ -811,60 +865,6 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info('Deprovisioning completed')
 
     deprovision.alters_data = True
-
-    def migrate(self, user):
-        """
-        Apply any unapplied schema migrations to the branch.
-        """
-        logger = logging.getLogger('netbox_branching.branch.migrate')
-        logger.info(f'Migrating branch {self} ({self.schema_name})')
-
-        def migration_progress_callback(action, migration=None, fake=False):
-            if action == "apply_start":
-                logger.info(f"Applying migration {migration}")
-            elif action == "apply_success" and migration is not None:
-                self.applied_migrations.append(migration)
-
-        # Emit pre-migration signal
-        pre_migrate.send(sender=self.__class__, branch=self, user=user)
-
-        # Set Branch status
-        logger.debug(f"Setting branch status to {BranchStatusChoices.MIGRATING}")
-        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MIGRATING)
-
-        # Generate migration plan & apply any migrations
-        connection = connections[self.connection_name]
-        executor = MigrationExecutor(connection, progress_callback=migration_progress_callback)
-        targets = executor.loader.graph.leaf_nodes()
-        if plan := executor.migration_plan(targets):
-            try:
-                # Run migrations
-                executor.migrate(targets, plan)
-            except Exception as e:
-                if err_message := str(e):
-                    logger.error(err_message)
-                # Save applied migrations & reset status
-                self.status = BranchStatusChoices.READY
-                self.save()
-                raise e
-        else:
-            logger.info("Found no migrations to apply")
-
-        # Reset Branch status to ready
-        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
-        self.status = BranchStatusChoices.READY
-        self.save()
-
-        # Record a branch event for the migration
-        logger.debug(f"Recording branch event: {BranchEventTypeChoices.MIGRATED}")
-        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MIGRATED)
-
-        # Emit post-migration signal
-        post_migrate.send(sender=self.__class__, branch=self, user=user)
-
-        logger.info('Migration completed')
-
-    migrate.alters_data = True
 
 
 class BranchEvent(models.Model):

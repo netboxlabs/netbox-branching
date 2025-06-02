@@ -323,11 +323,11 @@ class BranchMigrateView(generic.ObjectView):
     template_name = 'netbox_branching/branch_migrate.html'
 
     def get_required_permission(self):
-        return f'netbox_branching.migrate_branch'
+        return 'netbox_branching.migrate_branch'
 
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        action_permitted = getattr(branch, f'can_merge')
+        action_permitted = getattr(branch, 'can_migrate')
         form = self.form()
 
         return render(request, self.template_name, {
@@ -338,7 +338,7 @@ class BranchMigrateView(generic.ObjectView):
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        action_permitted = getattr(branch, f'can_merge')
+        action_permitted = getattr(branch, 'can_migrate')
         form = self.form(request.POST)
 
         if branch.status != BranchStatusChoices.READY:

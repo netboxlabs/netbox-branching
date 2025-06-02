@@ -13,7 +13,7 @@ class Migration(migrations.Migration):
             model_name='branch',
             name='applied_migrations',
             field=django.contrib.postgres.fields.ArrayField(
-                base_field=models.CharField(max_length=100),
+                base_field=models.CharField(max_length=200),
                 blank=True,
                 default=list,
                 size=None

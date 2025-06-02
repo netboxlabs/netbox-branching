@@ -136,7 +136,7 @@ class RevertBranchJob(JobRunner):
 
 class MigrateBranchJob(JobRunner):
     """
-    Apply any outstanding migrations from the main schema to the Branch.
+    Apply any outstanding database migrations from the main schema to the Branch.
     """
     class Meta:
         name = 'Migrate branch'
