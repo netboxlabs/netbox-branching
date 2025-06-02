@@ -340,7 +340,7 @@ class Branch(JobsMixin, PrimaryModel):
         if self.is_stale:
             raise Exception(f"Branch {self} is stale and can no longer be synced")
         if commit and not self.can_sync:
-            raise Exception(f"Syncing this branch is not permitted.")
+            raise Exception("Syncing this branch is not permitted.")
 
         # Emit pre-sync signal
         pre_sync.send(sender=self.__class__, branch=self, user=user)
@@ -406,7 +406,7 @@ class Branch(JobsMixin, PrimaryModel):
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to merge")
         if commit and not self.can_merge:
-            raise Exception(f"Merging this branch is not permitted.")
+            raise Exception("Merging this branch is not permitted.")
 
         # Emit pre-merge signal
         pre_merge.send(sender=self.__class__, branch=self, user=user)
@@ -484,9 +484,9 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info(f'Reverting branch {self} ({self.schema_name})')
 
         if not self.merged:
-            raise Exception(f"Only merged branches can be reverted.")
+            raise Exception("Only merged branches can be reverted.")
         if commit and not self.can_revert:
-            raise Exception(f"Reverting this branch is not permitted.")
+            raise Exception("Reverting this branch is not permitted.")
 
         # Emit pre-revert signal
         pre_revert.send(sender=self.__class__, branch=self, user=user)
@@ -728,7 +728,7 @@ class Branch(JobsMixin, PrimaryModel):
         Deprovision the Branch and set its status to "archived."
         """
         if not self.can_archive:
-            raise Exception(f"Archiving this branch is not permitted.")
+            raise Exception("Archiving this branch is not permitted.")
 
         # Deprovision the branch's schema
         self.deprovision()
