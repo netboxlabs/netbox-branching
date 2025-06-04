@@ -204,32 +204,32 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all ObjectChange records created in main since the Branch was last synced or created.
         """
-        if self.status not in BranchStatusChoices.WORKING:
-            return ObjectChange.objects.none()
-        return ObjectChange.objects.using(DEFAULT_DB_ALIAS).exclude(
-            application__branch=self
-        ).filter(
-            changed_object_type__in=get_branchable_object_types(),
-            time__gt=self.synced_time
-        )
+        if self.status == BranchStatusChoices.READY:
+            return ObjectChange.objects.using(DEFAULT_DB_ALIAS).exclude(
+                application__branch=self
+            ).filter(
+                changed_object_type__in=get_branchable_object_types(),
+                time__gt=self.synced_time
+            )
+        return ObjectChange.objects.none()
 
     def get_unmerged_changes(self):
         """
         Return a queryset of all unmerged ObjectChange records within the Branch schema.
         """
-        if self.status not in BranchStatusChoices.WORKING:
-            return ObjectChange.objects.none()
-        return ObjectChange.objects.using(self.connection_name)
+        if self.status == BranchStatusChoices.READY:
+            return ObjectChange.objects.using(self.connection_name)
+        return ObjectChange.objects.none()
 
     def get_merged_changes(self):
         """
         Return a queryset of all merged ObjectChange records for the Branch.
         """
-        if self.status not in (BranchStatusChoices.MERGED, BranchStatusChoices.ARCHIVED):
-            return ObjectChange.objects.none()
-        return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
-            application__branch=self
-        )
+        if self.status in (BranchStatusChoices.MERGED, BranchStatusChoices.ARCHIVED):
+            return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
+                application__branch=self
+            )
+        return ObjectChange.objects.none()
 
     def get_event_history(self):
         history = []
@@ -639,7 +639,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         logger.info('Provisioning completed')
 
-        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
+        Branch.objects.filter(pk=self.pk).update(
+            status=BranchStatusChoices.READY,
+            last_sync=timezone.now()
+        )
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.PROVISIONED)
 
     provision.alters_data = True
