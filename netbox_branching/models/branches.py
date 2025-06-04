@@ -639,10 +639,7 @@ class Branch(JobsMixin, PrimaryModel):
 
         logger.info('Provisioning completed')
 
-        Branch.objects.filter(pk=self.pk).update(
-            status=BranchStatusChoices.READY,
-            last_sync=timezone.now()
-        )
+        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.PROVISIONED)
 
     provision.alters_data = True
