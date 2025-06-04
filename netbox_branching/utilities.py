@@ -5,6 +5,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 
 from django.contrib import messages
+from django.db import transaction
 from django.db.models import ForeignKey, ManyToManyField
 from django.http import HttpResponseBadRequest
 from django.urls import reverse
@@ -91,6 +92,13 @@ def get_branchable_object_types():
     return ObjectType.objects.with_feature('branching')
 
 
+def atomic(using=None, savepoint=True, durable=False):
+    if branch := active_branch.get():
+        using = f'schema_{branch.schema_name}'
+
+    return transaction.atomic(using, savepoint, durable)
+
+
 def register_models():
     """
     Register all models which support branching in the NetBox registry.
@@ -119,6 +127,13 @@ def register_models():
         branching_models[app_label].append(model)
 
     registry['model_features']['branching'] = dict(branching_models)
+
+
+def register_functions():
+    """
+    Register all functions which support branching in the NetBox registry.
+    """
+    registry['functions']['atomic'] = atomic
 
 
 def get_tables_to_replicate():
