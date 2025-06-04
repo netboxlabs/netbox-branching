@@ -1,0 +1,30 @@
+repos:
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.11.12
+  hooks:
+    - id: ruff
+      name: "Ruff linter"
+      args: [ netbox_branching/ ]
+- repo: local
+  hooks:
+    - id: django-check
+      name: "Django system check"
+      description: "Run Django's internal check for common problems"
+      entry: python netbox/manage.py check
+      language: system
+      pass_filenames: false
+      types: [python]
+    - id: django-makemigrations
+      name: "Django migrations check"
+      description: "Check for any missing Django migrations"
+      entry: python netbox/manage.py makemigrations netbox_branching --check
+      language: system
+      pass_filenames: false
+      types: [python]
+    - id: mkdocs-build
+      name: "Build documentation"
+      description: "Build the documentation with mkdocs"
+      files: 'docs/'
+      entry: mkdocs build
+      language: system
+      pass_filenames: false
