@@ -25,6 +25,6 @@ repos:
       name: "Build documentation"
       description: "Build the documentation with mkdocs"
       files: 'docs/'
-      entry: mkdocs build
+      entry: .hooks/mkdocs-build.sh
       language: system
       pass_filenames: false
