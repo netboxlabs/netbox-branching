@@ -127,10 +127,6 @@ class Branch(JobsMixin, PrimaryModel):
     def connection_name(self):
         return f'schema_{self.schema_name}'
 
-    @property
-    def synced_time(self):
-        return self.last_sync or self.created
-
     def clean(self):
 
         # Enforce the maximum number of total branches
@@ -204,12 +200,16 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all ObjectChange records created in main since the Branch was last synced or created.
         """
+        # TODO: Remove this fallback logic in a future release
+        # Backward compatibility for branches created before v0.5.6, which did not have last_sync set automatically
+        # upon provisioning. Defaults to the branch creation time.
+        last_sync = self.last_sync or self.created
         if self.status == BranchStatusChoices.READY:
             return ObjectChange.objects.using(DEFAULT_DB_ALIAS).exclude(
                 application__branch=self
             ).filter(
                 changed_object_type__in=get_branchable_object_types(),
-                time__gt=self.synced_time
+                time__gt=last_sync
             )
         return ObjectChange.objects.none()
 
@@ -251,10 +251,13 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Indicates whether the branch is too far out of date to be synced.
         """
+        if self.last_sync is None:
+            # Branch has not yet been provisioned
+            return False
         if not (changelog_retention := get_config().CHANGELOG_RETENTION):
             # Changelog retention is disabled
             return False
-        return self.synced_time < timezone.now() - timedelta(days=changelog_retention)
+        return self.last_sync < timezone.now() - timedelta(days=changelog_retention)
 
     def sync(self, user, commit=True):
         """
@@ -639,7 +642,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         logger.info('Provisioning completed')
 
-        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
+        Branch.objects.filter(pk=self.pk).update(
+            status=BranchStatusChoices.READY,
+            last_sync=timezone.now(),
+        )
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.PROVISIONED)
 
     provision.alters_data = True
