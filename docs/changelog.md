@@ -1,5 +1,19 @@
 # Change Log
 
+## v0.5.6
+
+### Enhancements
+
+* [#262](https://github.com/netboxlabs/netbox-branching/issues/262) - Copy migrations table when provisioning a branch
+
+### Bug Fixes
+
+* [#256](https://github.com/netboxlabs/netbox-branching/issues/256) - Fix "changes ahead" count on branches pending provisioning
+* [#260](https://github.com/netboxlabs/netbox-branching/issues/260) - Ignore duplicate SQL indexes when provisioning a branch
+* [#275](https://github.com/netboxlabs/netbox-branching/issues/275) - Set `sync_time` on branch during initial provisioning
+
+---
+
 ## v0.5.5
 
 ### Bug Fixes
