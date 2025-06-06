@@ -20,17 +20,22 @@ The unique, randomly-generated identifier of the PostgreSQL schema which houses 
 
 The current status of the branch. This must be one of the following values.
 
-| Status       | Description                                                       |
-|--------------|-------------------------------------------------------------------|
-| New          | Not yet provisioned in the database                               |
-| Provisioning | A job is running to provision the branch's PostgreSQL schema      |
-| Ready        | The branch is healthy and ready to be synchronized or merged      |
-| Syncing      | A job is running to synchronize changes from main into the branch |
-| Merging      | A job is running to merge changes from the branch into main       |
-| Reverting    | A job is running to revert previously merged changes in main      |
-| Merged       | Changes from this branch have been successfully merged into main  |
-| Archived     | A merged branch which has been deprovisioned in the database      |
-| Failed       | Provisioning the schema for this branch has failed                |
+| Status       | Description                                                        |
+|--------------|--------------------------------------------------------------------|
+| New          | Not yet provisioned in the database                                |
+| Provisioning | A job is running to provision the branch's PostgreSQL schema       |
+| Ready        | The branch is healthy and ready to be synchronized or merged       |
+| Syncing      | A job is running to synchronize changes from main into the branch  |
+| Migrating    | A job is running to apply database migrations to the branch schema |
+| Merging      | A job is running to merge changes from the branch into main        |
+| Reverting    | A job is running to revert previously merged changes in main       |
+| Merged       | Changes from this branch have been successfully merged into main   |
+| Archived     | A merged branch which has been deprovisioned in the database       |
+| Failed       | Provisioning the schema for this branch has failed                 |
+
+### Applied Migrations
+
+A list of database migrations which have been applied to the branch since it was created. This may be necessary to keep open branches up to date during NetBox upgrades.
 
 ### Last Sync
 
