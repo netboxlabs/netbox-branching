@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from functools import cached_property
 
 from django.contrib import messages
+from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import ForeignKey, ManyToManyField
 from django.http import HttpResponseBadRequest
 from django.urls import reverse
@@ -13,7 +14,6 @@ from django.urls import reverse
 from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.utils import register_request_processor
-from .choices import BranchStatusChoices
 from .constants import BRANCH_HEADER, COOKIE_NAME, EXEMPT_MODELS, INCLUDE_MODELS, QUERY_PARAM
 from .contextvars import active_branch
 
@@ -257,7 +257,12 @@ def get_active_branch(request):
 
     # Branch set by cookie
     elif schema_id := request.COOKIES.get(COOKIE_NAME):
-        return Branch.objects.filter(schema_id=schema_id, status=BranchStatusChoices.READY).first()
+        try:
+            branch = Branch.objects.get(schema_id=schema_id)
+            if branch.ready:
+                return branch
+        except ObjectDoesNotExist:
+            pass
 
 
 def get_sql_results(cursor):
