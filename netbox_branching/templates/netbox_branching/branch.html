@@ -97,13 +97,17 @@
           <tr>
             <th scope="row">{% trans "Last synced" %}</th>
             <td>
-              {{ object.synced_time|isodatetime }}
-              {% if object.is_stale %}
-                <span class="text-danger" title="{% trans "Branch is stale and can no longer be synced" %}">
-                  <i class="mdi mdi-alert-circle"></i>
-                </span>
+              {% if object.last_sync %}
+                {{ object.last_sync|isodatetime }}
+                {% if object.is_stale %}
+                  <span class="text-danger" title="{% trans "Branch is stale and can no longer be synced" %}">
+                    <i class="mdi mdi-alert-circle"></i>
+                  </span>
+                {% endif %}
+                <div class="small text-muted">{{ object.last_sync|timesince }} {% trans "ago" %}</div>
+              {% else %}
+                {{ ''|placeholder }}
               {% endif %}
-              <div class="small text-muted">{{ object.synced_time|timesince }} {% trans "ago" %}</div>
             </td>
           </tr>
           <tr>

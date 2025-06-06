@@ -1,0 +1,16 @@
+repos:
+- repo: https://github.com/astral-sh/ruff-pre-commit
+  rev: v0.11.12
+  hooks:
+    - id: ruff
+      name: "Ruff linter"
+      args: [ netbox_branching/ ]
+- repo: local
+  hooks:
+    - id: mkdocs-build
+      name: "Build documentation"
+      description: "Build the documentation with mkdocs"
+      files: 'docs/'
+      entry: .hooks/mkdocs-build.sh
+      language: system
+      pass_filenames: false
