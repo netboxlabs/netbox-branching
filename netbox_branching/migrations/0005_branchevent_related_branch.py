@@ -5,7 +5,7 @@ from django.db import migrations, models
 class Migration(migrations.Migration):
 
     dependencies = [
-        ('netbox_branching', '0002_branch_schema_id_unique'),
+        ('netbox_branching', '0004_copy_migrations'),
     ]
 
     operations = [
