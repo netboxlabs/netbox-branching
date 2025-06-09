@@ -10,6 +10,7 @@ from .utilities import ListHandler
 __all__ = (
     'MergeBranchJob',
     'ProvisionBranchJob',
+    'PullBranchJob',
     'RevertBranchJob',
     'SyncBranchJob',
 )
@@ -38,7 +39,7 @@ class ProvisionBranchJob(JobRunner):
         logger.setLevel(logging.DEBUG)
         logger.addHandler(ListHandler(queue=get_job_log(self.job)))
 
-        # Provision the Branch
+        # Provision the Branch by copying the main schema
         branch = self.job.object
         branch.provision(user=self.job.user)
 
@@ -108,6 +109,27 @@ class MergeBranchJob(JobRunner):
         try:
             branch = self.job.object
             branch.merge(user=self.job.user, commit=commit)
+        except AbortTransaction:
+            logger.info("Dry run completed; rolling back changes")
+
+
+class PullBranchJob(JobRunner):
+    """
+    Pull changes from one Branch into another.
+    """
+    class Meta:
+        name = 'Pull branch'
+
+    def run(self, **kwargs):
+        # Initialize logging
+        logger = logging.getLogger('netbox_branching.branch.pull')
+        logger.setLevel(logging.DEBUG)
+        logger.addHandler(ListHandler(queue=get_job_log(self.job)))
+
+        # Pull changes from the source Branch
+        try:
+            branch = self.job.object
+            branch.pull(user=self.job.user, **kwargs)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
 

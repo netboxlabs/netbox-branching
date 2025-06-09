@@ -24,6 +24,7 @@
   {% endif %}
   {% if object.ready %}
     {% branch_sync_button object %}
+    {% branch_pull_button object %}
     {% branch_merge_button object %}
   {% endif %}
   {% if object.merged %}
@@ -145,8 +146,14 @@
                     {% badge event.get_type_display bg_color=event.get_type_color %}
                   </div>
                   <div class="col text-truncate">
-                    <span>{{ event.get_type_display }}{% if event.user %} by <strong>{{ event.user }}</strong>{% endif %}</span>
-                    <small class="d-block text-muted">{{ event.time|isodatetime }}</small>
+                    <span>
+                      {{ event.get_type_display }}
+                      {% if event.related_branch %} {{ event.related_branch|linkify }}{% endif %}
+                    </span>
+                    <small class="d-block text-muted">
+                      {{ event.time|isodatetime }}
+                      {% if event.user %}&middot; {{ event.user }}{% endif %}
+                    </small>
                   </div>
                 {% else %}
                   {# Change summary #}

@@ -1,6 +1,7 @@
 import logging
 import random
 import string
+from contextlib import nullcontext
 from datetime import timedelta
 from functools import cached_property, partial
 
@@ -89,6 +90,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     _preaction_validators = {
         'sync': set(),
+        'pull': set(),
         'merge': set(),
         'revert': set(),
         'archive': set(),
@@ -114,6 +116,16 @@ class Branch(JobsMixin, PrimaryModel):
 
     def get_status_color(self):
         return BranchStatusChoices.colors.get(self.status)
+
+    def clone(self):
+        """
+        Override CloningMixin's clone() method to nullify active branch and populate clone_from field.
+        """
+        return {
+            '_branch': '',
+            'clone_from': self.pk,
+            **super().clone(),
+        }
 
     @cached_property
     def is_active(self):
@@ -166,7 +178,7 @@ class Branch(JobsMixin, PrimaryModel):
             provision: If True, automatically enqueue a background Job to provision the Branch. (Set this
                        to False if you will call provision() on the instance manually.)
         """
-        from netbox_branching.jobs import ProvisionBranchJob
+        from netbox_branching.jobs import ProvisionBranchJob, PullBranchJob
 
         _provision = provision and self.pk is None
 
@@ -179,6 +191,16 @@ class Branch(JobsMixin, PrimaryModel):
                 instance=self,
                 user=request.user if request else None
             )
+
+            # If cloning from an existing Branch, also enqueue a PullBranchJob
+            if clone_source := getattr(self, '_clone_source', None):
+                PullBranchJob.enqueue(
+                    instance=self,
+                    user=request.user,
+                    source=clone_source,
+                    atomic=getattr(self, '_clone_atomic', True),
+                    commit=True
+                )
 
     def delete(self, *args, **kwargs):
         if active_branch.get() == self:
@@ -249,6 +271,28 @@ class Branch(JobsMixin, PrimaryModel):
             )
         return ObjectChange.objects.none()
 
+    def get_unpulled_changes(self, source, start=None, end=None):
+        """
+        Return a queryset of all ObjectChange records from the source Branch which have yet to be replayed onto
+        this Branch.
+        """
+        if source.status not in BranchStatusChoices.WORKING:
+            return ObjectChange.objects.none()
+
+        changes = ObjectChange.objects.using(source.connection_name).order_by('time')
+
+        # Filter by starting change (if specified), or the time of the most recent pull event.
+        if start:
+            changes = changes.filter(pk__gte=start.pk)
+        elif last_pull := self.events.filter(related_branch=source, type=BranchEventTypeChoices.PULLED).first():
+            changes = changes.filter(time__gt=last_pull.time)
+
+        # Filter by end change (if specified)
+        if end:
+            changes = changes.filter(pk__lte=end.pk)
+
+        return changes
+
     def get_event_history(self):
         history = []
         last_time = timezone.now()
@@ -305,6 +349,13 @@ class Branch(JobsMixin, PrimaryModel):
         Indicates whether the branch can be synced.
         """
         return self._can_do_action('sync')
+
+    @cached_property
+    def can_pull(self):
+        """
+        Indicates whether changes can be pulled in from another Branch.
+        """
+        return self._can_do_action('pull')
 
     @cached_property
     def can_merge(self):
@@ -397,6 +448,62 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info('Syncing completed')
 
     sync.alters_data = True
+
+    def pull(self, source, user, atomic=True, start=None, end=None, commit=True):
+        """
+        Replicate all unpulled changes from the source branch into this one.
+        """
+        logger = logging.getLogger('netbox_branching.branch.pull')
+        logger.info(f'Pulling changes from branch {source} into {self.name}')
+
+        if not self.ready:
+            raise Exception(f"Branch {self} is not ready for changes.")
+        if not source.ready:
+            raise Exception(f"Changes cannot be pulled from branch {source} at this time.")
+        if commit and not self.can_pull:
+            raise Exception(f"Pulling changes to this branch is not permitted.")
+
+        # Emit pre-pull signal
+        pre_pull.send(sender=self.__class__, branch=self, user=user)
+
+        # Retrieve staged changes before we update the Branch's status
+        if changes := self.get_unpulled_changes(source, start=start, end=end):
+            logger.info(f"Found {len(changes)} changes to pull")
+        else:
+            logger.info(f"No changes found; aborting.")
+            return
+
+        # Create a dummy request for the event_tracking() context manager
+        request = RequestFactory().get(reverse('home'))
+
+        try:
+            use_atomic = atomic or not commit
+            with transaction.atomic(using=self.connection_name) if use_atomic else nullcontext():
+                # Apply each change from the Branch
+                for change in changes:
+                    with event_tracking(request):
+                        request.id = change.request_id
+                        request.user = change.user
+                        change.apply(using=self.connection_name, logger=logger)
+                if not commit:
+                    raise AbortTransaction()
+
+        except Exception as e:
+            if err_message := str(e):
+                logger.error(err_message)
+            if atomic:
+                raise e
+
+        # Record a branch event for the merge
+        logger.debug(f"Recording branch event: {BranchEventTypeChoices.PULLED}")
+        BranchEvent.objects.create(branch=self, related_branch=source, user=user, type=BranchEventTypeChoices.PULLED)
+
+        # Emit post-pull signal
+        post_pull.send(sender=self.__class__, branch=self, user=user)
+
+        logger.info('Pull completed')
+
+    pull.alters_data = True
 
     def merge(self, user, commit=True):
         """
@@ -779,6 +886,13 @@ class BranchEvent(models.Model):
         to='netbox_branching.branch',
         on_delete=models.CASCADE,
         related_name='events'
+    )
+    related_branch = models.ForeignKey(
+        to='netbox_branching.branch',
+        on_delete=models.CASCADE,
+        related_name='+',
+        blank=True,
+        null=True
     )
     user = models.ForeignKey(
         to=get_user_model(),

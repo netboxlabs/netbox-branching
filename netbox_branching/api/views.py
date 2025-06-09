@@ -1,6 +1,7 @@
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseBadRequest
 from drf_spectacular.utils import extend_schema
+from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
 from rest_framework.response import Response
@@ -10,7 +11,7 @@ from rest_framework.viewsets import ModelViewSet
 from core.api.serializers import JobSerializer
 from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
 from netbox_branching import filtersets
-from netbox_branching.jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
+from netbox_branching.jobs import MergeBranchJob, PullBranchJob, RevertBranchJob, SyncBranchJob
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
 from . import serializers
 
@@ -50,6 +51,43 @@ class BranchViewSet(ModelViewSet):
             instance=branch,
             user=request.user,
             commit=commit
+        )
+
+        return Response(JobSerializer(job, context={'request': request}).data)
+
+    @extend_schema(
+        methods=['post'],
+        request=serializers.BranchPullSerializer(),
+        responses={200: JobSerializer()},
+    )
+    @action(detail=True, methods=['post'])
+    def pull(self, request, pk):
+        """
+        Enqueue a background job to pull changes from one Branch into another.
+        """
+        if not request.user.has_perm('netbox_branching.pull_branch'):
+            raise PermissionDenied("This user does not have permission to pull branches.")
+
+        branch = self.get_object()
+        if not branch.ready:
+            return HttpResponseBadRequest("Branch is not ready to apply changes.")
+
+        serializer = serializers.BranchPullSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # Enqueue a background job
+        job = PullBranchJob.enqueue(
+            instance=branch,
+            user=request.user,
+            source=serializer.validated_data['source'],
+            atomic=serializer.validated_data['atomic'],
+            start=serializer.validated_data['start'],
+            end=serializer.validated_data['end'],
+            commit=serializer.validated_data['commit']
         )
 
         return Response(JobSerializer(job, context={'request': request}).data)
