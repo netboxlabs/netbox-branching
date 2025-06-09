@@ -80,8 +80,8 @@ class BranchTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = Branch
         fields = (
-            'pk', 'id', 'name', 'is_active', 'status', 'is_stale', 'conflicts', 'schema_id', 'description', 'owner',
-            'tags', 'created', 'last_updated',
+            'pk', 'id', 'name', 'is_active', 'status', 'is_stale', 'conflicts', 'schema_id',
+            'description', 'owner', 'tags', 'created', 'last_updated',
         )
         default_columns = (
             'pk', 'name', 'is_active', 'status', 'is_stale', 'owner', 'conflicts', 'schema_id', 'description',
