@@ -453,7 +453,6 @@ class Branch(JobsMixin, PrimaryModel):
 
         except Exception as e:
             if err_message := str(e):
-                import traceback
                 logger.error(err_message)
             # Disconnect signal receiver & restore original branch status
             post_save.disconnect(handler, sender=ObjectChange_)
