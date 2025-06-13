@@ -455,8 +455,6 @@ class Branch(JobsMixin, PrimaryModel):
             if err_message := str(e):
                 import traceback
                 logger.error(err_message)
-                print(e)
-                print(traceback.format_exc())
             # Disconnect signal receiver & restore original branch status
             post_save.disconnect(handler, sender=ObjectChange_)
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MERGED)
