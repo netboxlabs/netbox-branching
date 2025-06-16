@@ -341,7 +341,7 @@ class BranchMigrateView(generic.ObjectView):
         action_permitted = getattr(branch, 'can_migrate')
         form = self.form(request.POST)
 
-        if branch.status != BranchStatusChoices.READY:
+        if branch.status != BranchStatusChoices.PENDING_MIGRATIONS:
             messages.error(request, _("The branch is not ready to be migrated."))
         elif form.is_valid():
             # Enqueue a background job to migrate the Branch
