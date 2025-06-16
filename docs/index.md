@@ -72,9 +72,9 @@ sequenceDiagram
     Branch->>Main: Merge branch
 ```
 
-## Getting Started
+## Plugin Installation
 
-### Database Preparation
+### 1. Database Preparation
 
 Before installing this plugin, ensure that the PostgreSQL user as which NetBox authenticates has permission to create new schemas in the database. This can be achieved by issuing the following command in the PostgreSQL shell (substituting `$database` and `$user` with their respective values):
 
@@ -82,9 +82,7 @@ Before installing this plugin, ensure that the PostgreSQL user as which NetBox a
 GRANT CREATE ON DATABASE $database TO $user;
 ```
 
-### Plugin Installation
-
-#### 1. Virtual Environment
+### 2. Virtual Environment
 
 The plugin can be installed from [PyPI](https://pypi.org/project/netboxlabs-netbox-branching/). First, activate the Python virtual environment used by NetBox (which is typically located at `/opt/netbox/venv/`):
 
@@ -95,7 +93,7 @@ source /opt/netbox/venv/bin/activate
 !!! note
     You may need to modify the `source` command above if your virtual environment has been installed in a different location.
 
-#### 2. Python Package
+### 3. Python Package
 
 Use `pip` to install the Python package:
 
@@ -103,7 +101,7 @@ Use `pip` to install the Python package:
 pip install netboxlabs-netbox-branching
 ```
 
-#### 3. Enable Plugin
+### 4. Enable Plugin
 
 Add `netbox_branching` to **the end** of the `PLUGINS` list in `configuration.py`.
 
@@ -120,11 +118,14 @@ PLUGINS = [
 !!! note
     If there are no plugins already installed, you might need to create this parameter. If so, be sure to define `PLUGINS` as a list _containing_ the plugin name as above, rather than just the name.
 
-#### 4. Configuration
+### 5. Configuration
 
-This plugin employs dynamic schema resolution, which requires that we override two low-level Django settings. First, we'll wrap NetBox's configured `DATABASES` parameter with `DynamicSchemaDict` to support dynamic schemas. Second, we'll employ the plugin's custom database router.
+#### NetBox v4.3 and Later
 
-Add `DynamicSchemaDict` to `DATABASES` setting in `configuration.py`.
+Wrap your `DATABASES` configuration parameter with `DynamicSchemaDict` in `configuration.py`, as shown below.
+
+!!! note
+    If upgrading from an earlier version of NetBox, you may need to replace the legacy `DATABASE` (singular) parameter with `DATABASES` (plural).
 
 ```python
 from netbox_branching.utilities import DynamicSchemaDict
@@ -132,13 +133,34 @@ from netbox_branching.utilities import DynamicSchemaDict
 DATABASES = DynamicSchemaDict({
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'netbox',               # Database name
-        'USER': 'netbox',               # PostgreSQL username
-        'PASSWORD': 'password',         # PostgreSQL password
-        'HOST': 'localhost',            # Database server
-        'PORT': '',                     # Database port (leave blank for default)
-        'CONN_MAX_AGE': 300,            # Max database connection age
+        'NAME': 'netbox',
+        'USER': 'netbox',
+        ...
     }
+})
+```
+
+Additionally, declare `DATABASE_ROUTERS` to employ the plugin's custom database router to support branching.
+
+```python
+DATABASE_ROUTERS = [
+    'netbox_branching.database.BranchAwareRouter',
+]
+```
+
+#### NetBox v4.2 and Earlier
+
+If using NetBox v4.2 or earlier, these changes must be made in `local_settings.py`, as the `DATABASES` and `DATABASE_ROUTERS` configuration parameters were not introduced until NetBox v4.3.
+
+Create a file named `local_settings.py` in the same directory as `configuration.py`, and add the following content.
+    
+```python
+from netbox_branching.utilities import DynamicSchemaDict
+from .configuration import DATABASE
+
+# Wrap DATABASES with DynamicSchemaDict for dynamic schema support
+DATABASES = DynamicSchemaDict({
+    'default': DATABASE,
 })
 
 # Employ our custom database router
@@ -147,29 +169,7 @@ DATABASE_ROUTERS = [
 ]
 ```
 
-Make sure to change the parameters as appropriate for your installation.
-
-!!! note
-    If using a version of NetBox older then v4.3, instead of adding these to `configuration.py` do the following:
-    
-    Create `local_settings.py` (in the same directory as `settings.py`) to override the `DATABASES` & `DATABASE_ROUTERS` settings. This enables dynamic schema support.
-    
-    ```python
-    from netbox_branching.utilities import DynamicSchemaDict
-    from .configuration import DATABASE
-    
-    # Wrap DATABASES with DynamicSchemaDict for dynamic schema support
-    DATABASES = DynamicSchemaDict({
-        'default': DATABASE,
-    })
-    
-    # Employ our custom database router
-    DATABASE_ROUTERS = [
-        'netbox_branching.database.BranchAwareRouter',
-    ]
-    ```
-
-#### 5. Database Migrations
+### 6. Database Migrations
 
 Run the included database migrations:
 
