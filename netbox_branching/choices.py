@@ -13,6 +13,7 @@ class BranchStatusChoices(ChoiceSet):
     REVERTING = 'reverting'
     MERGED = 'merged'
     ARCHIVED = 'archived'
+    PENDING_MIGRATIONS = 'pending-migrations'
     FAILED = 'failed'
 
     CHOICES = (
@@ -25,6 +26,7 @@ class BranchStatusChoices(ChoiceSet):
         (REVERTING, _('Reverting'), 'orange'),
         (MERGED, _('Merged'), 'blue'),
         (ARCHIVED, _('Archived'), 'gray'),
+        (PENDING_MIGRATIONS, _('Pending Migrations'), 'red'),
         (FAILED, _('Failed'), 'red'),
     )
 
@@ -39,6 +41,7 @@ class BranchStatusChoices(ChoiceSet):
     WORKING = (
         NEW,
         READY,
+        PENDING_MIGRATIONS,
         *TRANSITIONAL,
     )
 
