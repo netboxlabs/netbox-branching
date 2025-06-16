@@ -4,7 +4,7 @@ This [NetBox](http://netboxlabs.com/oss/netbox/) plugin introduces branching fun
 
 ## Requirements
 
-* NetBox v4.1 or later
+* NetBox v4.3 or later
 * PostgreSQL 12 or later
 
 ## Installation
@@ -38,9 +38,7 @@ PLUGINS = [
 ]
 ```
 
-5. Make the following changes to `configuration.py`.
-
-Add `DynamicSchemaDict` to `DATABASES` setting (Make sure to change the parameters as appropriate for your installation):
+5. Configure the database and router in `configuration.py`:
 
 ```python
 from netbox_branching.utilities import DynamicSchemaDict
@@ -56,11 +54,7 @@ DATABASES = DynamicSchemaDict({
         'CONN_MAX_AGE': 300,            # Max database connection age
     }
 })
-```
 
-Add `DATABASE_ROUTERS` to `configuration.py`.
-
-```python
 DATABASE_ROUTERS = [
     'netbox_branching.database.BranchAwareRouter',
 ]
