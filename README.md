@@ -4,7 +4,7 @@ This [NetBox](http://netboxlabs.com/oss/netbox/) plugin introduces branching fun
 
 ## Requirements
 
-* NetBox v4.1 or later
+* NetBox v4.3 or later
 * PostgreSQL 12 or later
 
 ## Installation
@@ -38,18 +38,23 @@ PLUGINS = [
 ]
 ```
 
-5. Create `local_settings.py` (in the same directory as `settings.py`) to override the `DATABASES` & `DATABASE_ROUTERS` settings. This enables dynamic schema support.
+5. Configure the database and router in `configuration.py`:
 
 ```python
 from netbox_branching.utilities import DynamicSchemaDict
-from .configuration import DATABASE
 
-# Wrap DATABASES with DynamicSchemaDict for dynamic schema support
 DATABASES = DynamicSchemaDict({
-    'default': DATABASE,
+    'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'netbox',               # Database name
+        'USER': 'netbox',               # PostgreSQL username
+        'PASSWORD': 'password',         # PostgreSQL password
+        'HOST': 'localhost',            # Database server
+        'PORT': '',                     # Database port (leave blank for default)
+        'CONN_MAX_AGE': 300,            # Max database connection age
+    }
 })
 
-# Employ our custom database router
 DATABASE_ROUTERS = [
     'netbox_branching.database.BranchAwareRouter',
 ]
