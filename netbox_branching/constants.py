@@ -8,6 +8,7 @@ BRANCH_HEADER = 'X-NetBox-Branch'
 BRANCH_ACTIONS = (
     'sync',
     'merge',
+    'migrate',
     'revert',
     'archive',
 )
@@ -20,6 +21,7 @@ QUERY_PARAM = '_branch'
 INCLUDE_MODELS = (
     'dcim.cablepath',
     'extras.cachedvalue',
+    'tenancy.contactgroupmembership',  # Fix for NetBox v4.3.0
 )
 
 # Models for which branching support is explicitly disabled

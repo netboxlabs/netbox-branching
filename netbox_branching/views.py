@@ -11,7 +11,7 @@ from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
-from .jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
+from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
 
 
@@ -313,6 +313,46 @@ class BranchArchiveView(generic.ObjectView):
         return render(request, self.template_name, {
             'branch': branch,
             'form': form,
+        })
+
+
+@register_model_view(Branch, 'migrate')
+class BranchMigrateView(generic.ObjectView):
+    queryset = Branch.objects.all()
+    form = forms.MigrateBranchForm
+    template_name = 'netbox_branching/branch_migrate.html'
+
+    def get_required_permission(self):
+        return 'netbox_branching.migrate_branch'
+
+    def get(self, request, **kwargs):
+        branch = self.get_object(**kwargs)
+        action_permitted = getattr(branch, 'can_migrate')
+        form = self.form()
+
+        return render(request, self.template_name, {
+            'branch': branch,
+            'form': form,
+            'action_permitted': action_permitted,
+        })
+
+    def post(self, request, **kwargs):
+        branch = self.get_object(**kwargs)
+        action_permitted = getattr(branch, 'can_migrate')
+        form = self.form(request.POST)
+
+        if branch.status != BranchStatusChoices.PENDING_MIGRATIONS:
+            messages.error(request, _("The branch is not ready to be migrated."))
+        elif form.is_valid():
+            # Enqueue a background job to migrate the Branch
+            MigrateBranchJob.enqueue(instance=branch, user=request.user)
+            messages.success(request, _("Migration of branch {branch} in progress").format(branch=branch))
+            return redirect(branch.get_absolute_url())
+
+        return render(request, self.template_name, {
+            'branch': branch,
+            'form': form,
+            'action_permitted': action_permitted,
         })
 
 

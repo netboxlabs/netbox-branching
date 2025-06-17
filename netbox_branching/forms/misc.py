@@ -6,6 +6,7 @@ from netbox_branching.models import ChangeDiff
 __all__ = (
     'BranchActionForm',
     'ConfirmationForm',
+    'MigrateBranchForm',
 )
 
 
@@ -46,4 +47,14 @@ class ConfirmationForm(forms.Form):
     confirm = forms.BooleanField(
         required=True,
         label=_('Confirm')
+    )
+
+
+class MigrateBranchForm(forms.Form):
+    confirm = forms.BooleanField(
+        required=True,
+        label=_('Confirm migrations'),
+        help_text=_(
+            'All migrations will be applied in order. <strong>Migrations cannot be reversed once applied.</strong>'
+        )
     )

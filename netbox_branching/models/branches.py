@@ -1,13 +1,17 @@
+import importlib
 import logging
 import random
 import string
+from collections import defaultdict
 from datetime import timedelta
 from functools import cached_property, partial
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
+from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
+from django.db.migrations.executor import MigrationExecutor
 from django.db.models.signals import post_save
 from django.db.utils import ProgrammingError
 from django.test import RequestFactory
@@ -69,6 +73,12 @@ class Branch(JobsMixin, PrimaryModel):
         default=BranchStatusChoices.NEW,
         editable=False
     )
+    applied_migrations = ArrayField(
+        verbose_name=_('applied migrations'),
+        base_field=models.CharField(max_length=200),
+        blank=True,
+        default=list,
+    )
     last_sync = models.DateTimeField(
         blank=True,
         null=True,
@@ -89,6 +99,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     _preaction_validators = {
         'sync': set(),
+        'migrate': set(),
         'merge': set(),
         'revert': set(),
         'archive': set(),
@@ -278,6 +289,37 @@ class Branch(JobsMixin, PrimaryModel):
         return self.last_sync < timezone.now() - timedelta(days=changelog_retention)
 
     #
+    # Migration handling
+    #
+
+    @cached_property
+    def pending_migrations(self):
+        """
+        Return a list of database migrations which have been applied in main but not in the branch.
+        """
+        connection = connections[self.connection_name]
+        executor = MigrationExecutor(connection)
+        targets = executor.loader.graph.leaf_nodes()
+        plan = executor.migration_plan(targets)
+        return [
+            (migration.app_label, migration.name) for migration, backward in plan
+        ]
+
+    @cached_property
+    def migrators(self):
+        """
+        Return a dictionary mapping object types to a list of migrators to be run when syncing, merging, or
+        reverting a Branch.
+        """
+        migrators = defaultdict(list)
+        for migration in self.applied_migrations:
+            app_label, name = migration.split('.')
+            module = importlib.import_module(f'{app_label}.migrations.{name}')
+            for object_type, migrator in getattr(module, 'objectchange_migrators', {}).items():
+                migrators[object_type].append(migrator)
+        return migrators
+
+    #
     # Branch action indicators
     #
 
@@ -305,6 +347,13 @@ class Branch(JobsMixin, PrimaryModel):
         Indicates whether the branch can be synced.
         """
         return self._can_do_action('sync')
+
+    @cached_property
+    def can_migrate(self):
+        """
+        Indicates whether the branch can be migrated.
+        """
+        return self._can_do_action('migrate')
 
     @cached_property
     def can_merge(self):
@@ -367,7 +416,7 @@ class Branch(JobsMixin, PrimaryModel):
                     # Apply each change from the main schema
                     for change in changes:
                         models.add(change.changed_object_type.model_class())
-                        change.apply(using=self.connection_name, logger=logger)
+                        change.apply(self, using=self.connection_name, logger=logger)
                     if not commit:
                         raise AbortTransaction()
 
@@ -397,6 +446,60 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info('Syncing completed')
 
     sync.alters_data = True
+
+    def migrate(self, user):
+        """
+        Apply any pending database migrations to the branch schema.
+        """
+        logger = logging.getLogger('netbox_branching.branch.migrate')
+        logger.info(f'Migrating branch {self} ({self.schema_name})')
+
+        def migration_progress_callback(action, migration=None, fake=False):
+            if action == "apply_start":
+                logger.info(f"Applying migration {migration}")
+            elif action == "apply_success" and migration is not None:
+                self.applied_migrations.append(migration)
+
+        # Emit pre-migration signal
+        pre_migrate.send(sender=self.__class__, branch=self, user=user)
+
+        # Set Branch status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.MIGRATING}")
+        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MIGRATING)
+
+        # Generate migration plan & apply any migrations
+        connection = connections[self.connection_name]
+        executor = MigrationExecutor(connection, progress_callback=migration_progress_callback)
+        targets = executor.loader.graph.leaf_nodes()
+        if plan := executor.migration_plan(targets):
+            try:
+                # Run migrations
+                executor.migrate(targets, plan)
+            except Exception as e:
+                if err_message := str(e):
+                    logger.error(err_message)
+                # Save applied migrations & reset status
+                self.status = BranchStatusChoices.READY
+                self.save()
+                raise e
+        else:
+            logger.info("Found no migrations to apply")
+
+        # Reset Branch status to ready
+        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
+        self.status = BranchStatusChoices.READY
+        self.save()
+
+        # Record a branch event for the migration
+        logger.debug(f"Recording branch event: {BranchEventTypeChoices.MIGRATED}")
+        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MIGRATED)
+
+        # Emit post-migration signal
+        post_migrate.send(sender=self.__class__, branch=self, user=user)
+
+        logger.info('Migration completed')
+
+    migrate.alters_data = True
 
     def merge(self, user, commit=True):
         """
@@ -442,7 +545,7 @@ class Branch(JobsMixin, PrimaryModel):
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
-                        change.apply(using=DEFAULT_DB_ALIAS, logger=logger)
+                        change.apply(self, using=DEFAULT_DB_ALIAS, logger=logger)
                 if not commit:
                     raise AbortTransaction()
 
@@ -522,7 +625,7 @@ class Branch(JobsMixin, PrimaryModel):
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
-                        change.undo(logger=logger)
+                        change.undo(self, logger=logger)
                 if not commit:
                     raise AbortTransaction()
 

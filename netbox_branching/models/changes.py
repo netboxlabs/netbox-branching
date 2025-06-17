@@ -26,13 +26,25 @@ class ObjectChange(ObjectChange_):
     class Meta:
         proxy = True
 
-    def apply(self, using=DEFAULT_DB_ALIAS, logger=None):
+    def migrate(self, branch, revert=False):
+        """
+        Run all applicable change data migrators for the given Branch, in sequence. This ensures that changes made prior
+        to the application of a database migration can be successfully applied to (or reverted from) the main schema.
+        """
+        object_type = '.'.join(self.changed_object_type.natural_key())
+        for migrator in branch.migrators.get(object_type, []):
+            migrator(self, revert)
+
+    def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None):
         """
         Apply the change using the specified database connection.
         """
         logger = logger or logging.getLogger('netbox_branching.models.ObjectChange.apply')
         model = self.changed_object_type.model_class()
         logger.info(f'Applying change {self} using {using}')
+
+        # Run data migrators
+        self.migrate(branch)
 
         # Creating a new object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
@@ -57,13 +69,16 @@ class ObjectChange(ObjectChange_):
 
     apply.alters_data = True
 
-    def undo(self, using=DEFAULT_DB_ALIAS, logger=None):
+    def undo(self, branch, using=DEFAULT_DB_ALIAS, logger=None):
         """
         Revert a previously applied change using the specified database connection.
         """
         logger = logger or logging.getLogger('netbox_branching.models.ObjectChange.undo')
         model = self.changed_object_type.model_class()
         logger.info(f'Undoing change {self} using {using}')
+
+        # Run data migrators
+        self.migrate(branch, revert=True)
 
         # Deleting a previously created object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
