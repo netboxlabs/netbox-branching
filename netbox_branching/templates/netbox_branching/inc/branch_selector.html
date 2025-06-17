@@ -15,7 +15,7 @@
           {% if branch.is_active %}<span class="badge bg-green ms-auto"></span>{% endif %}
         </a>
       {% else %}
-        <a class="dropdown-item disabled" aria-disabled="true">{{ branch.name }} ({{ branch.status }})</a>
+        <a class="dropdown-item disabled" aria-disabled="true">{{ branch.name }} ({{ branch.get_status_display }})</a>
       {% endif %}
     {% endfor %}
     {% if active_branch or perms.netbox_branching.add_branch %}
