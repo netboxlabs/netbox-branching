@@ -81,9 +81,19 @@ class ObjectChange(ObjectChange_):
 
         # Restoring a deleted object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
-            instance = deserialize_object(model, self.prechange_data, pk=self.changed_object_id)
+            deserialized = deserialize_object(model, self.prechange_data_clean, pk=self.changed_object_id)
+            instance = deserialized.object
             logger.debug(f'Restoring {model._meta.verbose_name} {instance}')
-            instance.object.full_clean()
+
+            # Restore GenericForeignKey fields
+            for field in instance._meta.private_fields:
+                if isinstance(field, GenericForeignKey):
+                    ct_field = getattr(instance, field.ct_field)
+                    fk_field = getattr(instance, field.fk_field)
+                    if ct_field and fk_field:
+                        setattr(instance, field.name, ct_field.get_object_for_this_type(pk=fk_field))
+
+            instance.full_clean()
             instance.save(using=using)
 
     undo.alters_data = True
