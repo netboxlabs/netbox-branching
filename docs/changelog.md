@@ -1,6 +1,6 @@
 # Change Log
 
-## v0.6.0 Beta 1
+## v0.6.0
 
 ### Enhancements
 
