@@ -1,5 +1,14 @@
 # Change Log
 
+## v0.5.7
+
+### Bug Fixes
+
+* [#136](https://github.com/netboxlabs/netbox-branching/issues/136) - Set GenericForeignKey values when restoring a deleted object
+* [#286](https://github.com/netboxlabs/netbox-branching/issues/286) - Fix display of branch status in selector dropdown
+
+---
+
 ## v0.5.6
 
 ### Enhancements
