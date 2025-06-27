@@ -3,6 +3,7 @@ from django import template
 __all__ = (
     'branch_sync_button',
     'branch_merge_button',
+    'branch_migrate_button',
     'branch_revert_button',
     'branch_archive_button',
 )
@@ -36,6 +37,14 @@ def branch_revert_button(context, branch):
 
 @register.inclusion_tag('netbox_branching/buttons/branch_archive.html', takes_context=True)
 def branch_archive_button(context, branch):
+    return {
+        'branch': branch,
+        'perms': context.get('perms'),
+    }
+
+
+@register.inclusion_tag('netbox_branching/buttons/branch_migrate.html', takes_context=True)
+def branch_migrate_button(context, branch):
     return {
         'branch': branch,
         'perms': context.get('perms'),

@@ -1,0 +1,11 @@
+{% load i18n %}
+
+{% if perms.netbox_branching.migrate_branch and branch.status == 'pending-migrations' %}
+  <a href="{% url 'plugins:netbox_branching:branch_migrate' pk=branch.pk %}" class="btn btn-primary">
+    <i class="mdi mdi-step-forward"></i> {% trans "Migrate" %}
+  </a>
+{% else %}
+  <button type="button" class="btn btn-primary disabled" aria-disabled="true">
+    <i class="mdi mdi-step-forward"></i> {% trans "Migrate" %}
+  </button>
+{% endif %}

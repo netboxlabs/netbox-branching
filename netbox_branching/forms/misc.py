@@ -6,6 +6,7 @@ from netbox_branching.models import ChangeDiff
 __all__ = (
     'BranchActionForm',
     'ConfirmationForm',
+    'MigrateBranchForm',
 )
 
 
@@ -20,9 +21,12 @@ class BranchActionForm(forms.Form):
         help_text=_('Leave unchecked to perform a dry run')
     )
 
-    def __init__(self, branch, *args, **kwargs):
+    def __init__(self, branch, *args, allow_commit=True, **kwargs):
         self.branch = branch
         super().__init__(*args, **kwargs)
+
+        if not allow_commit:
+            self.fields['commit'].disabled = True
 
     def clean(self):
         super().clean()
@@ -43,4 +47,14 @@ class ConfirmationForm(forms.Form):
     confirm = forms.BooleanField(
         required=True,
         label=_('Confirm')
+    )
+
+
+class MigrateBranchForm(forms.Form):
+    confirm = forms.BooleanField(
+        required=True,
+        label=_('Confirm migrations'),
+        help_text=_(
+            'All migrations will be applied in order. <strong>Migrations cannot be reversed once applied.</strong>'
+        )
     )

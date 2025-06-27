@@ -28,6 +28,14 @@ exempt_models = (
 
 ---
 
+## `main_schema`
+
+Default: `"public"`
+
+The name of the main (primary) PostgreSQL schema. (Use the `\dn` command in the PostgreSQL CLI to list all schemas.)
+
+---
+
 ## `max_working_branches`
 
 Default: None
@@ -46,8 +54,40 @@ The maximum total number of branches that can exist simultaneously, including me
 
 ## `schema_prefix`
 
-Default: `branch_`
+Default: `"branch_"`
 
 The string to prefix to the unique branch ID when provisioning the PostgreSQL schema for a branch. Per [the PostgreSQL documentation](https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS), this string must begin with a letter or underscore.
 
 Note that a valid prefix is required, as the randomly-generated branch ID alone may begin with a digit, which would not qualify as a valid schema name.
+
+---
+
+## `sync_validators`
+
+Default: `[]` (empty list)
+
+A list of import paths to functions which validate whether a branch is permitted to be synced.
+
+---
+
+## `merge_validators`
+
+Default: `[]` (empty list)
+
+A list of import paths to functions which validate whether a branch is permitted to be merged.
+
+---
+
+## `revert_validators`
+
+Default: `[]` (empty list)
+
+A list of import paths to functions which validate whether a branch is permitted to be reverted.
+
+---
+
+## `archive_validators`
+
+Default: `[]` (empty list)
+
+A list of import paths to functions which validate whether a branch is permitted to be archived.

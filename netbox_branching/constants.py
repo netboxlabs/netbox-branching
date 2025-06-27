@@ -1,11 +1,17 @@
-# Name of the main (non-branch) PostgreSQL schema
-MAIN_SCHEMA = 'public'
-
 # HTTP cookie
 COOKIE_NAME = 'active_branch'
 
 # HTTP header for API requests
 BRANCH_HEADER = 'X-NetBox-Branch'
+
+# Branch actions
+BRANCH_ACTIONS = (
+    'sync',
+    'merge',
+    'migrate',
+    'revert',
+    'archive',
+)
 
 # URL query parameter name
 QUERY_PARAM = '_branch'
@@ -15,6 +21,7 @@ QUERY_PARAM = '_branch'
 INCLUDE_MODELS = (
     'dcim.cablepath',
     'extras.cachedvalue',
+    'tenancy.contactgroupmembership',  # Fix for NetBox v4.3.0
 )
 
 # Models for which branching support is explicitly disabled

@@ -3,8 +3,10 @@ import logging
 from collections import defaultdict, namedtuple
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
+from functools import cached_property
 
 from django.contrib import messages
+from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import ForeignKey, ManyToManyField
 from django.http import HttpResponseBadRequest
 from django.urls import reverse
@@ -12,11 +14,11 @@ from django.urls import reverse
 from netbox.plugins import get_plugin_config
 from netbox.registry import registry
 from netbox.utils import register_request_processor
-from .choices import BranchStatusChoices
 from .constants import BRANCH_HEADER, COOKIE_NAME, EXEMPT_MODELS, INCLUDE_MODELS, QUERY_PARAM
 from .contextvars import active_branch
 
 __all__ = (
+    'BranchActionIndicator',
     'ChangeSummary',
     'DynamicSchemaDict',
     'ListHandler',
@@ -39,6 +41,10 @@ class DynamicSchemaDict(dict):
     Behaves like a normal dictionary, except for keys beginning with "schema_". Any lookup for
     "schema_*" will return the default configuration extended to include the search_path option.
     """
+    @cached_property
+    def main_schema(self):
+        return get_plugin_config('netbox_branching', 'main_schema')
+
     def __getitem__(self, item):
         if type(item) is str and item.startswith('schema_'):
             if schema := item.removeprefix('schema_'):
@@ -46,7 +52,7 @@ class DynamicSchemaDict(dict):
                 return {
                     **default_config,
                     'OPTIONS': {
-                        'options': f'-c search_path={schema},public'
+                        'options': f'-c search_path={schema},{self.main_schema}'
                     }
                 }
         return super().__getitem__(item)
@@ -251,7 +257,12 @@ def get_active_branch(request):
 
     # Branch set by cookie
     elif schema_id := request.COOKIES.get(COOKIE_NAME):
-        return Branch.objects.filter(schema_id=schema_id, status=BranchStatusChoices.READY).first()
+        try:
+            branch = Branch.objects.get(schema_id=schema_id)
+            if branch.ready:
+                return branch
+        except ObjectDoesNotExist:
+            pass
 
 
 def get_sql_results(cursor):
@@ -272,3 +283,15 @@ def ActiveBranchContextManager(request):
     if request and (branch := get_active_branch(request)):
         return activate_branch(branch)
     return nullcontext()
+
+
+@dataclass
+class BranchActionIndicator:
+    """
+    An indication of whether a particular branch action is permitted. If not, an explanatory message must be provided.
+    """
+    permitted: bool
+    message: str = ''
+
+    def __bool__(self):
+        return self.permitted

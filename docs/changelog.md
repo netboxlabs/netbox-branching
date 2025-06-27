@@ -1,5 +1,20 @@
 # Change Log
 
+## v0.6.0
+
+### Enhancements
+
+* [#1](https://github.com/netboxlabs/netbox-branching/issues/1) - Enable the application of database migrations to open branches
+* [#122](https://github.com/netboxlabs/netbox-branching/issues/122) - Implement a mechanism to enforce policy before executing branch actions
+* [#181](https://github.com/netboxlabs/netbox-branching/issues/181) - Introduce the `main_schema` configuration parameter to set the default schema name
+* [#189](https://github.com/netboxlabs/netbox-branching/issues/189) - Introduce a registration mechanism for pre-action branch validators
+
+### Bug Fixes
+
+* [#204](https://github.com/netboxlabs/netbox-branching/issues/204) - Hide navigation menu items for unauthenticated users
+
+---
+
 ## v0.5.7
 
 ### Bug Fixes

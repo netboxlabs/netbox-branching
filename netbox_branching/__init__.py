@@ -1,7 +1,9 @@
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
+from django.utils.module_loading import import_string
 
-from netbox.plugins import PluginConfig
+from netbox.plugins import PluginConfig, get_plugin_config
+from .constants import BRANCH_ACTIONS
 from .utilities import register_models
 
 
@@ -9,9 +11,9 @@ class AppConfig(PluginConfig):
     name = 'netbox_branching'
     verbose_name = 'NetBox Branching'
     description = 'A git-like branching implementation for NetBox'
-    version = '0.5.7'
+    version = '0.6.0'
     base_url = 'branching'
-    min_version = '4.1.9'
+    min_version = '4.3.2'
     middleware = [
         'netbox_branching.middleware.BranchMiddleware'
     ]
@@ -25,13 +27,24 @@ class AppConfig(PluginConfig):
         # Models from other plugins which should be excluded from branching support
         'exempt_models': [],
 
+        # The name of the main schema
+        'main_schema': 'public',
+
         # This string is prefixed to the name of each new branch schema during provisioning
         'schema_prefix': 'branch_',
+
+        # Branch action validators
+        'sync_validators': [],
+        'merge_validators': [],
+        'migrate_validators': [],
+        'revert_validators': [],
+        'archive_validators': [],
     }
 
     def ready(self):
         super().ready()
         from . import constants, events, search, signal_receivers  # noqa: F401
+        from .models import Branch
         from .utilities import DynamicSchemaDict
 
         # Validate required settings
@@ -46,6 +59,15 @@ class AppConfig(PluginConfig):
 
         # Register models which support branching
         register_models()
+
+        # Validate & register configured branch action validators
+        for action in BRANCH_ACTIONS:
+            for validator_path in get_plugin_config('netbox_branching', f'{action}_validators'):
+                try:
+                    func = import_string(validator_path)
+                except ImportError:
+                    raise ImproperlyConfigured(f"Branch {action} validator not found: {validator_path}")
+                Branch.register_preaction_check(func, action)
 
 
 config = AppConfig

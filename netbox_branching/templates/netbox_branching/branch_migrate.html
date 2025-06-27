@@ -1,0 +1,55 @@
+{% extends 'generic/_base.html' %}
+{% load form_helpers %}
+{% load i18n %}
+
+{% block title %}
+  {% blocktrans %}Migrate Branch {{ branch }}{% endblocktrans %}
+{% endblock %}
+
+{% block tabs %}
+  <ul class="nav nav-tabs">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" id="action-form-tab" data-bs-toggle="tab" data-bs-target="#action-form" type="button" role="tab" aria-controls="merge-form" aria-selected="true">
+        {% trans "Migrate" %}
+      </button>
+    </li>
+  </ul>
+{% endblock tabs %}
+
+{% block content %}
+  {# Form tab #}
+  <div class="tab-pane show active" id="action-form" role="tabpanel" aria-labelledby="action-form-tab">
+    {% if branch.pending_migrations %}
+      <form action="" method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        <div class="card">
+          <h2 class="card-header">{% trans "Pending Migrations" %}</h2>
+          <div class="card-body">
+            <p>
+              {% with count=branch.pending_migrations|length %}
+                {% blocktrans %}
+                  The following <strong>{{ count }} database migrations</strong> will be applied to the branch:
+                {% endblocktrans %}
+              {% endwith %}
+            </p>
+            <ul class="font-monospace text-muted">
+              {% for app_label, name in branch.pending_migrations %}
+                <li>{{ app_label }}.{{ name }}</li>
+              {% endfor %}
+            </ul>
+            {% render_field form.confirm %}
+          </div>
+          <div class="card-footer text-end">
+            <a href="{{ branch.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
+            <button type="submit" name="_update" class="btn btn-primary">
+              {% trans "Apply Migrations" %}
+            </button>
+          </div>
+        </div>
+      </form>
+    {% else %}
+      <p>{% trans "No pending migrations found." %}</p>
+    {% endif %}
+  </div>
+  {# /Form tab #}
+{% endblock content %}

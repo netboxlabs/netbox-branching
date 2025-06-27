@@ -2,7 +2,7 @@ import logging
 from functools import partial
 
 from django.db import DEFAULT_DB_ALIAS
-from django.db.models.signals import post_save, pre_delete
+from django.db.models.signals import post_migrate, post_save, pre_delete
 from django.dispatch import receiver
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
@@ -12,15 +12,16 @@ from core.models import ObjectChange, ObjectType
 from extras.events import process_event_rules
 from extras.models import EventRule
 from netbox.registry import registry
+from netbox_branching import signals
 from utilities.exceptions import AbortRequest
 from utilities.serialization import serialize_object
 from .choices import BranchStatusChoices
 from .contextvars import active_branch
 from .events import *
 from .models import Branch, ChangeDiff
-from .signals import *
 
 __all__ = (
+    'check_pending_migrations',
     'handle_branch_event',
     'record_change_diff',
     'validate_branch_deletion',
@@ -124,11 +125,11 @@ def handle_branch_event(event_type, branch, user=None, **kwargs):
     )
 
 
-post_provision.connect(partial(handle_branch_event, event_type=BRANCH_PROVISIONED))
-post_deprovision.connect(partial(handle_branch_event, event_type=BRANCH_DEPROVISIONED))
-post_sync.connect(partial(handle_branch_event, event_type=BRANCH_SYNCED))
-post_merge.connect(partial(handle_branch_event, event_type=BRANCH_MERGED))
-post_revert.connect(partial(handle_branch_event, event_type=BRANCH_REVERTED))
+signals.post_provision.connect(partial(handle_branch_event, event_type=BRANCH_PROVISIONED))
+signals.post_deprovision.connect(partial(handle_branch_event, event_type=BRANCH_DEPROVISIONED))
+signals.post_sync.connect(partial(handle_branch_event, event_type=BRANCH_SYNCED))
+signals.post_merge.connect(partial(handle_branch_event, event_type=BRANCH_MERGED))
+signals.post_revert.connect(partial(handle_branch_event, event_type=BRANCH_REVERTED))
 
 
 @receiver(pre_delete, sender=Branch)
@@ -140,3 +141,24 @@ def validate_branch_deletion(sender, instance, **kwargs):
         raise AbortRequest(
             _("A branch in the {status} status may not be deleted.").format(status=instance.status)
         )
+
+
+@receiver(post_migrate)
+def check_pending_migrations(sender, using, **kwargs):
+    """
+    Check for any Branches with pending database migrations, and update their status accordingly.
+    """
+    if sender.name != 'netbox_branching' or using != DEFAULT_DB_ALIAS:
+        return
+    logger = logging.getLogger('netbox_branching.signal_receivers.check_pending_migrations')
+    logger.info("Checking for branches with pending database migrations")
+
+    open_branches = Branch.objects.filter(status=BranchStatusChoices.READY)
+    update_count = 0
+    for branch in open_branches:
+        if branch.pending_migrations:
+            branch.status = BranchStatusChoices.PENDING_MIGRATIONS
+            update_count += 1
+    if update_count:
+        logger.info(f"Updating status of {update_count} branches with pending migrations")
+        Branch.objects.bulk_update(open_branches, ['status'], batch_size=100)
