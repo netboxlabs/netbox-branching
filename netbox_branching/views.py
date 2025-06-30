@@ -11,7 +11,7 @@ from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
-from .jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
+from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
 
 
@@ -186,18 +186,21 @@ class BaseBranchActionView(generic.ObjectView):
 
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        form = self.form(branch)
+        action_permitted = getattr(branch, f'can_{self.action}')
+        form = self.form(branch, allow_commit=action_permitted)
 
         return render(request, self.template_name, {
             'branch': branch,
             'action': _(f'{self.action.title()} Branch'),
             'form': form,
+            'action_permitted': action_permitted,
             'conflicts_table': self._get_conflicts_table(branch),
         })
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        form = self.form(branch, request.POST)
+        action_permitted = getattr(branch, f'can_{self.action}')
+        form = self.form(branch, request.POST, allow_commit=action_permitted)
 
         if branch.status not in self.valid_states:
             messages.error(request, _(
@@ -210,6 +213,7 @@ class BaseBranchActionView(generic.ObjectView):
             'branch': branch,
             'action': _(f'{self.action.title()} Branch'),
             'form': form,
+            'action_permitted': action_permitted,
             'conflicts_table': self._get_conflicts_table(branch),
         })
 
@@ -277,14 +281,17 @@ class BranchArchiveView(generic.ObjectView):
         return 'netbox_branching.archive_branch'
 
     @staticmethod
-    def _enforce_status(request, branch):
+    def _validate(request, branch):
         if branch.status != BranchStatusChoices.MERGED:
             messages.error(request, _("Only merged branches can be archived."))
+            return redirect(branch.get_absolute_url())
+        if not branch.can_revert:
+            messages.error(request, _("Reverting this branch is disallowed per policy."))
             return redirect(branch.get_absolute_url())
 
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        self._enforce_status(request, branch)
+        self._validate(request, branch)
         form = forms.ConfirmationForm()
 
         return render(request, self.template_name, {
@@ -294,7 +301,7 @@ class BranchArchiveView(generic.ObjectView):
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        self._enforce_status(request, branch)
+        self._validate(request, branch)
         form = forms.ConfirmationForm(request.POST)
 
         if form.is_valid():
@@ -306,6 +313,46 @@ class BranchArchiveView(generic.ObjectView):
         return render(request, self.template_name, {
             'branch': branch,
             'form': form,
+        })
+
+
+@register_model_view(Branch, 'migrate')
+class BranchMigrateView(generic.ObjectView):
+    queryset = Branch.objects.all()
+    form = forms.MigrateBranchForm
+    template_name = 'netbox_branching/branch_migrate.html'
+
+    def get_required_permission(self):
+        return 'netbox_branching.migrate_branch'
+
+    def get(self, request, **kwargs):
+        branch = self.get_object(**kwargs)
+        action_permitted = getattr(branch, 'can_migrate')
+        form = self.form()
+
+        return render(request, self.template_name, {
+            'branch': branch,
+            'form': form,
+            'action_permitted': action_permitted,
+        })
+
+    def post(self, request, **kwargs):
+        branch = self.get_object(**kwargs)
+        action_permitted = getattr(branch, 'can_migrate')
+        form = self.form(request.POST)
+
+        if branch.status != BranchStatusChoices.PENDING_MIGRATIONS:
+            messages.error(request, _("The branch is not ready to be migrated."))
+        elif form.is_valid():
+            # Enqueue a background job to migrate the Branch
+            MigrateBranchJob.enqueue(instance=branch, user=request.user)
+            messages.success(request, _("Migration of branch {branch} in progress").format(branch=branch))
+            return redirect(branch.get_absolute_url())
+
+        return render(request, self.template_name, {
+            'branch': branch,
+            'form': form,
+            'action_permitted': action_permitted,
         })
 
 

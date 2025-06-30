@@ -2,7 +2,6 @@ from django.db import connection, migrations
 
 from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchStatusChoices
-from netbox_branching.constants import MAIN_SCHEMA
 from netbox_branching.utilities import get_sql_results
 
 # Indexes to ignore as they are removed in a NetBox v4.3 migration
@@ -19,6 +18,7 @@ def rename_indexes(apps, schema_editor):
     """
     Branch = apps.get_model('netbox_branching', 'Branch')
     schema_prefix = get_plugin_config('netbox_branching', 'schema_prefix')
+    main_schema = get_plugin_config('netbox_branching', 'main_schema')
 
     with connection.cursor() as cursor:
 
@@ -42,7 +42,7 @@ def rename_indexes(apps, schema_editor):
                 definition = branch_index.indexdef.split(' USING ', maxsplit=1)[1]
                 cursor.execute(
                     "SELECT indexname FROM pg_indexes WHERE schemaname=%s AND tablename=%s AND indexdef LIKE %s",
-                    [MAIN_SCHEMA, branch_index.tablename, f'% {definition}']
+                    [main_schema, branch_index.tablename, f'% {definition}']
                 )
                 if result := cursor.fetchone():
                     new_name = result[0]

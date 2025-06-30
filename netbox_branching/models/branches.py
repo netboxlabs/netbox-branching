@@ -1,13 +1,17 @@
+import importlib
 import logging
 import random
 import string
+from collections import defaultdict
 from datetime import timedelta
 from functools import cached_property, partial
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, connection, models, transaction
+from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
+from django.db.migrations.executor import MigrationExecutor
 from django.db.models.signals import post_save
 from django.db.utils import ProgrammingError
 from django.test import RequestFactory
@@ -24,9 +28,11 @@ from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
-from netbox_branching.constants import MAIN_SCHEMA, SKIP_INDEXES
+from netbox_branching.constants import BRANCH_ACTIONS
+from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
 from netbox_branching.signals import *
+from netbox_branching.utilities import BranchActionIndicator
 from netbox_branching.utilities import (
     ChangeSummary, activate_branch, get_branchable_object_types, get_sql_results, get_tables_to_replicate,
     record_applied_change,
@@ -67,6 +73,12 @@ class Branch(JobsMixin, PrimaryModel):
         default=BranchStatusChoices.NEW,
         editable=False
     )
+    applied_migrations = ArrayField(
+        verbose_name=_('applied migrations'),
+        base_field=models.CharField(max_length=200),
+        blank=True,
+        default=list,
+    )
     last_sync = models.DateTimeField(
         blank=True,
         null=True,
@@ -84,6 +96,14 @@ class Branch(JobsMixin, PrimaryModel):
         null=True,
         related_name='+'
     )
+
+    _preaction_validators = {
+        'sync': set(),
+        'migrate': set(),
+        'merge': set(),
+        'revert': set(),
+        'archive': set(),
+    }
 
     class Meta:
         ordering = ('name',)
@@ -188,6 +208,15 @@ class Branch(JobsMixin, PrimaryModel):
         chars = [*string.ascii_lowercase, *string.digits]
         return ''.join(random.choices(chars, k=length))
 
+    @classmethod
+    def register_preaction_check(cls, func, action):
+        """
+        Register a validator to run before a specific branch action (i.e. sync or merge).
+        """
+        if action not in BRANCH_ACTIONS:
+            raise ValueError(f"Invalid branch action: {action}")
+        cls._preaction_validators[action].add(func)
+
     def get_changes(self):
         """
         Return a queryset of all ObjectChange records created within the Branch.
@@ -259,6 +288,98 @@ class Branch(JobsMixin, PrimaryModel):
             return False
         return self.last_sync < timezone.now() - timedelta(days=changelog_retention)
 
+    #
+    # Migration handling
+    #
+
+    @cached_property
+    def pending_migrations(self):
+        """
+        Return a list of database migrations which have been applied in main but not in the branch.
+        """
+        connection = connections[self.connection_name]
+        executor = MigrationExecutor(connection)
+        targets = executor.loader.graph.leaf_nodes()
+        plan = executor.migration_plan(targets)
+        return [
+            (migration.app_label, migration.name) for migration, backward in plan
+        ]
+
+    @cached_property
+    def migrators(self):
+        """
+        Return a dictionary mapping object types to a list of migrators to be run when syncing, merging, or
+        reverting a Branch.
+        """
+        migrators = defaultdict(list)
+        for migration in self.applied_migrations:
+            app_label, name = migration.split('.')
+            module = importlib.import_module(f'{app_label}.migrations.{name}')
+            for object_type, migrator in getattr(module, 'objectchange_migrators', {}).items():
+                migrators[object_type].append(migrator)
+        return migrators
+
+    #
+    # Branch action indicators
+    #
+
+    def _can_do_action(self, action):
+        """
+        Execute any validators configured for the specified branch
+        action. Return False if any fail; otherwise return True.
+        """
+        if action not in BRANCH_ACTIONS:
+            raise Exception(f"Unrecognized branch action: {action}")
+
+        # Run any pre-action validators
+        for func in self._preaction_validators[action]:
+            if not (indicator := func(self)):
+                # Backward compatibility for pre-v0.6.0 validators
+                if type(indicator) is not BranchActionIndicator:
+                    return BranchActionIndicator(False, _(f"Validation failed for {action}: {func}"))
+                return indicator
+
+        return BranchActionIndicator(True)
+
+    @cached_property
+    def can_sync(self):
+        """
+        Indicates whether the branch can be synced.
+        """
+        return self._can_do_action('sync')
+
+    @cached_property
+    def can_migrate(self):
+        """
+        Indicates whether the branch can be migrated.
+        """
+        return self._can_do_action('migrate')
+
+    @cached_property
+    def can_merge(self):
+        """
+        Indicates whether the branch can be merged.
+        """
+        return self._can_do_action('merge')
+
+    @cached_property
+    def can_revert(self):
+        """
+        Indicates whether the branch can be reverted.
+        """
+        return self._can_do_action('revert')
+
+    @cached_property
+    def can_archive(self):
+        """
+        Indicates whether the branch can be archived.
+        """
+        return self._can_do_action('archive')
+
+    #
+    # Branch actions
+    #
+
     def sync(self, user, commit=True):
         """
         Apply changes from the main schema onto the Branch's schema.
@@ -270,6 +391,8 @@ class Branch(JobsMixin, PrimaryModel):
             raise Exception(f"Branch {self} is not ready to sync")
         if self.is_stale:
             raise Exception(f"Branch {self} is stale and can no longer be synced")
+        if commit and not self.can_sync:
+            raise Exception("Syncing this branch is not permitted.")
 
         # Emit pre-sync signal
         pre_sync.send(sender=self.__class__, branch=self, user=user)
@@ -293,7 +416,7 @@ class Branch(JobsMixin, PrimaryModel):
                     # Apply each change from the main schema
                     for change in changes:
                         models.add(change.changed_object_type.model_class())
-                        change.apply(using=self.connection_name, logger=logger)
+                        change.apply(self, using=self.connection_name, logger=logger)
                     if not commit:
                         raise AbortTransaction()
 
@@ -324,6 +447,60 @@ class Branch(JobsMixin, PrimaryModel):
 
     sync.alters_data = True
 
+    def migrate(self, user):
+        """
+        Apply any pending database migrations to the branch schema.
+        """
+        logger = logging.getLogger('netbox_branching.branch.migrate')
+        logger.info(f'Migrating branch {self} ({self.schema_name})')
+
+        def migration_progress_callback(action, migration=None, fake=False):
+            if action == "apply_start":
+                logger.info(f"Applying migration {migration}")
+            elif action == "apply_success" and migration is not None:
+                self.applied_migrations.append(migration)
+
+        # Emit pre-migration signal
+        pre_migrate.send(sender=self.__class__, branch=self, user=user)
+
+        # Set Branch status
+        logger.debug(f"Setting branch status to {BranchStatusChoices.MIGRATING}")
+        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MIGRATING)
+
+        # Generate migration plan & apply any migrations
+        connection = connections[self.connection_name]
+        executor = MigrationExecutor(connection, progress_callback=migration_progress_callback)
+        targets = executor.loader.graph.leaf_nodes()
+        if plan := executor.migration_plan(targets):
+            try:
+                # Run migrations
+                executor.migrate(targets, plan)
+            except Exception as e:
+                if err_message := str(e):
+                    logger.error(err_message)
+                # Save applied migrations & reset status
+                self.status = BranchStatusChoices.READY
+                self.save()
+                raise e
+        else:
+            logger.info("Found no migrations to apply")
+
+        # Reset Branch status to ready
+        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
+        self.status = BranchStatusChoices.READY
+        self.save()
+
+        # Record a branch event for the migration
+        logger.debug(f"Recording branch event: {BranchEventTypeChoices.MIGRATED}")
+        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MIGRATED)
+
+        # Emit post-migration signal
+        post_migrate.send(sender=self.__class__, branch=self, user=user)
+
+        logger.info('Migration completed')
+
+    migrate.alters_data = True
+
     def merge(self, user, commit=True):
         """
         Apply all changes in the Branch to the main schema by replaying them in
@@ -334,6 +511,8 @@ class Branch(JobsMixin, PrimaryModel):
 
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to merge")
+        if commit and not self.can_merge:
+            raise Exception("Merging this branch is not permitted.")
 
         # Emit pre-merge signal
         pre_merge.send(sender=self.__class__, branch=self, user=user)
@@ -366,7 +545,7 @@ class Branch(JobsMixin, PrimaryModel):
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
-                        change.apply(using=DEFAULT_DB_ALIAS, logger=logger)
+                        change.apply(self, using=DEFAULT_DB_ALIAS, logger=logger)
                 if not commit:
                     raise AbortTransaction()
 
@@ -412,6 +591,8 @@ class Branch(JobsMixin, PrimaryModel):
 
         if not self.merged:
             raise Exception("Only merged branches can be reverted.")
+        if commit and not self.can_revert:
+            raise Exception("Reverting this branch is not permitted.")
 
         # Emit pre-revert signal
         pre_revert.send(sender=self.__class__, branch=self, user=user)
@@ -444,7 +625,7 @@ class Branch(JobsMixin, PrimaryModel):
                     with event_tracking(request):
                         request.id = change.request_id
                         request.user = change.user
-                        change.undo(logger=logger)
+                        change.undo(self, logger=logger)
                 if not commit:
                     raise AbortTransaction()
 
@@ -499,6 +680,7 @@ class Branch(JobsMixin, PrimaryModel):
         """
         logger = logging.getLogger('netbox_branching.branch.provision')
         logger.info(f'Provisioning branch {self} ({self.schema_name})')
+        main_schema = get_plugin_config('netbox_branching', 'main_schema')
 
         # Emit pre-provision signal
         pre_provision.send(sender=self.__class__, branch=self, user=user)
@@ -531,20 +713,20 @@ class Branch(JobsMixin, PrimaryModel):
                 # Create an empty copy of the global change log. Share the ID sequence from the main table to avoid
                 # reusing change record IDs.
                 table = ObjectChange_._meta.db_table
-                main_table = f'{MAIN_SCHEMA}.{table}'
+                main_table = f'{main_schema}.{table}'
                 schema_table = f'{schema}.{table}'
                 logger.debug(f'Creating table {schema_table}')
                 cursor.execute(
                     f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
                 )
                 # Set the default value for the ID column to the sequence associated with the source table
-                sequence_name = f'{MAIN_SCHEMA}.{table}_id_seq'
+                sequence_name = f'{main_schema}.{table}_id_seq'
                 cursor.execute(
                     f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
                 )
 
                 # Copy the migrations table
-                main_table = f'{MAIN_SCHEMA}.django_migrations'
+                main_table = f'{main_schema}.django_migrations'
                 schema_table = f'{schema}.django_migrations'
                 logger.debug(f'Creating table {schema_table}')
                 cursor.execute(
@@ -568,7 +750,7 @@ class Branch(JobsMixin, PrimaryModel):
 
                 # Replicate relevant tables from the main schema
                 for table in get_tables_to_replicate():
-                    main_table = f'{MAIN_SCHEMA}.{table}'
+                    main_table = f'{main_schema}.{table}'
                     schema_table = f'{schema}.{table}'
                     logger.debug(f'Creating table {schema_table}')
 
@@ -606,7 +788,7 @@ class Branch(JobsMixin, PrimaryModel):
                     definition = index.indexdef.split(' USING ', maxsplit=1)[1]
                     cursor.execute(
                         "SELECT indexname FROM pg_indexes WHERE schemaname=%s AND tablename=%s AND indexdef LIKE %s",
-                        [MAIN_SCHEMA, index.tablename, f'% {definition}']
+                        [main_schema, index.tablename, f'% {definition}']
                     )
                     if result := cursor.fetchone():
                         # Rename the branch schema index (if needed)
@@ -654,6 +836,10 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Deprovision the Branch and set its status to "archived."
         """
+        if not self.can_archive:
+            raise Exception("Archiving this branch is not permitted.")
+
+        # Deprovision the branch's schema
         self.deprovision()
 
         # Update the branch's status to "archived"
