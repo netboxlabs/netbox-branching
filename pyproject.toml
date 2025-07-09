@@ -4,7 +4,7 @@ version = "0.6.0"
 description = "A git-like branching implementation for NetBox"
 readme = "README.md"
 requires-python = ">=3.10"
-license = { text = "PolyForm Shield License 1.0.0" }
+license = { text = "NetBox Limited Use License 1.0" }
 authors = [
     { name = "NetBox Labs", email = "support@netboxlabs.com" }
 ]
