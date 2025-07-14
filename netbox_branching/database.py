@@ -24,9 +24,10 @@ class BranchAwareRouter:
             return
 
         # Bail if the model does not support branching
-        app_label, model_name = model._meta.label.lower().split('.')
-        if model_name not in registry['model_features']['branching'].get(app_label, []):
-            return
+        if model._meta.label != 'core.ObjectChange':
+            app_label, model_name = model._meta.label.lower().split('.')
+            if model_name not in registry['model_features']['branching'].get(app_label, []):
+                return
 
         # Return the schema for the active branch (if any)
         if branch := active_branch.get():
