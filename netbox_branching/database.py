@@ -17,6 +17,9 @@ class BranchAwareRouter:
     """
     connection_prefix = 'schema_'
 
+    def _get_connection(self, branch):
+        return f'{self.connection_prefix}{branch.schema_name}'
+
     def _get_db(self, model, **hints):
         # Warn & exit if branching support has not yet been initialized
         if 'branching' not in registry['model_features']:
@@ -24,16 +27,22 @@ class BranchAwareRouter:
             return
 
         # Bail if the model does not support branching
-        if model._meta.label != 'core.ObjectChange':
-            app_label, model_name = model._meta.label.lower().split('.')
-            if model_name not in registry['model_features']['branching'].get(app_label, []):
-                return
+        app_label, model_name = model._meta.label.lower().split('.')
+        if model_name not in registry['model_features']['branching'].get(app_label, []):
+            return
 
         # Return the schema for the active branch (if any)
         if branch := active_branch.get():
-            return f'{self.connection_prefix}{branch.schema_name}'
+            return self._get_connection(branch)
 
     def db_for_read(self, model, **hints):
+
+        # Always use the active branch (if any) when retrieving changelog records
+        if model._meta.label == 'core.ObjectChange':
+            if branch := active_branch.get():
+                return self._get_connection(branch)
+            return
+
         return self._get_db(model, **hints)
 
     def db_for_write(self, model, **hints):
