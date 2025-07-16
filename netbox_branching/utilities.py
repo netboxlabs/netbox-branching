@@ -135,6 +135,7 @@ def get_tables_to_replicate():
 
     branch_aware_models = [
         ot.model_class() for ot in get_branchable_object_types()
+        if ot.model_class() is not None
     ]
     for model in branch_aware_models:
 
