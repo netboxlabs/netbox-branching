@@ -1,5 +1,14 @@
 # Change Log
 
+## v0.6.1
+
+### Bug Fixes
+
+* [#246](https://github.com/netboxlabs/netbox-branching/issues/246) - Ensure changelog is retrieved from the correct database schema
+* [#299](https://github.com/netboxlabs/netbox-branching/issues/299) - Avoid `AttributeError` exception when provisioning a branch due to invalid content type
+
+---
+
 ## v0.6.0
 
 ### Enhancements
