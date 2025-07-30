@@ -19,6 +19,7 @@ from .choices import BranchStatusChoices
 from .contextvars import active_branch
 from .events import *
 from .models import Branch, ChangeDiff
+from .utilities import deactivate_branch
 
 __all__ = (
     'check_pending_migrations',
@@ -79,8 +80,9 @@ def record_change_diff(instance, **kwargs):
                 current_data = None
             else:
                 model = instance.changed_object_type.model_class()
-                obj = model.objects.using(DEFAULT_DB_ALIAS).get(pk=instance.changed_object_id)
-                current_data = serialize_object(obj, exclude=['created', 'last_updated'])
+                with deactivate_branch():
+                    obj = model.objects.get(pk=instance.changed_object_id)
+                    current_data = serialize_object(obj, exclude=['created', 'last_updated'])
             diff = ChangeDiff(
                 branch=branch,
                 object=instance.changed_object,
