@@ -1,6 +1,12 @@
 name: Lint and tests
 on:
   workflow_dispatch:
+    inputs:
+      netbox_ref:
+        description: 'NetBox ref to checkout (branch, tag, or commit)'
+        required: false
+        default: 'main'
+        type: string
   pull_request:
   push:
 
@@ -70,6 +76,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: "netbox-community/netbox"
+          ref: ${{ inputs.netbox_ref || 'main' }}
           path: netbox
       - name: Install netbox-branching
         working-directory: netbox-branching
