@@ -1,6 +1,12 @@
 name: Lint and tests
 on:
   workflow_dispatch:
+    inputs:
+      netbox_ref:
+        description: 'NetBox ref to checkout (branch, tag, or commit)'
+        required: false
+        default: 'main'
+        type: string
   pull_request:
   push:
 
@@ -58,18 +64,34 @@ jobs:
         ports:
           - 5432:5432
     steps:
-      - name: Checkout netbox-branching
-        uses: actions/checkout@v4
-        with:
-          path: netbox-branching
       - name: Setup Python ${{ matrix.python-version }}
         uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
+      - name: Checkout netbox-branching
+        uses: actions/checkout@v4
+        with:
+          path: netbox-branching
+      - name: Get NetBox ref from PR labels
+        id: netbox-ref
+        run: |
+          # Check for label like "test-against:develop" or "test-against:v3.7"
+          LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
+          echo "Labels: $LABELS"
+          # Extract ref from label (format: "test-against:branch-name")
+          REF=$(echo "$LABELS" | jq -r '.[] | select(startswith("test-against:")) | split(":")[1]' | head -n1)
+          if [[ -n "$REF" && "$REF" != "null" ]]; then
+            echo "Found test-against label: $REF"
+            echo "ref=$REF" >> $GITHUB_OUTPUT
+          else
+            echo "No test-against label found, using main"
+            echo "ref=main" >> $GITHUB_OUTPUT
+          fi
       - name: Checkout netbox
         uses: actions/checkout@v4
         with:
           repository: "netbox-community/netbox"
+          ref: ${{ inputs.netbox_ref || steps.netbox-ref.outputs.ref }}
           path: netbox
       - name: Install netbox-branching
         working-directory: netbox-branching

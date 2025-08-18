@@ -43,7 +43,7 @@ class AppConfig(PluginConfig):
 
     def ready(self):
         super().ready()
-        from . import constants, events, search, signal_receivers  # noqa: F401
+        from . import constants, events, search, signal_receivers, webhook_callbacks  # noqa: F401
         from .models import Branch
         from .utilities import DynamicSchemaDict
 
