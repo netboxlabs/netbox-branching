@@ -1,8 +1,10 @@
 import warnings
 
+from django.db import DEFAULT_DB_ALIAS
 from netbox.registry import registry
 
 from .contextvars import active_branch
+from .utilities import supports_branching
 
 
 __all__ = (
@@ -27,8 +29,7 @@ class BranchAwareRouter:
             return
 
         # Bail if the model does not support branching
-        app_label, model_name = model._meta.label.lower().split('.')
-        if model_name not in registry['model_features']['branching'].get(app_label, []):
+        if not supports_branching(model):
             return
 
         # Return the schema for the active branch (if any)
@@ -62,5 +63,11 @@ class BranchAwareRouter:
             return False
 
         # Disallow migrations for models which don't support branching
-        if model_name and model_name not in registry['model_features']['branching'].get(app_label, []):
-            return False
+        if model_name:
+            from core.models import ObjectType
+            if not ObjectType.objects.using(DEFAULT_DB_ALIAS).filter(
+                    app_label=app_label,
+                    model=model_name,
+                    features__contains=['branching'],
+            ).exists():
+                return False
