@@ -3,8 +3,9 @@ from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 
 from netbox.plugins import PluginConfig, get_plugin_config
+from netbox.utils import register_model_feature
 from .constants import BRANCH_ACTIONS
-from .utilities import register_models
+from .utilities import supports_branching
 
 
 class AppConfig(PluginConfig):
@@ -58,8 +59,8 @@ class AppConfig(PluginConfig):
                 "netbox_branching: DATABASE_ROUTERS must contain 'netbox_branching.database.BranchAwareRouter'."
             )
 
-        # Register models which support branching
-        register_models()
+        # Register the "branching" model feature
+        register_model_feature('branching', supports_branching)
 
         # Validate & register configured branch action validators
         for action in BRANCH_ACTIONS:
