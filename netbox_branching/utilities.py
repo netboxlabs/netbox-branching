@@ -1,6 +1,6 @@
 import datetime
 import logging
-from collections import defaultdict, namedtuple
+from collections import namedtuple
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from functools import cached_property
@@ -12,7 +12,6 @@ from django.http import HttpResponseBadRequest
 from django.urls import reverse
 
 from netbox.plugins import get_plugin_config
-from netbox.registry import registry
 from netbox.utils import register_request_processor
 from .constants import BRANCH_HEADER, COOKIE_NAME, EXEMPT_MODELS, INCLUDE_MODELS, QUERY_PARAM
 from .contextvars import active_branch
@@ -31,7 +30,7 @@ __all__ = (
     'get_tables_to_replicate',
     'is_api_request',
     'record_applied_change',
-    'register_models',
+    'supports_branching',
     'update_object',
 )
 
@@ -97,34 +96,33 @@ def get_branchable_object_types():
     return ObjectType.objects.with_feature('branching')
 
 
-def register_models():
+def supports_branching(model):
     """
-    Register all models which support branching in the NetBox registry.
+    Returns True if branching is supported for the given model; otherwise False.
     """
-    # Compile a list of exempt models (those for which change logging may
-    # be enabled, but branching is not supported)
-    exempt_models = (
+    from netbox.models.features import ChangeLoggingMixin
+
+    label = f'{model._meta.app_label}.{model._meta.model_name}'
+    wildcard_label = f'{model._meta.app_label}.*'
+
+    # Check for explicitly supported models
+    if label in INCLUDE_MODELS:
+        return True
+
+    # Exclude models which do not support change logging
+    if not issubclass(model, ChangeLoggingMixin):
+        return False
+
+    # TODO: Make this more efficient
+    # Check for exempted models
+    exempt_models = [
         *EXEMPT_MODELS,
-        *get_plugin_config('netbox_branching', 'exempt_models'),
-    )
+        *get_plugin_config('netbox_branching', 'exempt_models', []),
+    ]
+    if label in exempt_models or wildcard_label in exempt_models:
+        return False
 
-    # Register all models which support change logging and are not exempt
-    branching_models = defaultdict(list)
-    for app_label, models in registry['model_features']['change_logging'].items():
-        # Wildcard exclusion for all models in this app
-        if f'{app_label}.*' in exempt_models:
-            continue
-        for model in models:
-            if f'{app_label}.{model}' not in exempt_models:
-                branching_models[app_label].append(model)
-
-    # Register additional included models
-    # TODO: Allow plugins to declare additional models?
-    for label in INCLUDE_MODELS:
-        app_label, model = label.split('.')
-        branching_models[app_label].append(model)
-
-    registry['model_features']['branching'] = dict(branching_models)
+    return True
 
 
 def get_tables_to_replicate():

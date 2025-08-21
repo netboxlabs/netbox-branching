@@ -1,8 +1,8 @@
 from django.test import TransactionTestCase, override_settings
 
-from netbox.registry import registry
+from ipam.models import Prefix
 from netbox_branching.models import Branch
-from netbox_branching.utilities import register_models
+from netbox_branching.utilities import supports_branching
 
 
 class ConfigTestCase(TransactionTestCase):
@@ -14,8 +14,7 @@ class ConfigTestCase(TransactionTestCase):
         }
     })
     def test_exempt_models(self):
-        register_models()
-        self.assertNotIn('prefix', registry['model_features']['branching']['ipam'])
+        self.assertFalse(supports_branching(Prefix))
 
     @override_settings(PLUGINS_CONFIG={
         'netbox_branching': {
