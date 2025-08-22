@@ -144,13 +144,12 @@ def get_tables_to_replicate():
 
         # Capture any M2M fields which reference other replicated models
         for m2m_field in model._meta.local_many_to_many:
-            if m2m_field.related_model in branch_aware_models:
-                if hasattr(m2m_field, 'through'):
-                    # Field is actually a manager
-                    m2m_table = m2m_field.through._meta.db_table
-                else:
-                    m2m_table = m2m_field._get_m2m_db_table(model._meta)
-                tables.add(m2m_table)
+            if hasattr(m2m_field, 'through'):
+                # Field is actually a manager
+                m2m_table = m2m_field.through._meta.db_table
+            else:
+                m2m_table = m2m_field._get_m2m_db_table(model._meta)
+            tables.add(m2m_table)
 
     return sorted(tables)
 
