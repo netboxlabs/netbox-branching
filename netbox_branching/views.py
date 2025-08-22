@@ -50,11 +50,12 @@ class BranchView(generic.ObjectView):
                     for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_DELETE)
                 },
             }
+            latest_change = instance.get_changes().order_by('time').last()
+            last_job = instance.jobs.order_by('created').last()
         else:
             stats = {}
-
-        latest_change = instance.get_changes().order_by('time').last()
-        last_job = instance.jobs.order_by('created').last()
+            latest_change = None
+            last_job = None
 
         return {
             'stats': stats,
