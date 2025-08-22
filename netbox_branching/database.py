@@ -64,6 +64,10 @@ class BranchAwareRouter:
 
         # Disallow migrations for models which don't support branching
         if model_name:
+            # Permit migrations for the ObjectChange model
+            if app_label == 'core' and model_name == 'objectchange':
+                return True
+
             from core.models import ObjectType
             if not ObjectType.objects.using(DEFAULT_DB_ALIAS).filter(
                     app_label=app_label,
