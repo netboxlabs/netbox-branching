@@ -1,5 +1,18 @@
 # Change Log
 
+## v0.7.0
+
+### Enhancements
+
+* [#314](https://github.com/netboxlabs/netbox-branching/issues/314) - Include active branch in webhook payload data
+
+### Bug Fixes
+
+* [#308](https://github.com/netboxlabs/netbox-branching/issues/308) - Prevent branch change records from appearing in main changelog (NetBox v4.4)
+* [#309](https://github.com/netboxlabs/netbox-branching/issues/309) - Fix `ProgrammingError` exception when merging branch (NetBox v4.4)
+
+---
+
 ## v0.6.2
 
 ### Bug Fixes
