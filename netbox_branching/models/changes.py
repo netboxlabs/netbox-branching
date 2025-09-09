@@ -48,7 +48,10 @@ class ObjectChange(ObjectChange_):
 
         # Creating a new object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
-            instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
+            if hasattr(model, 'deserialize_object'):
+                instance = model.deserialize_object(self.postchange_data, pk=self.changed_object_id)
+            else:
+                instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
             logger.debug(f'Creating {model._meta.verbose_name} {instance}')
             instance.object.full_clean()
             instance.save(using=using)
@@ -56,6 +59,7 @@ class ObjectChange(ObjectChange_):
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             instance = model.objects.using(using).get(pk=self.changed_object_id)
+            logger.debug(f'Updating {model._meta.verbose_name} {instance}')
             update_object(instance, self.diff()['post'], using=using)
 
         # Deleting an object
