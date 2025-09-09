@@ -1,5 +1,15 @@
 # Change Log
 
+## v0.6.2
+
+### Bug Fixes
+
+* [#298](https://github.com/netboxlabs/netbox-branching/issues/298) - Fix change diff creation for many-to-many fields
+* [#321](https://github.com/netboxlabs/netbox-branching/issues/321) - Prevent tag object type reassignments from leaking outside a branch
+* [#325](https://github.com/netboxlabs/netbox-branching/issues/325) - Enforce a maximum NetBox version of 4.3
+
+---
+
 ## v0.6.1
 
 ### Bug Fixes
