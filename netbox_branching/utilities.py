@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from functools import cached_property
 
 from django.contrib import messages
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db.models import ForeignKey, ManyToManyField
 from django.http import HttpResponseBadRequest
 from django.urls import reverse
@@ -188,13 +188,16 @@ def update_object(instance, data, using):
         if attr == 'custom_fields':
             attr = 'custom_field_data'
 
-        model_field = instance._meta.get_field(attr)
-        field_cls = model_field.__class__
+        try:
+            model_field = instance._meta.get_field(attr)
+            field_cls = model_field.__class__
+        except FieldDoesNotExist:
+            field_cls = None
 
-        if issubclass(field_cls, ForeignKey):
+        if field_cls and issubclass(field_cls, ForeignKey):
             # Direct value assignment for ForeignKeys must be done by the field's concrete name
             setattr(instance, f'{attr}_id', value)
-        elif issubclass(field_cls, (ManyToManyField, TaggableManager)):
+        elif field_cls and issubclass(field_cls, (ManyToManyField, TaggableManager)):
             # Use M2M manager for ManyToMany assignments
             m2m_manager = getattr(instance, attr)
             m2m_assignments[m2m_manager] = value

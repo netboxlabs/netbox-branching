@@ -81,7 +81,10 @@ def record_change_diff(instance, **kwargs):
                 model = instance.changed_object_type.model_class()
                 with deactivate_branch():
                     obj = model.objects.get(pk=instance.changed_object_id)
-                    current_data = serialize_object(obj, exclude=['created', 'last_updated'])
+                    if hasattr(obj, 'serialize_object'):
+                        current_data = obj.serialize_object(exclude=['created', 'last_updated'])
+                    else:
+                        current_data = serialize_object(obj, exclude=['created', 'last_updated'])
             diff = ChangeDiff(
                 branch=branch,
                 object=instance.changed_object,
