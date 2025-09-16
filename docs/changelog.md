@@ -1,5 +1,13 @@
 # Change Log
 
+## v0.7.1
+
+### Bug Fixes
+
+* [#150](https://github.com/netboxlabs/netbox-branching/issues/150) - Fix recalculation of cable paths when merging a branch with cable changes
+
+---
+
 ## v0.7.0
 
 ### Enhancements
