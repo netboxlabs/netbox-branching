@@ -129,11 +129,12 @@ def handle_branch_event(event_type, branch, user=None, **kwargs):
     )
 
 
-signals.post_provision.connect(partial(handle_branch_event, event_type=BRANCH_PROVISIONED))
-signals.post_deprovision.connect(partial(handle_branch_event, event_type=BRANCH_DEPROVISIONED))
-signals.post_sync.connect(partial(handle_branch_event, event_type=BRANCH_SYNCED))
-signals.post_merge.connect(partial(handle_branch_event, event_type=BRANCH_MERGED))
-signals.post_revert.connect(partial(handle_branch_event, event_type=BRANCH_REVERTED))
+# Connect signals with weak=False to prevent garbage collection of partial objects
+signals.post_provision.connect(partial(handle_branch_event, event_type=BRANCH_PROVISIONED), weak=False)
+signals.post_deprovision.connect(partial(handle_branch_event, event_type=BRANCH_DEPROVISIONED), weak=False)
+signals.post_sync.connect(partial(handle_branch_event, event_type=BRANCH_SYNCED), weak=False)
+signals.post_merge.connect(partial(handle_branch_event, event_type=BRANCH_MERGED), weak=False)
+signals.post_revert.connect(partial(handle_branch_event, event_type=BRANCH_REVERTED), weak=False)
 
 
 @receiver(pre_delete, sender=Branch)
