@@ -40,6 +40,10 @@ The first step is to [create a new branch](./using-branches/creating-a-branch.md
 
 Users can now activate the branch and begin making changes within it. These changes will be contained to the branch, and will not impact main. Likewise, any changes to main will not be reflected in the branch until it has been [synchronized](./using-branches/syncing-merging.md#syncing-a-branch) by a user. A branch may be synchronized repeatedly to keep it up to date with main over time.
 
+> [!TIP]
+> If you would like to share the work you've done in a branch with a colleague, you cannot just copy the URL you're currently viewing.  
+> Instead, if you have activated a branch other than main, you will find a `Share` button on each object detail view page. Clicking `Share` will copy a shareable URL that you can send to others.  
+
 Once work in the branch has been completed, it can be [merged](./using-branches/syncing-merging.md#merging-a-branch) into main.
 
 ```mermaid
