@@ -1,7 +1,7 @@
 ---
 name: 🏡 Housekeeping
 description: An internal change pertaining to the codebase itself
-labels: ["type: housekeeping"]
+labels: ["app: branching", "type: housekeeping"]
 body:
   - type: textarea
     attributes:
