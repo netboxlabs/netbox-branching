@@ -1,7 +1,7 @@
 ---
 name: 🐛 Bug Report
 description: Report a reproducible bug in the current stable release
-labels: ["type: bug", "status: needs triage"]
+labels: ["app: branching", "type: bug", "status: needs triage"]
 body:
   - type: input
     attributes:
