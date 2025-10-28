@@ -6,11 +6,14 @@ from django.db.models.signals import post_migrate, post_save, pre_delete
 from django.dispatch import receiver
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from django.core.exceptions import ValidationError
+from django.contrib.contenttypes.models import ContentType
 
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange, ObjectType
 from extras.events import process_event_rules
 from extras.models import EventRule
+from netbox.signals import post_clean
 from netbox_branching import signals
 from utilities.exceptions import AbortRequest
 from utilities.serialization import serialize_object
@@ -25,7 +28,42 @@ __all__ = (
     'handle_branch_event',
     'record_change_diff',
     'validate_branch_deletion',
+    'validate_branching_operations',
 )
+
+
+@receiver(post_clean)
+def validate_branching_operations(sender, instance, **kwargs):
+    """
+    Validate that branching operations are valid (e.g., not modifying deleted objects).
+    """
+    branch = active_branch.get()
+
+    # Only validate if we're in a branch and this model supports branching
+    if branch is None:
+        return
+
+    # Check if this model supports branching
+    content_type = ContentType.objects.get_for_model(instance)
+    if 'branching' not in content_type.object_type.features:
+        return
+
+    # For updates and deletes, check if the object exists in main
+    if hasattr(instance, 'pk') and instance.pk is not None:
+        model = instance.__class__
+        with deactivate_branch():
+            try:
+                # Try to get the object from main database
+                model.objects.get(pk=instance.pk)
+            except model.DoesNotExist:
+                raise ValidationError(
+                    _("Cannot modify {model_name} '{object_name}' because it has been deleted in the main branch. "
+                      "This would create an unmergeable state.")
+                    .format(
+                        model_name=model._meta.verbose_name,
+                        object_name=str(instance)
+                    )
+                )
 
 
 @receiver(post_save, sender=ObjectChange)
