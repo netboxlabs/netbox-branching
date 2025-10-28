@@ -57,8 +57,7 @@ def validate_branching_operations(sender, instance, **kwargs):
                 model.objects.get(pk=instance.pk)
             except model.DoesNotExist:
                 raise ValidationError(
-                    _("Cannot modify {model_name} '{object_name}' because it has been deleted in the main branch. "
-                      "This would create an unmergeable state.")
+                    _("Cannot modify {model_name} '{object_name}' because it has been deleted in the main branch.")
                     .format(
                         model_name=model._meta.verbose_name,
                         object_name=str(instance)
