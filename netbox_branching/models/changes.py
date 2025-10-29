@@ -41,7 +41,7 @@ class ObjectChange(ObjectChange_):
         """
         logger = logger or logging.getLogger('netbox_branching.models.ObjectChange.apply')
         model = self.changed_object_type.model_class()
-        logger.info(f'Applying change {self} using {using}')
+        logger.info(f'Applying change {self.pk} using {using} ({self})')
 
         # Run data migrators
         self.migrate(branch)
@@ -79,7 +79,7 @@ class ObjectChange(ObjectChange_):
         """
         logger = logger or logging.getLogger('netbox_branching.models.ObjectChange.undo')
         model = self.changed_object_type.model_class()
-        logger.info(f'Undoing change {self} using {using}')
+        logger.info(f'Undoing change {self.pk} using {using} ({self})')
 
         # Run data migrators
         self.migrate(branch, revert=True)
