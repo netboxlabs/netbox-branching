@@ -180,6 +180,7 @@ def update_object(instance, data, using):
     """
     # Avoid AppRegistryNotReady exception
     from taggit.managers import TaggableManager
+    logger = logging.getLogger('netbox_branching.utilities.update_object')
     instance.snapshot()
     m2m_assignments = {}
 
@@ -204,8 +205,14 @@ def update_object(instance, data, using):
         else:
             setattr(instance, attr, value)
 
-    instance.full_clean()
-    instance.save(using=using)
+    try:
+        instance.full_clean()
+        instance.save(using=using)
+    except (FileNotFoundError) as e:
+        # If a file was deleted later in this branch it will fail here
+        # so we need to ignore it. We can assume the NetBox state is valid.
+        logger.warning(f'Ignoring missing file: {e}')
+
     for m2m_manager, value in m2m_assignments.items():
         m2m_manager.set(value)
 

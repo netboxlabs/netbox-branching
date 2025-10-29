@@ -55,11 +55,11 @@ class ObjectChange(ObjectChange_):
 
             try:
                 instance.object.full_clean()
-                instance.save(using=using)
             except (FileNotFoundError) as e:
                 # If a file was deleted later in this branch it will fail here
                 # so we need to ignore it. We can assume the NetBox state is valid.
                 logger.warning(f'Ignoring missing file: {e}')
+            instance.save(using=using)
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
