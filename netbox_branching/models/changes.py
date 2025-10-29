@@ -52,9 +52,14 @@ class ObjectChange(ObjectChange_):
                 instance = model.deserialize_object(self.postchange_data, pk=self.changed_object_id)
             else:
                 instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
-            logger.debug(f'Creating {model._meta.verbose_name} {instance}')
-            instance.object.full_clean()
-            instance.save(using=using)
+
+            try:
+                instance.object.full_clean()
+                instance.save(using=using)
+            except (FileNotFoundError) as e:
+                # If a file was deleted in main it will throw a missing file error, 
+                # so we need to ignore it. We can assume the NetBox state is valid.
+                logger.warning(f'Ignoring missing file: {e}')
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
