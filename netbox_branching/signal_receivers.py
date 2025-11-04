@@ -7,7 +7,6 @@ from django.dispatch import receiver
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from django.core.exceptions import ValidationError
-from django.contrib.contenttypes.models import ContentType
 
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange, ObjectType
@@ -44,8 +43,8 @@ def validate_branching_operations(sender, instance, **kwargs):
         return
 
     # Check if this model supports branching
-    content_type = ContentType.objects.get_for_model(instance)
-    if 'branching' not in content_type.object_type.features:
+    object_type = ObjectType.objects.get(app_label=instance._meta.app_label, model=instance._meta.model_name)
+    if 'branching' not in object_type.features:
         return
 
     # For updates and deletes, check if the object exists in main
