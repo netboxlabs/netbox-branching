@@ -28,6 +28,7 @@ __all__ = (
     'record_change_diff',
     'validate_branch_deletion',
     'validate_branching_operations',
+    'validate_object_deletion_in_branch',
 )
 
 
@@ -47,7 +48,7 @@ def validate_branching_operations(sender, instance, **kwargs):
     if 'branching' not in object_type.features:
         return
 
-    # For updates and deletes, check if the object exists in main
+    # For updates, check if the object exists in main
     if hasattr(instance, 'pk') and instance.pk is not None:
         model = instance.__class__
         with deactivate_branch():
@@ -56,8 +57,10 @@ def validate_branching_operations(sender, instance, **kwargs):
                 model.objects.get(pk=instance.pk)
             except model.DoesNotExist:
                 raise ValidationError(
-                    _("Cannot modify {model_name} '{object_name}' because it has been deleted in the main branch.")
-                    .format(
+                    _(
+                        "Cannot modify {model_name} '{object_name}' because it has been deleted in the main branch. "
+                        "Sync with the main branch to update."
+                    ).format(
                         model_name=model._meta.verbose_name,
                         object_name=str(instance)
                     )
@@ -115,6 +118,20 @@ def record_change_diff(instance, **kwargs):
                 current_data = None
             else:
                 model = instance.changed_object_type.model_class()
+                # Check if the object exists in main before trying to get it
+                try:
+                    model.objects.using(DEFAULT_DB_ALIAS).get(pk=instance.changed_object_id)
+                except model.DoesNotExist:
+                    raise AbortRequest(
+                        _(
+                            "Cannot {action} {model_name} '{object_name}' because it has been deleted "
+                            "in the main branch. Sync with the main branch to update."
+                        ).format(
+                            action=instance.action.lower(),
+                            model_name=model._meta.verbose_name,
+                            object_name=str(instance.changed_object)
+                        )
+                    )
                 with deactivate_branch():
                     obj = model.objects.get(pk=instance.changed_object_id)
                     if hasattr(obj, 'serialize_object'):
@@ -170,6 +187,46 @@ signals.post_deprovision.connect(partial(handle_branch_event, event_type=BRANCH_
 signals.post_sync.connect(partial(handle_branch_event, event_type=BRANCH_SYNCED))
 signals.post_merge.connect(partial(handle_branch_event, event_type=BRANCH_MERGED))
 signals.post_revert.connect(partial(handle_branch_event, event_type=BRANCH_REVERTED))
+
+
+@receiver(pre_delete)
+def validate_object_deletion_in_branch(sender, instance, **kwargs):
+    """
+    Validate that objects being deleted in a branch still exist in main.
+    """
+    # Skip Branch objects - they have their own validation
+    if sender == Branch:
+        return
+
+    # Only validate if we're in a branch
+    branch = active_branch.get()
+    if branch is None:
+        return
+
+    # Check if this model supports branching
+    try:
+        object_type = ObjectType.objects.get(app_label=instance._meta.app_label, model=instance._meta.model_name)
+        if 'branching' not in object_type.features:
+            return
+    except ObjectType.DoesNotExist:
+        return
+
+    # For deletions, check if the object exists in main
+    if hasattr(instance, 'pk') and instance.pk is not None:
+        model = instance.__class__
+        try:
+            # Try to get the object from main database (explicitly use default connection)
+            model.objects.using(DEFAULT_DB_ALIAS).get(pk=instance.pk)
+        except model.DoesNotExist:
+            raise AbortRequest(
+                _(
+                    "Cannot delete {model_name} '{object_name}' because it has been deleted in the main branch. "
+                    "Sync with the main branch to update."
+                ).format(
+                    model_name=model._meta.verbose_name,
+                    object_name=str(instance)
+                )
+            )
 
 
 @receiver(pre_delete, sender=Branch)
