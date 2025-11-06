@@ -1,6 +1,7 @@
 import logging
 from functools import partial
 
+from django.contrib.contenttypes.models import ContentType
 from django.db import DEFAULT_DB_ALIAS
 from django.db.models.signals import post_migrate, post_save, pre_delete
 from django.dispatch import receiver
@@ -32,6 +33,38 @@ __all__ = (
 )
 
 
+def check_object_accessible_in_branch(branch, model, object_id):
+    """
+    Check if an object is accessible for operations in a branch.
+
+    An object is accessible if it either exists in main or was created in the branch.
+    This prevents operations on objects that were deleted in main.
+
+    Args:
+        branch: The Branch instance
+        model: The model class
+        object_id: The primary key of the object
+
+    Returns:
+        True if the object is accessible (exists in main or was created in branch), False otherwise
+    """
+    with deactivate_branch():
+        try:
+            model.objects.get(pk=object_id)
+            return True
+        except model.DoesNotExist:
+            pass
+
+    # Object doesn't exist in main - check if it was created in the branch
+    content_type = ContentType.objects.get_for_model(model)
+    return ChangeDiff.objects.filter(
+        branch=branch,
+        object_type=content_type,
+        object_id=object_id,
+        action=ObjectChangeActionChoices.ACTION_CREATE
+    ).exists()
+
+
 @receiver(post_clean)
 def validate_branching_operations(sender, instance, **kwargs):
     """
@@ -51,23 +84,20 @@ def validate_branching_operations(sender, instance, **kwargs):
     except ObjectType.DoesNotExist:
         return
 
-    # For updates, check if the object exists in main
+    # For updates, check if the object exists in main or was created in the branch
     if hasattr(instance, 'pk') and instance.pk is not None:
         model = instance.__class__
-        with deactivate_branch():
-            try:
-                # Try to get the object from main database
-                model.objects.get(pk=instance.pk)
-            except model.DoesNotExist:
-                raise ValidationError(
-                    _(
-                        "Cannot modify {model_name} '{object_name}' because it has been deleted in the main branch. "
-                        "Sync with the main branch to update."
-                    ).format(
-                        model_name=model._meta.verbose_name,
-                        object_name=str(instance)
-                    )
+        if not check_object_accessible_in_branch(branch, model, instance.pk):
+            # Object was deleted in main, not created in branch
+            raise ValidationError(
+                _(
+                    "Cannot modify {model_name} '{object_name}' because it has been deleted in the main branch. "
+                    "Sync with the main branch to update."
+                ).format(
+                    model_name=model._meta.verbose_name,
+                    object_name=str(instance)
                 )
+            )
 
 
 @receiver(post_save, sender=ObjectChange)
@@ -121,10 +151,8 @@ def record_change_diff(instance, **kwargs):
                 current_data = None
             else:
                 model = instance.changed_object_type.model_class()
-                # Check if the object exists in main before trying to get it
-                try:
-                    model.objects.using(DEFAULT_DB_ALIAS).get(pk=instance.changed_object_id)
-                except model.DoesNotExist:
+                if not check_object_accessible_in_branch(branch, model, instance.changed_object_id):
+                    # Object was deleted in main, not created in branch
                     raise AbortRequest(
                         _(
                             "Cannot {action} {model_name} '{object_name}' because it has been deleted "
@@ -135,12 +163,19 @@ def record_change_diff(instance, **kwargs):
                             object_name=str(instance.changed_object)
                         )
                     )
+
+                # Check if object exists in main to determine if we need to get current_data
                 with deactivate_branch():
-                    obj = model.objects.get(pk=instance.changed_object_id)
-                    if hasattr(obj, 'serialize_object'):
-                        current_data = obj.serialize_object(exclude=['created', 'last_updated'])
-                    else:
-                        current_data = serialize_object(obj, exclude=['created', 'last_updated'])
+                    try:
+                        obj = model.objects.get(pk=instance.changed_object_id)
+                        # Object exists in main, get its current state
+                        if hasattr(obj, 'serialize_object'):
+                            current_data = obj.serialize_object(exclude=['created', 'last_updated'])
+                        else:
+                            current_data = serialize_object(obj, exclude=['created', 'last_updated'])
+                    except model.DoesNotExist:
+                        # Object was created in branch, so there's no current state in main
+                        current_data = None
             diff = ChangeDiff(
                 branch=branch,
                 object=instance.changed_object,
@@ -214,13 +249,11 @@ def validate_object_deletion_in_branch(sender, instance, **kwargs):
     except ObjectType.DoesNotExist:
         return
 
-    # For deletions, check if the object exists in main
+    # For deletions, check if the object exists in main or was created in the branch
     if hasattr(instance, 'pk') and instance.pk is not None:
         model = instance.__class__
-        try:
-            # Try to get the object from main database (explicitly use default connection)
-            model.objects.using(DEFAULT_DB_ALIAS).get(pk=instance.pk)
-        except model.DoesNotExist:
+        if not check_object_accessible_in_branch(branch, model, instance.pk):
+            # Object was deleted in main, not created in branch
             raise AbortRequest(
                 _(
                     "Cannot delete {model_name} '{object_name}' because it has been deleted in the main branch. "
