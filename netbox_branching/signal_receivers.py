@@ -44,8 +44,11 @@ def validate_branching_operations(sender, instance, **kwargs):
         return
 
     # Check if this model supports branching
-    object_type = ObjectType.objects.get(app_label=instance._meta.app_label, model=instance._meta.model_name)
-    if 'branching' not in object_type.features:
+    try:
+        object_type = ObjectType.get_for_model(instance.__class__)
+        if 'branching' not in object_type.features:
+            return
+    except ObjectType.DoesNotExist:
         return
 
     # For updates, check if the object exists in main
@@ -205,7 +208,7 @@ def validate_object_deletion_in_branch(sender, instance, **kwargs):
 
     # Check if this model supports branching
     try:
-        object_type = ObjectType.objects.get(app_label=instance._meta.app_label, model=instance._meta.model_name)
+        object_type = ObjectType.get_for_model(instance.__class__)
         if 'branching' not in object_type.features:
             return
     except ObjectType.DoesNotExist:
