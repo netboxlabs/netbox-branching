@@ -20,6 +20,9 @@ Merging a branch replicates all its changes into main, and updates the branch's 
 
 To merge a branch, click the "Merge" button. (If this button is not visible, verify that the branch status shows "ready" and that you have permission to merge the branch.)
 
+!!! tip
+    To grant non-superusers the ability to merge branches add `merge` under `Additional actions` in `Admin` -> `Authentication` -> `Permissions`
+
 While a branch is being merged, its status will show "merging."
 
 !!! tip
