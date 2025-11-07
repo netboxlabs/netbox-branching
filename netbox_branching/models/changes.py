@@ -196,14 +196,17 @@ class ChangeDiff(models.Model):
         """
         Record any conflicting changes between the modified and current object data.
         """
-        if self.original is None or self.current is None:
-            # Both the original and current states must be available to compare
+        # All three states (original, modified, current) must be available to detect conflicts
+        if self.original is None or self.modified is None or self.current is None:
+            self.conflicts = None
             return
+
         conflicts = None
         if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             conflicts = [
                 k for k, v in self.original.items()
-                if v != self.modified[k] and v != self.current.get(k) and self.modified[k] != self.current.get(k)
+                if k in self.modified and v != self.modified[k] and v != self.current.get(k)
+                and self.modified[k] != self.current.get(k)
             ]
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
             conflicts = [
