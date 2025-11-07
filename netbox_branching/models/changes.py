@@ -3,6 +3,7 @@ from functools import cached_property
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.fields import ArrayField
+from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, models
 from django.utils.translation import gettext_lazy as _
 
@@ -55,11 +56,11 @@ class ObjectChange(ObjectChange_):
 
             try:
                 instance.object.full_clean()
-            except (FileNotFoundError) as e:
-                # If a file was deleted later in this branch it will fail here
-                # so we need to ignore it. We can assume the NetBox state is valid.
+                instance.save(using=using)
+            except FileNotFoundError as e:
                 logger.warning(f'Ignoring missing file: {e}')
-            instance.save(using=using)
+            except ValidationError as e:
+                logger.warning(f'Skipping invalid object due to validation error: {e}')
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
@@ -117,8 +118,13 @@ class ObjectChange(ObjectChange_):
                     if ct_field and fk_field:
                         setattr(instance, field.name, ct_field.get_object_for_this_type(pk=fk_field))
 
-            instance.full_clean()
-            instance.save(using=using)
+            try:
+                instance.full_clean()
+                instance.save(using=using)
+            except FileNotFoundError as e:
+                logger.warning(f'Ignoring missing file during restoration: {e}')
+            except ValidationError as e:
+                logger.warning(f'Skipping restoration of invalid object due to validation error: {e}')
 
     undo.alters_data = True
 
