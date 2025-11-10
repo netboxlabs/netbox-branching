@@ -1,5 +1,20 @@
 # Change Log
 
+## v0.7.2
+
+### Enhancements
+
+* [#342](https://github.com/netboxlabs/netbox-branching/issues/342) - Display warning when attempting to modify an object that has been deleted in main
+* [#347](https://github.com/netboxlabs/netbox-branching/issues/347) - Include ObjectChange ID in log messages when applying/undoing changes
+
+### Bug Fixes
+
+* [#311](https://github.com/netboxlabs/netbox-branching/issues/311) - Fix merge failure when image attachments are created and subsequently deleted
+* [#317](https://github.com/netboxlabs/netbox-branching/issues/317) - Fix event rules not triggering for branch events
+* [#349](https://github.com/netboxlabs/netbox-branching/issues/349) - Fix exception when removing a device from a virtual chassis with a branch active
+
+---
+
 ## v0.7.1
 
 ### Bug Fixes
