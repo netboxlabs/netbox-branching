@@ -11,6 +11,8 @@ from netbox_branching.utilities import activate_branch, close_old_branch_connect
 
 @tag('regression')  # netbox-branching #358
 class BranchConnectionLifecycleTestCase(TransactionTestCase):
+    serialized_rollback = True
+
     def setUp(self):
         """Set up test environment with CONN_MAX_AGE=1."""
         self.original_max_age = settings.DATABASES['default'].get('CONN_MAX_AGE', 0)
