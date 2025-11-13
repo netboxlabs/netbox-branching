@@ -21,6 +21,7 @@ QUERY_PARAM = '_branch'
 INCLUDE_MODELS = (
     'dcim.cablepath',
     'extras.cachedvalue',
+    'extras.taggeditem',  # Fix for issue #354 - tags through model
     'tenancy.contactgroupmembership',  # Fix for NetBox v4.3.0
 )
 
