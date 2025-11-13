@@ -5,8 +5,10 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from functools import cached_property
 
+from asgiref.local import Local
 from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
+from django.db import connections
 from django.db.models import ForeignKey, ManyToManyField
 from django.http import HttpResponseBadRequest
 from django.urls import reverse
@@ -16,6 +18,11 @@ from netbox.utils import register_request_processor
 from .constants import BRANCH_HEADER, COOKIE_NAME, EXEMPT_MODELS, INCLUDE_MODELS, QUERY_PARAM
 from .contextvars import active_branch
 
+# Thread-local storage for tracking branch connection aliases (matches Django's approach)
+# Note: Aliases are tracked once and never removed, matching Django's pattern where
+# DATABASES.keys() is static. Memory overhead is negligible (string references only).
+_branch_connections_tracker = Local(thread_critical=False)
+
 __all__ = (
     'BranchActionIndicator',
     'ChangeSummary',
@@ -23,6 +30,7 @@ __all__ = (
     'ListHandler',
     'ActiveBranchContextManager',
     'activate_branch',
+    'close_old_branch_connections',
     'deactivate_branch',
     'get_active_branch',
     'get_branchable_object_types',
@@ -31,8 +39,21 @@ __all__ = (
     'is_api_request',
     'record_applied_change',
     'supports_branching',
+    'track_branch_connection',
     'update_object',
 )
+
+
+def _get_tracked_branch_aliases():
+    """Get set of tracked branch aliases for current thread."""
+    if not hasattr(_branch_connections_tracker, 'aliases'):
+        _branch_connections_tracker.aliases = set()
+    return _branch_connections_tracker.aliases
+
+
+def track_branch_connection(alias):
+    """Register a branch connection alias for cleanup tracking."""
+    _get_tracked_branch_aliases().add(alias)
 
 
 class DynamicSchemaDict(dict):
@@ -47,6 +68,8 @@ class DynamicSchemaDict(dict):
     def __getitem__(self, item):
         if type(item) is str and item.startswith('schema_'):
             if schema := item.removeprefix('schema_'):
+                track_branch_connection(item)
+
                 default_config = super().__getitem__('default')
                 return {
                     **default_config,
@@ -60,6 +83,28 @@ class DynamicSchemaDict(dict):
         if type(item) is str and item.startswith('schema_'):
             return True
         return super().__contains__(item)
+
+
+def close_old_branch_connections(**kwargs):
+    """
+    Close branch database connections that have exceeded their maximum age.
+
+    This function complements Django's close_old_connections() by handling
+    dynamically-created branch connections. It tracks branch connection aliases
+    in thread-local storage and closes them when they exceed CONN_MAX_AGE.
+
+    Django's close_old_connections() only closes connections for database aliases
+    found in DATABASES.keys(). Since branch aliases are generated dynamically and
+    not present in that iteration (to avoid test isolation issues), they would never
+    be cleaned up, causing connection leaks.
+
+    This function is connected to request_started and request_finished signals,
+    matching Django's cleanup timing.
+    """
+
+    for alias in _get_tracked_branch_aliases():
+        conn = connections[alias]
+        conn.close_if_unusable_or_obsolete()
 
 
 @contextmanager
