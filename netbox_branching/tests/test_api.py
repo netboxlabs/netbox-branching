@@ -99,3 +99,109 @@ class APITestCase(TransactionTestCase):
         results = self.get_results(response)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['name'], 'Site 2')
+
+
+class BranchArchiveAPITestCase(TransactionTestCase):
+    serialized_rollback = True
+
+    def setUp(self):
+        self.client = Client()
+        self.user = get_user_model().objects.create_user(username='testuser', is_superuser=True)
+        token = Token(user=self.user)
+        token.save()
+        self.header = {
+            'HTTP_AUTHORIZATION': f'Token {token.key}',
+            'HTTP_ACCEPT': 'application/json',
+            'HTTP_CONTENT_TYPE': 'application/json',
+        }
+
+        ContentType.objects.get_for_model(Branch)
+
+    def test_archive_endpoint_success(self):
+        branch = Branch(name='Test Branch')
+        branch.save(provision=False)
+        branch.provision(self.user)
+        branch.refresh_from_db()
+
+        from netbox_branching.choices import BranchStatusChoices
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.MERGED)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, 'merged')
+
+        url = reverse('plugins-api:netbox_branching-api:branch-archive', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **self.header)
+
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['status']['value'], 'archived')
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, 'archived')
+
+        from django.db import connection
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name = %s",
+                [branch.schema_name]
+            )
+            self.assertIsNone(cursor.fetchone())
+
+    def test_archive_endpoint_permission_denied(self):
+        user = get_user_model().objects.create_user(username='limited_user')
+        token = Token(user=user)
+        token.save()
+        header = {
+            'HTTP_AUTHORIZATION': f'Token {token.key}',
+            'HTTP_ACCEPT': 'application/json',
+            'HTTP_CONTENT_TYPE': 'application/json',
+        }
+
+        branch = Branch(name='Test Branch')
+        branch.save(provision=False)
+        branch.provision(self.user)
+        branch.refresh_from_db()
+
+        from netbox_branching.choices import BranchStatusChoices
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.MERGED)
+        branch.refresh_from_db()
+
+        url = reverse('plugins-api:netbox_branching-api:branch-archive', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **header)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_archive_endpoint_not_mergeable(self):
+        branch = Branch(name='Test Branch')
+        branch.save(provision=False)
+        branch.provision(self.user)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, 'ready')
+
+        url = reverse('plugins-api:netbox_branching-api:branch-archive', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **self.header)
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_patch_status_archived_blocked(self):
+        branch = Branch(name='Test Branch')
+        branch.save(provision=False)
+        branch.provision(self.user)
+        branch.refresh_from_db()
+
+        from netbox_branching.choices import BranchStatusChoices
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.MERGED)
+        branch.refresh_from_db()
+
+        url = reverse('plugins-api:netbox_branching-api:branch-detail', kwargs={'pk': branch.pk})
+        response = self.client.patch(
+            url,
+            data=json.dumps({'status': 'archived'}),
+            content_type='application/json',
+            **self.header
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, 'merged')
