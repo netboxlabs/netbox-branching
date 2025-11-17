@@ -8,6 +8,7 @@ from functools import cached_property, partial
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
@@ -501,6 +502,368 @@ class Branch(JobsMixin, PrimaryModel):
 
     migrate.alters_data = True
 
+    # Helper class and functions for collapsing ObjectChanges during merge
+    class CollapsedChange:
+        """
+        Represents a collapsed set of ObjectChanges for a single object.
+        """
+        def __init__(self, key, model_class):
+            self.key = key  # (content_type_id, object_id)
+            self.model_class = model_class
+            self.changes = []  # List of ObjectChange instances, ordered by time
+            self.final_action = None  # 'create', 'update', 'delete', or 'skip'
+            self.merged_data = None  # The collapsed postchange_data
+            self.last_change = None  # The most recent ObjectChange (for metadata)
+
+            # Dependencies for ordering
+            self.depends_on = set()  # Set of keys this change depends on
+            self.depended_by = set()  # Set of keys that depend on this change
+
+        def __repr__(self):
+            ct_id, obj_id = self.key
+            return f"<CollapsedChange {self.model_class.__name__}:{obj_id} action={self.final_action} changes={len(self.changes)}>"
+
+    @staticmethod
+    def _collapse_changes_for_object(changes, logger):
+        """
+        Collapse a list of ObjectChanges for a single object.
+        Returns: (final_action, merged_data, last_change)
+        """
+        if not changes:
+            return None, None, None
+
+        # Sort by time (oldest first)
+        changes = sorted(changes, key=lambda c: c.time)
+
+        first_action = changes[0].action
+        last_action = changes[-1].action
+        last_change = changes[-1]
+
+        logger.debug(f"  Collapsing {len(changes)} changes: first={first_action}, last={last_action}")
+
+        # Case 1: Created then deleted -> skip entirely
+        if first_action == 'create' and last_action == 'delete':
+            logger.debug(f"  -> Action: SKIP (created and deleted in branch)")
+            return 'skip', None, last_change
+
+        # Case 2: Deleted -> just delete (should be only one delete)
+        if last_action == 'delete':
+            logger.debug(f"  -> Action: DELETE")
+            return 'delete', changes[-1].prechange_data, last_change
+
+        # Case 3: Created (with possible updates) -> single create
+        if first_action == 'create':
+            merged_data = {}
+            for change in changes:
+                # Merge postchange_data, later changes overwrite earlier ones
+                if change.postchange_data:
+                    merged_data.update(change.postchange_data)
+            logger.debug(f"  -> Action: CREATE (collapsed {len(changes)} changes)")
+            return 'create', merged_data, last_change
+
+        # Case 4: Only updates -> single update
+        merged_data = {}
+        # Start with prechange_data of first change as baseline
+        if changes[0].prechange_data:
+            merged_data.update(changes[0].prechange_data)
+        # Apply each change's postchange_data
+        for change in changes:
+            if change.postchange_data:
+                merged_data.update(change.postchange_data)
+        logger.debug(f"  -> Action: UPDATE (collapsed {len(changes)} changes)")
+        return 'update', merged_data, last_change
+
+    @staticmethod
+    def _get_fk_references(model_class, data, changed_objects):
+        """
+        Get FK references from data that point to objects in changed_objects.
+        Returns: set of (content_type_id, object_id) tuples
+        """
+        if not data:
+            return set()
+
+        references = set()
+        for field in model_class._meta.get_fields():
+            if isinstance(field, models.ForeignKey):
+                fk_field_name = field.attname  # e.g., 'device_id'
+                fk_value = data.get(fk_field_name)
+
+                if fk_value:
+                    # Get the content type of the related model
+                    related_model = field.related_model
+                    related_ct = ContentType.objects.get_for_model(related_model)
+                    ref_key = (related_ct.id, fk_value)
+
+                    # Only track if this object is in our changed_objects
+                    if ref_key in changed_objects:
+                        references.add(ref_key)
+
+        return references
+
+    @staticmethod
+    def _removed_reference_to(collapsed_change, target_key, logger):
+        """
+        Check if this collapsed change removed an FK reference to target_key.
+        Returns True if:
+        - The object previously referenced target_key (in its initial state)
+        - The final state does NOT reference target_key (or object is deleted)
+        """
+        if not collapsed_change.changes:
+            return False
+
+        target_ct_id, target_obj_id = target_key
+        first_change = collapsed_change.changes[0]
+
+        # If this object is being deleted, check if it referenced target initially
+        if collapsed_change.final_action == 'delete':
+            initial_refs = Branch._get_fk_references(
+                collapsed_change.model_class,
+                first_change.prechange_data or {},
+                {target_key}
+            )
+            return target_key in initial_refs
+
+        # If created in branch, it couldn't have had an initial reference
+        if first_change.action == 'create':
+            return False
+
+        # It's an update - check if FK reference changed
+        initial_state = first_change.prechange_data or {}
+        final_state = collapsed_change.merged_data or {}
+
+        # Check each FK field
+        for field in collapsed_change.model_class._meta.get_fields():
+            if isinstance(field, models.ForeignKey):
+                related_model = field.related_model
+                related_ct = ContentType.objects.get_for_model(related_model)
+
+                # Only check if this FK could point to our target
+                if related_ct.id != target_ct_id:
+                    continue
+
+                fk_field_name = field.attname  # e.g., 'device_id'
+                initial_value = initial_state.get(fk_field_name)
+                final_value = final_state.get(fk_field_name)
+
+                # Reference was removed or changed from target
+                if initial_value == target_obj_id and initial_value != final_value:
+                    logger.debug(f"    Found removed reference: {field.name} was {initial_value}, now {final_value}")
+                    return True
+
+        return False
+
+    @staticmethod
+    def _build_dependency_graph(collapsed_changes, logger):
+        """
+        Build dependency graph between collapsed changes.
+        Modifies collapsed_changes in place to set depends_on/depended_by.
+        """
+        logger.info("Building dependency graph...")
+
+        # 1. FK dependencies for creates/updates
+        #    If we CREATE/UPDATE object A with FK to object B,
+        #    and B is being created, then B must be created first
+        logger.debug("  Analyzing FK dependencies for creates/updates...")
+        for key, collapsed in collapsed_changes.items():
+            if collapsed.final_action in ('create', 'update'):
+                fk_refs = Branch._get_fk_references(
+                    collapsed.model_class,
+                    collapsed.merged_data,
+                    collapsed_changes.keys()
+                )
+
+                for ref_key in fk_refs:
+                    ref_collapsed = collapsed_changes[ref_key]
+                    # Only add dependency if the referenced object is being created
+                    if ref_collapsed.final_action == 'create':
+                        collapsed.depends_on.add(ref_key)
+                        ref_collapsed.depended_by.add(key)
+                        logger.debug(f"    {collapsed} depends on {ref_collapsed} (FK reference)")
+
+        # 2. Delete dependencies
+        #    If we DELETE object A, and object B removes its reference to A,
+        #    then B's change must happen before A's delete
+        logger.debug("  Analyzing dependencies for deletes...")
+        for key, collapsed in collapsed_changes.items():
+            if collapsed.final_action == 'delete':
+                # Find all changes that removed references to this object
+                for other_key, other_collapsed in collapsed_changes.items():
+                    if other_key == key:
+                        continue
+
+                    if Branch._removed_reference_to(other_collapsed, key, logger):
+                        # other_collapsed must happen before collapsed (the delete)
+                        collapsed.depends_on.add(other_key)
+                        other_collapsed.depended_by.add(key)
+                        logger.debug(f"    {collapsed} depends on {other_collapsed} (removed reference)")
+
+        logger.info(f"  Dependency graph built: {sum(len(c.depends_on) for c in collapsed_changes.values())} dependencies")
+
+    @staticmethod
+    def _topological_sort_with_cycle_detection(collapsed_changes, logger):
+        """
+        Topological sort with cycle detection.
+        Returns: (ordered_list, cycles_detected)
+
+        If cycles are detected, breaks them and continues, returning the partial order.
+        """
+        logger.info("Performing topological sort...")
+
+        # Create a copy of dependencies to modify
+        remaining = {key: set(collapsed.depends_on) for key, collapsed in collapsed_changes.items()}
+        ordered = []
+
+        iteration = 0
+        max_iterations = len(remaining) * 2  # Safety limit
+
+        while remaining and iteration < max_iterations:
+            iteration += 1
+
+            # Find all nodes with no dependencies
+            ready = [key for key, deps in remaining.items() if not deps]
+
+            if not ready:
+                # No nodes without dependencies - we have a cycle
+                logger.warning(f"  Cycle detected in dependency graph. Breaking cycle to continue.")
+                # Pick a node arbitrarily to break the cycle
+                key = next(iter(remaining))
+                ready = [key]
+                logger.warning(f"  Breaking cycle by processing {collapsed_changes[key]} first")
+
+            # Process ready nodes
+            for key in ready:
+                ordered.append(key)
+                del remaining[key]
+
+                # Remove this key from other nodes' dependencies
+                for deps in remaining.values():
+                    deps.discard(key)
+
+        if iteration >= max_iterations:
+            logger.error(f"  Topological sort exceeded maximum iterations. Possible complex cycle.")
+            # Add remaining nodes in arbitrary order
+            ordered.extend(remaining.keys())
+
+        logger.info(f"  Topological sort completed: {len(ordered)} changes ordered")
+        return ordered
+
+    @staticmethod
+    def _order_collapsed_changes(collapsed_changes, logger):
+        """
+        Order collapsed changes respecting dependencies and constraints.
+        Returns: ordered list of CollapsedChange objects
+        """
+        logger.info(f"Ordering {len(collapsed_changes)} collapsed changes...")
+
+        # Remove skipped objects
+        to_process = {k: v for k, v in collapsed_changes.items() if v.final_action != 'skip'}
+        skipped = [v for v in collapsed_changes.values() if v.final_action == 'skip']
+
+        logger.info(f"  {len(skipped)} changes will be skipped (created and deleted in branch)")
+        logger.info(f"  {len(to_process)} changes to process")
+
+        if not to_process:
+            return []
+
+        # Build dependency graph
+        Branch._build_dependency_graph(to_process, logger)
+
+        # Topological sort
+        ordered_keys = Branch._topological_sort_with_cycle_detection(to_process, logger)
+
+        # Group by model and refine order within each model
+        logger.info("Refining order within models (updates before creates)...")
+        by_model = defaultdict(list)
+        for key in ordered_keys:
+            collapsed = to_process[key]
+            by_model[collapsed.model_class].append(collapsed)
+
+        # Within each model: updates, then creates, then deletes
+        result = []
+        for model_class, changes in by_model.items():
+            updates = [c for c in changes if c.final_action == 'update']
+            creates = [c for c in changes if c.final_action == 'create']
+            deletes = [c for c in changes if c.final_action == 'delete']
+
+            if updates or creates or deletes:
+                logger.debug(f"  {model_class.__name__}: {len(updates)} updates, {len(creates)} creates, {len(deletes)} deletes")
+
+            result.extend(updates)
+            result.extend(creates)
+            result.extend(deletes)
+
+        logger.info(f"Ordering complete: {len(result)} changes to apply")
+        return result
+
+    def _apply_collapsed_change(self, collapsed, using=DEFAULT_DB_ALIAS, logger=None):
+        """
+        Apply a collapsed change to the database.
+        Similar to ObjectChange.apply() but works with collapsed data.
+        """
+        from utilities.serialization import deserialize_object
+        from netbox_branching.utilities import update_object
+
+        logger = logger or logging.getLogger('netbox_branching.branch._apply_collapsed_change')
+        model = collapsed.model_class
+        object_id = collapsed.key[1]
+
+        # Run data migrators on the last change (to apply any necessary migrations)
+        last_change = collapsed.last_change
+        last_change.migrate(self)
+
+        # Creating a new object
+        if collapsed.final_action == 'create':
+            logger.debug(f'  Creating {model._meta.verbose_name} {object_id}')
+
+            if hasattr(model, 'deserialize_object'):
+                instance = model.deserialize_object(collapsed.merged_data, pk=object_id)
+            else:
+                instance = deserialize_object(model, collapsed.merged_data, pk=object_id)
+
+            try:
+                instance.object.full_clean()
+            except (FileNotFoundError) as e:
+                # If a file was deleted later in this branch it will fail here
+                # so we need to ignore it. We can assume the NetBox state is valid.
+                logger.warning(f'  Ignoring missing file: {e}')
+            instance.save(using=using)
+
+        # Modifying an object
+        elif collapsed.final_action == 'update':
+            logger.debug(f'  Updating {model._meta.verbose_name} {object_id}')
+
+            try:
+                instance = model.objects.using(using).get(pk=object_id)
+            except model.DoesNotExist:
+                logger.error(f'  {model._meta.verbose_name} {object_id} not found for update')
+                raise
+
+            # Calculate what fields changed from the collapsed changes
+            # We need to figure out what changed between initial and final state
+            first_change = collapsed.changes[0]
+            initial_data = first_change.prechange_data or {}
+            final_data = collapsed.merged_data or {}
+
+            # Only update fields that actually changed
+            changed_fields = {}
+            for key, final_value in final_data.items():
+                initial_value = initial_data.get(key)
+                if initial_value != final_value:
+                    changed_fields[key] = final_value
+
+            logger.debug(f'    Updating {len(changed_fields)} fields: {list(changed_fields.keys())}')
+            update_object(instance, changed_fields, using=using)
+
+        # Deleting an object
+        elif collapsed.final_action == 'delete':
+            logger.debug(f'  Deleting {model._meta.verbose_name} {object_id}')
+
+            try:
+                instance = model.objects.using(using).get(pk=object_id)
+                instance.delete(using=using)
+            except model.DoesNotExist:
+                logger.debug(f'  {model._meta.verbose_name} {object_id} already deleted; skipping')
+
     def merge(self, user, commit=True):
         """
         Apply all changes in the Branch to the main schema by replaying them in
@@ -539,13 +902,56 @@ class Branch(JobsMixin, PrimaryModel):
             with transaction.atomic():
                 models = set()
 
-                # Apply each change from the Branch
+                # Group and collapse changes by object
+                logger.info("Collapsing ObjectChanges by object...")
+                collapsed_changes = {}
+
                 for change in changes:
-                    models.add(change.changed_object_type.model_class())
+                    key = (change.changed_object_type.id, change.changed_object_id)
+
+                    if key not in collapsed_changes:
+                        model_class = change.changed_object_type.model_class()
+                        collapsed = Branch.CollapsedChange(key, model_class)
+                        collapsed_changes[key] = collapsed
+                        logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
+
+                    collapsed_changes[key].changes.append(change)
+
+                logger.info(f"  {len(changes)} changes collapsed into {len(collapsed_changes)} objects")
+
+                # Collapse each object's changes
+                logger.info("Determining final action for each object...")
+                for key, collapsed in collapsed_changes.items():
+                    final_action, merged_data, last_change = Branch._collapse_changes_for_object(
+                        collapsed.changes, logger
+                    )
+                    collapsed.final_action = final_action
+                    collapsed.merged_data = merged_data
+                    collapsed.last_change = last_change
+
+                # Order collapsed changes based on dependencies
+                ordered_changes = Branch._order_collapsed_changes(collapsed_changes, logger)
+
+                # Apply collapsed changes in order
+                logger.info(f"Applying {len(ordered_changes)} collapsed changes...")
+                for i, collapsed in enumerate(ordered_changes, 1):
+                    model_class = collapsed.model_class
+                    models.add(model_class)
+
+                    # Use the last change's metadata for tracking
+                    last_change = collapsed.last_change
+
+                    logger.info(f"  [{i}/{len(ordered_changes)}] {collapsed.final_action.upper()} "
+                               f"{model_class.__name__}:{collapsed.key[1]} "
+                               f"(from {len(collapsed.changes)} original changes)")
+
                     with event_tracking(request):
-                        request.id = change.request_id
-                        request.user = change.user
-                        change.apply(self, using=DEFAULT_DB_ALIAS, logger=logger)
+                        request.id = last_change.request_id
+                        request.user = last_change.user
+
+                        # Apply the collapsed change
+                        self._apply_collapsed_change(collapsed, using=DEFAULT_DB_ALIAS, logger=logger)
+
                 if not commit:
                     raise AbortTransaction()
 
