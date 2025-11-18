@@ -459,15 +459,14 @@ class MergeTestCase(TransactionTestCase):
             device_c_id = device_c.id
 
             # Create interface on device_b
-            interface_b = Interface.objects.create(
+            Interface.objects.create(
                 device=device_b,
                 name='eth0',
                 type='1000base-t'
             )
-            interface_b_id = interface_b.id
 
             # Create another interface on device_b
-            interface_c = Interface.objects.create(
+            Interface.objects.create(
                 device=device_b,
                 name='eth1',
                 type='1000base-t'

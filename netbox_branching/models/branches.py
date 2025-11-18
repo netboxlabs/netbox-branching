@@ -521,7 +521,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         def __repr__(self):
             ct_id, obj_id = self.key
-            return f"<CollapsedChange {self.model_class.__name__}:{obj_id} action={self.final_action} changes={len(self.changes)}>"
+            return (
+                f"<CollapsedChange {self.model_class.__name__}:{obj_id} "
+                f"action={self.final_action} changes={len(self.changes)}>"
+            )
 
     @staticmethod
     def _update_references_creates(update_change, all_changes_by_key):
@@ -587,12 +590,12 @@ class Branch(JobsMixin, PrimaryModel):
         if has_delete:
             if has_create:
                 # CREATE + DELETE = skip entirely
-                logger.debug(f"  -> SKIP (created and deleted in branch)")
+                logger.debug("  -> SKIP (created and deleted in branch)")
                 return []
             else:
                 # Just DELETE (ignore all other changes)
                 # Use prechange_data from first ObjectChange
-                logger.debug(f"  -> DELETE (keeping only DELETE, ignoring {len(changes)-1} other changes)")
+                logger.debug(f"  -> DELETE (keeping only DELETE, ignoring {len(changes) - 1} other changes)")
                 delete_change = next(c for c in changes if c.action == 'delete')
 
                 # Copy prechange_data from first change to the delete
@@ -652,7 +655,6 @@ class Branch(JobsMixin, PrimaryModel):
                     i += 1
                 else:
                     # Collapse consecutive non-referencing updates
-                    group_start = i
                     group_changes = [current_update]
 
                     # Find consecutive non-referencing updates
@@ -673,7 +675,10 @@ class Branch(JobsMixin, PrimaryModel):
                             merged_data.update(change.postchange_data)
 
                     last_change = group_changes[-1]
-                    logger.debug(f"  -> UPDATE (time {last_change.time}, collapsed {len(group_changes)} non-referencing updates)")
+                    logger.debug(
+                        f"  -> UPDATE (time {last_change.time}, "
+                        f"collapsed {len(group_changes)} non-referencing updates)"
+                    )
 
                     collapsed = Branch.CollapsedChange(
                         key=(last_change.changed_object_type.id, last_change.changed_object_id),
@@ -966,7 +971,8 @@ class Branch(JobsMixin, PrimaryModel):
 
                     if key not in changes_by_object:
                         changes_by_object[key] = []
-                        logger.debug(f"New object: {change.changed_object_type.model_class().__name__}:{change.changed_object_id}")
+                        model_name = change.changed_object_type.model_class().__name__
+                        logger.debug(f"New object: {model_name}:{change.changed_object_id}")
 
                     changes_by_object[key].append(change)
 
