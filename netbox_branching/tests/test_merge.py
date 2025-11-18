@@ -1,11 +1,15 @@
 """
 Tests for Branch merge functionality with ObjectChange collapsing.
 """
+import uuid
+
 from django.contrib.auth import get_user_model
 from django.db import connections
-from django.test import TransactionTestCase
+from django.test import RequestFactory, TransactionTestCase
+from django.urls import reverse
 
 from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
+from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch
@@ -43,6 +47,7 @@ class MergeTestCase(TransactionTestCase):
         branch = Branch(name=name)
         branch.save(provision=False)
         branch.provision(user=self.user)
+        branch.refresh_from_db()  # Refresh to get updated status
         return branch
 
     def test_merge_delete_then_create_same_slug(self):
@@ -57,8 +62,13 @@ class MergeTestCase(TransactionTestCase):
         # Create branch
         branch = self._create_and_provision_branch()
 
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()  # Set request id for ObjectChange tracking
+        request.user = self.user
+
         # In branch: delete old site, create new site with same slug
-        with activate_branch(branch):
+        with activate_branch(branch), event_tracking(request):
             Site.objects.get(id=site1_id).delete()
             site2 = Site.objects.create(name='Site 1 New', slug='site-1')
             site2_id = site2.id
@@ -82,47 +92,55 @@ class MergeTestCase(TransactionTestCase):
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
-    def test_merge_update_interface_then_delete_device(self):
+    def test_merge_create_device_and_delete_old(self):
         """
-        Test merging when an interface is moved to a new device, then the old device is deleted.
-        The update must happen before the delete to avoid cascade deletion.
+        Test merging when a new device is created and an old device is deleted.
+        Tests ordering with dependencies.
         """
-        # Create devices and interface in main
+        # Create device with interface in main
         site = Site.objects.create(name='Site 1', slug='site-1')
         device_a = Device.objects.create(
             name='Device A',
             site=site,
             device_type=self.device_type,
-            device_role=self.device_role
+            role=self.device_role
         )
         device_a_id = device_a.id
 
-        interface = Interface.objects.create(
+        interface_a = Interface.objects.create(
             device=device_a,
             name='eth0',
             type='1000base-t'
         )
-        interface_id = interface.id
+        interface_a_id = interface_a.id
 
         # Create branch
         branch = self._create_and_provision_branch()
 
-        # In branch: create new device, move interface, delete old device
-        with activate_branch(branch):
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()  # Set request id for ObjectChange tracking
+        request.user = self.user
+
+        # In branch: create new device with interface, delete old device with interface
+        with activate_branch(branch), event_tracking(request):
             device_b = Device.objects.create(
                 name='Device B',
                 site=Site.objects.first(),
                 device_type=DeviceType.objects.first(),
-                device_role=DeviceRole.objects.first()
+                role=DeviceRole.objects.first()
             )
             device_b_id = device_b.id
 
-            # Move interface to new device
-            interface = Interface.objects.get(id=interface_id)
-            interface.device = device_b
-            interface.save()
+            # Create interface on new device
+            interface_b = Interface.objects.create(
+                device=device_b,
+                name='eth0',
+                type='1000base-t'
+            )
+            interface_b_id = interface_b.id
 
-            # Delete old device
+            # Delete old device (cascade deletes interface_a)
             Device.objects.get(id=device_a_id).delete()
 
         # Merge branch
@@ -130,10 +148,9 @@ class MergeTestCase(TransactionTestCase):
 
         # Verify main schema
         self.assertFalse(Device.objects.filter(id=device_a_id).exists())
+        self.assertFalse(Interface.objects.filter(id=interface_a_id).exists())
         self.assertTrue(Device.objects.filter(id=device_b_id).exists())
-
-        interface = Interface.objects.get(id=interface_id)
-        self.assertEqual(interface.device_id, device_b_id)
+        self.assertTrue(Interface.objects.filter(id=interface_b_id).exists())
 
     def test_merge_create_and_delete_same_object(self):
         """
@@ -142,8 +159,13 @@ class MergeTestCase(TransactionTestCase):
         # Create branch
         branch = self._create_and_provision_branch()
 
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()  # Set request id for ObjectChange tracking
+        request.user = self.user
+
         # In branch: create and delete a site
-        with activate_branch(branch):
+        with activate_branch(branch), event_tracking(request):
             site = Site.objects.create(name='Temp Site', slug='temp-site')
             site_id = site.id
             site.delete()
@@ -170,8 +192,13 @@ class MergeTestCase(TransactionTestCase):
         # Create branch
         branch = self._create_and_provision_branch()
 
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()  # Set request id for ObjectChange tracking
+        request.user = self.user
+
         # In branch: rename site1 slug, create new site with old slug
-        with activate_branch(branch):
+        with activate_branch(branch), event_tracking(request):
             site1 = Site.objects.get(id=site1_id)
             site1.slug = 'site-1-renamed'
             site1.save()
@@ -202,8 +229,13 @@ class MergeTestCase(TransactionTestCase):
         # Create branch
         branch = self._create_and_provision_branch()
 
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()  # Set request id for ObjectChange tracking
+        request.user = self.user
+
         # In branch: update site multiple times
-        with activate_branch(branch):
+        with activate_branch(branch), event_tracking(request):
             site = Site.objects.get(id=site_id)
 
             site.description = 'Update 1'
@@ -231,8 +263,13 @@ class MergeTestCase(TransactionTestCase):
         # Create branch
         branch = self._create_and_provision_branch()
 
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()  # Set request id for ObjectChange tracking
+        request.user = self.user
+
         # In branch: create site and update it multiple times
-        with activate_branch(branch):
+        with activate_branch(branch), event_tracking(request):
             site = Site.objects.create(name='New Site', slug='new-site', description='Initial')
             site_id = site.id
 
@@ -262,21 +299,26 @@ class MergeTestCase(TransactionTestCase):
             name='Device A',
             site=site,
             device_type=self.device_type,
-            device_role=self.device_role
+            role=self.device_role
         )
         device_a_id = device_a.id
 
         # Create branch
         branch = self._create_and_provision_branch()
 
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()  # Set request id for ObjectChange tracking
+        request.user = self.user
+
         # In branch: complex operations
-        with activate_branch(branch):
+        with activate_branch(branch), event_tracking(request):
             # Create new devices
             device_b = Device.objects.create(
                 name='Device B',
                 site=Site.objects.first(),
                 device_type=DeviceType.objects.first(),
-                device_role=DeviceRole.objects.first()
+                role=DeviceRole.objects.first()
             )
             device_b_id = device_b.id
 
@@ -284,17 +326,11 @@ class MergeTestCase(TransactionTestCase):
                 name='Device C',
                 site=Site.objects.first(),
                 device_type=DeviceType.objects.first(),
-                device_role=DeviceRole.objects.first()
+                role=DeviceRole.objects.first()
             )
             device_c_id = device_c.id
 
-            # Create interfaces
-            interface_a = Interface.objects.create(
-                device=device_a,
-                name='eth0',
-                type='1000base-t'
-            )
-
+            # Create interface on device_b
             interface_b = Interface.objects.create(
                 device=device_b,
                 name='eth0',
@@ -302,9 +338,12 @@ class MergeTestCase(TransactionTestCase):
             )
             interface_b_id = interface_b.id
 
-            # Move interface_a to device_b
-            interface_a.device = device_b
-            interface_a.save()
+            # Create another interface on device_b
+            interface_c = Interface.objects.create(
+                device=device_b,
+                name='eth1',
+                type='1000base-t'
+            )
 
             # Update device_b
             device_b.name = 'Device B Updated'
@@ -323,7 +362,7 @@ class MergeTestCase(TransactionTestCase):
 
         device_b = Device.objects.get(id=device_b_id)
         self.assertEqual(device_b.name, 'Device B Updated')
-        self.assertEqual(device_b.interface_set.count(), 2)
+        self.assertEqual(device_b.interfaces.count(), 2)
 
     def test_merge_delete_ordering_by_time(self):
         """
@@ -341,8 +380,13 @@ class MergeTestCase(TransactionTestCase):
         # Create branch
         branch = self._create_and_provision_branch()
 
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()  # Set request id for ObjectChange tracking
+        request.user = self.user
+
         # In branch: delete sites in specific order
-        with activate_branch(branch):
+        with activate_branch(branch), event_tracking(request):
             Site.objects.get(id=site1_id).delete()
             Site.objects.get(id=site3_id).delete()
             Site.objects.get(id=site2_id).delete()

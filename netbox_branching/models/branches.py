@@ -627,7 +627,8 @@ class Branch(JobsMixin, PrimaryModel):
             collapsed.last_change = create
             result_list.append(collapsed)
 
-        # Updates - group consecutive non-referencing updates
+        # Process UPDATEs separately (don't merge into CREATE)
+        # Keep referencing UPDATEs separate so time ordering respects dependencies
         if update_changes:
             i = 0
             while i < len(update_changes):
