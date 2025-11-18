@@ -521,7 +521,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         def __repr__(self):
             ct_id, obj_id = self.key
-            return f"<CollapsedChange {self.model_class.__name__}:{obj_id} action={self.final_action} changes={len(self.changes)}>"
+            return (
+                f"<CollapsedChange {self.model_class.__name__}:{obj_id} "
+                f"action={self.final_action} changes={len(self.changes)}>"
+            )
 
     @staticmethod
     def _collapse_changes_for_object(changes, logger):
@@ -543,12 +546,12 @@ class Branch(JobsMixin, PrimaryModel):
 
         # Case 1: Created then deleted -> skip entirely
         if first_action == 'create' and last_action == 'delete':
-            logger.debug(f"  -> Action: SKIP (created and deleted in branch)")
+            logger.debug("  -> Action: SKIP (created and deleted in branch)")
             return 'skip', None, last_change
 
         # Case 2: Deleted -> just delete (should be only one delete)
         if last_action == 'delete':
-            logger.debug(f"  -> Action: DELETE")
+            logger.debug("  -> Action: DELETE")
             return 'delete', changes[-1].prechange_data, last_change
 
         # Case 3: Created (with possible updates) -> single create
@@ -697,7 +700,8 @@ class Branch(JobsMixin, PrimaryModel):
                         other_collapsed.depended_by.add(key)
                         logger.debug(f"    {collapsed} depends on {other_collapsed} (removed reference)")
 
-        logger.info(f"  Dependency graph built: {sum(len(c.depends_on) for c in collapsed_changes.values())} dependencies")
+        total_deps = sum(len(c.depends_on) for c in collapsed_changes.values())
+        logger.info(f"  Dependency graph built: {total_deps} dependencies")
 
     @staticmethod
     def _topological_sort_with_cycle_detection(collapsed_changes, logger):
@@ -724,7 +728,7 @@ class Branch(JobsMixin, PrimaryModel):
 
             if not ready:
                 # No nodes without dependencies - we have a cycle
-                logger.warning(f"  Cycle detected in dependency graph. Breaking cycle to continue.")
+                logger.warning("  Cycle detected in dependency graph. Breaking cycle to continue.")
                 # Pick a node arbitrarily to break the cycle
                 key = next(iter(remaining))
                 ready = [key]
@@ -740,7 +744,7 @@ class Branch(JobsMixin, PrimaryModel):
                     deps.discard(key)
 
         if iteration >= max_iterations:
-            logger.error(f"  Topological sort exceeded maximum iterations. Possible complex cycle.")
+            logger.error("  Topological sort exceeded maximum iterations. Possible complex cycle.")
             # Add remaining nodes in arbitrary order
             ordered.extend(remaining.keys())
 
@@ -786,7 +790,10 @@ class Branch(JobsMixin, PrimaryModel):
             deletes = [c for c in changes if c.final_action == 'delete']
 
             if updates or creates or deletes:
-                logger.debug(f"  {model_class.__name__}: {len(updates)} updates, {len(creates)} creates, {len(deletes)} deletes")
+                logger.debug(
+                    f"  {model_class.__name__}: {len(updates)} updates, "
+                    f"{len(creates)} creates, {len(deletes)} deletes"
+                )
 
             result.extend(updates)
             result.extend(creates)
