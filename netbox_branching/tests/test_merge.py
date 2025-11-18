@@ -50,10 +50,164 @@ class MergeTestCase(TransactionTestCase):
         branch.refresh_from_db()  # Refresh to get updated status
         return branch
 
+    def test_merge_basic_create(self):
+        """
+        Test basic create operation.
+        Verifies object is created in main and ObjectChange was tracked.
+        """
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In branch: create site
+        with activate_branch(branch), event_tracking(request):
+            site = Site.objects.create(name='Test Site', slug='test-site')
+            site_id = site.id
+
+        # Verify ObjectChange was created in branch
+        from django.contrib.contenttypes.models import ContentType
+        site_ct = ContentType.objects.get_for_model(Site)
+        changes = branch.get_unmerged_changes().filter(
+            changed_object_type=site_ct,
+            changed_object_id=site_id
+        )
+        self.assertEqual(changes.count(), 1)
+        self.assertEqual(changes.first().action, 'create')
+
+        # Merge branch
+        branch.merge(user=self.user, commit=True)
+
+        # Verify site exists in main
+        self.assertTrue(Site.objects.filter(id=site_id).exists())
+        site = Site.objects.get(id=site_id)
+        self.assertEqual(site.name, 'Test Site')
+        self.assertEqual(site.slug, 'test-site')
+
+    def test_merge_basic_update(self):
+        """
+        Test basic update operation.
+        Verifies object is updated in main and ObjectChange was tracked.
+        """
+        # Create site in main
+        site = Site.objects.create(name='Original Site', slug='test-site', description='Original')
+        site_id = site.id
+
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In branch: update site
+        with activate_branch(branch), event_tracking(request):
+            site = Site.objects.get(id=site_id)
+            site.description = 'Updated'
+            site.save()
+
+        # Verify ObjectChange was created in branch
+        from django.contrib.contenttypes.models import ContentType
+        site_ct = ContentType.objects.get_for_model(Site)
+        changes = branch.get_unmerged_changes().filter(
+            changed_object_type=site_ct,
+            changed_object_id=site_id
+        )
+        self.assertEqual(changes.count(), 1)
+        self.assertEqual(changes.first().action, 'update')
+
+        # Merge branch
+        branch.merge(user=self.user, commit=True)
+
+        # Verify site is updated in main
+        site = Site.objects.get(id=site_id)
+        self.assertEqual(site.description, 'Updated')
+
+    def test_merge_basic_delete(self):
+        """
+        Test basic delete operation.
+        Verifies object is deleted in main and ObjectChange was tracked.
+        """
+        # Create site in main
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        site_id = site.id
+
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In branch: delete site
+        with activate_branch(branch), event_tracking(request):
+            Site.objects.get(id=site_id).delete()
+
+        # Verify ObjectChange was created in branch
+        from django.contrib.contenttypes.models import ContentType
+        site_ct = ContentType.objects.get_for_model(Site)
+        changes = branch.get_unmerged_changes().filter(
+            changed_object_type=site_ct,
+            changed_object_id=site_id
+        )
+        self.assertEqual(changes.count(), 1)
+        self.assertEqual(changes.first().action, 'delete')
+
+        # Merge branch
+        branch.merge(user=self.user, commit=True)
+
+        # Verify site is deleted in main
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+    def test_merge_basic_create_update_delete(self):
+        """
+        Test create, update, then delete same object.
+        Verifies object is skipped (not in main) after collapsing.
+        """
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In branch: create, update, then delete site
+        with activate_branch(branch), event_tracking(request):
+            site = Site.objects.create(name='Temp Site', slug='temp-site')
+            site_id = site.id
+
+            site.description = 'Modified'
+            site.save()
+
+            site.delete()
+
+        # Verify 3 ObjectChanges were created in branch
+        from django.contrib.contenttypes.models import ContentType
+        site_ct = ContentType.objects.get_for_model(Site)
+        changes = branch.get_unmerged_changes().filter(
+            changed_object_type=site_ct,
+            changed_object_id=site_id
+        )
+        self.assertEqual(changes.count(), 3)
+        actions = [c.action for c in changes.order_by('time')]
+        self.assertEqual(actions, ['create', 'update', 'delete'])
+
+        # Merge branch
+        branch.merge(user=self.user, commit=True)
+
+        # Verify site does not exist in main (skipped during merge)
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
     def test_merge_delete_then_create_same_slug(self):
         """
-        Test merging when a site is deleted and a new site with the same slug is created.
-        This was the original bug: deletes must happen before creates to free up unique constraints.
+        Test delete object, then create object with same unique constraint value (slug).
+        Verifies deletes free up unique constraints before creates.
         """
         # Create site in main
         site1 = Site.objects.create(name='Site 1', slug='site-1')
@@ -94,8 +248,8 @@ class MergeTestCase(TransactionTestCase):
 
     def test_merge_create_device_and_delete_old(self):
         """
-        Test merging when a new device is created and an old device is deleted.
-        Tests ordering with dependencies.
+        Test create new object, then delete old object.
+        Verifies proper ordering with cascade delete dependencies.
         """
         # Create device with interface in main
         site = Site.objects.create(name='Site 1', slug='site-1')
@@ -152,38 +306,10 @@ class MergeTestCase(TransactionTestCase):
         self.assertTrue(Device.objects.filter(id=device_b_id).exists())
         self.assertTrue(Interface.objects.filter(id=interface_b_id).exists())
 
-    def test_merge_create_and_delete_same_object(self):
-        """
-        Test that creating and deleting the same object in a branch results in no change (skip).
-        """
-        # Create branch
-        branch = self._create_and_provision_branch()
-
-        # Create a request context for event tracking
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()  # Set request id for ObjectChange tracking
-        request.user = self.user
-
-        # In branch: create and delete a site
-        with activate_branch(branch), event_tracking(request):
-            site = Site.objects.create(name='Temp Site', slug='temp-site')
-            site_id = site.id
-            site.delete()
-
-        # Merge branch
-        branch.merge(user=self.user, commit=True)
-
-        # Verify main schema - site should not exist
-        self.assertFalse(Site.objects.filter(id=site_id).exists())
-
-        # Verify merge succeeded
-        branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
-
     def test_merge_slug_rename_then_create(self):
         """
-        Test merging when a site's slug is changed, then a new site is created with the old slug.
-        Updates should happen before creates to free up the slug.
+        Test update object's unique field, then create new object with old value.
+        Verifies updates free up unique constraints before creates.
         """
         # Create site in main
         site1 = Site.objects.create(name='Site 1', slug='site-1')
@@ -220,7 +346,8 @@ class MergeTestCase(TransactionTestCase):
 
     def test_merge_multiple_updates_collapsed(self):
         """
-        Test that multiple updates to the same object are collapsed into a single update.
+        Test multiple updates to same object.
+        Verifies consecutive non-referencing updates are collapsed.
         """
         # Create site in main
         site = Site.objects.create(name='Site 1', slug='site-1', description='Original')
@@ -257,8 +384,8 @@ class MergeTestCase(TransactionTestCase):
 
     def test_merge_create_with_multiple_updates(self):
         """
-        Test that creating an object and then updating it multiple times
-        results in a single create with the final state.
+        Test create object then update it multiple times.
+        Verifies create is kept separate from updates.
         """
         # Create branch
         branch = self._create_and_provision_branch()
@@ -291,7 +418,8 @@ class MergeTestCase(TransactionTestCase):
 
     def test_merge_complex_dependency_chain(self):
         """
-        Test a complex scenario with creates, updates, and deletes with dependencies.
+        Test complex scenario with multiple creates, updates, and deletes.
+        Verifies correct ordering with FK dependencies and references.
         """
         # Create initial devices in main
         site = Site.objects.create(name='Site 1', slug='site-1')
@@ -364,39 +492,90 @@ class MergeTestCase(TransactionTestCase):
         self.assertEqual(device_b.name, 'Device B Updated')
         self.assertEqual(device_b.interfaces.count(), 2)
 
-    def test_merge_delete_ordering_by_time(self):
+    def test_merge_conflicting_slug_create_update_delete(self):
         """
-        Test that deletes maintain time order when there are no dependencies.
+        Test create object with conflicting unique constraint, update it, then delete it.
+        Verifies skipped object doesn't cause constraint violations.
         """
-        # Create sites in main
-        site1 = Site.objects.create(name='Site 1', slug='site-1')
-        site2 = Site.objects.create(name='Site 2', slug='site-2')
-        site3 = Site.objects.create(name='Site 3', slug='site-3')
-
-        site1_id = site1.id
-        site2_id = site2.id
-        site3_id = site3.id
-
         # Create branch
         branch = self._create_and_provision_branch()
 
+        # In main: create site with slug that will conflict
+        site_main = Site.objects.create(name='Main Site', slug='conflict-slug')
+        site_main_id = site_main.id
+
         # Create a request context for event tracking
         request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()  # Set request id for ObjectChange tracking
+        request.id = uuid.uuid4()
         request.user = self.user
 
-        # In branch: delete sites in specific order
+        # In branch: create site with same slug (conflicts), update it, then delete it
         with activate_branch(branch), event_tracking(request):
-            Site.objects.get(id=site1_id).delete()
-            Site.objects.get(id=site3_id).delete()
-            Site.objects.get(id=site2_id).delete()
+            site_branch = Site.objects.create(name='Branch Site', slug='conflict-slug')
+            site_branch_id = site_branch.id
 
-        # Merge branch
+            # Update description
+            site_branch.description = 'Updated in branch'
+            site_branch.save()
+
+            # Delete the site
+            site_branch.delete()
+
+        # Merge branch - should succeed (branch site is skipped)
         branch.merge(user=self.user, commit=True)
 
-        # Verify all deleted
-        self.assertEqual(Site.objects.count(), 0)
+        # Verify main schema - only main site exists
+        self.assertTrue(Site.objects.filter(id=site_main_id).exists())
+        self.assertFalse(Site.objects.filter(id=site_branch_id).exists())
+        self.assertEqual(Site.objects.filter(slug='conflict-slug').count(), 1)
 
-        # Verify merge succeeded
+        # Verify branch status
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+    def test_merge_slug_update_causes_then_resolves_conflict(self):
+        """
+        Test create object, update to conflicting unique constraint, then update to resolve.
+        Verifies final non-conflicting state merges successfully.
+        """
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # In main: create site that will have slug conflict
+        site_main = Site.objects.create(name='Main Site', slug='conflict-slug')
+        site_main_id = site_main.id
+
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In branch: create site with non-conflicting slug, update to conflict, then resolve
+        with activate_branch(branch), event_tracking(request):
+            site_branch = Site.objects.create(name='Branch Site', slug='no-conflict')
+            site_branch_id = site_branch.id
+
+            # Update to conflicting slug
+            site_branch.slug = 'conflict-slug'
+            site_branch.save()
+
+            # Update again to resolve conflict
+            site_branch.slug = 'resolved-slug'
+            site_branch.save()
+
+        # Merge branch - should succeed (final state has no conflict)
+        branch.merge(user=self.user, commit=True)
+
+        # Verify main schema
+        self.assertTrue(Site.objects.filter(id=site_main_id).exists())
+        self.assertTrue(Site.objects.filter(id=site_branch_id).exists())
+
+        site_main = Site.objects.get(id=site_main_id)
+        self.assertEqual(site_main.slug, 'conflict-slug')
+
+        site_branch = Site.objects.get(id=site_branch_id)
+        self.assertEqual(site_branch.slug, 'resolved-slug')
+
+        # Verify branch status
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
