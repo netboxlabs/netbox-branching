@@ -882,6 +882,72 @@ class Branch(JobsMixin, PrimaryModel):
             except model.DoesNotExist:
                 logger.debug(f'  {model._meta.verbose_name} {object_id} already deleted; skipping')
 
+    def _undo_collapsed_change(self, collapsed, using=DEFAULT_DB_ALIAS, logger=None):
+        """
+        Undo a collapsed change from the database (reverse of apply).
+        Similar to ObjectChange.undo() but works with collapsed data.
+        """
+        from django.contrib.contenttypes.fields import GenericForeignKey
+        from utilities.serialization import deserialize_object
+        from netbox_branching.utilities import update_object
+
+        logger = logger or logging.getLogger('netbox_branching.branch._undo_collapsed_change')
+        model = collapsed.model_class
+        object_id = collapsed.key[1]
+
+        # Run data migrators on the last change (in revert mode)
+        last_change = collapsed.last_change
+        last_change.migrate(self, revert=True)
+
+        # Undoing a CREATE: delete the object
+        if collapsed.final_action == 'create':
+            logger.debug(f'  Undoing creation of {model._meta.verbose_name} {object_id}')
+
+            try:
+                instance = model.objects.using(using).get(pk=object_id)
+                instance.delete(using=using)
+            except model.DoesNotExist:
+                logger.debug(f'  {model._meta.verbose_name} {object_id} does not exist; skipping')
+
+        # Undoing an UPDATE: revert to initial state
+        elif collapsed.final_action == 'update':
+            logger.debug(f'  Undoing update of {model._meta.verbose_name} {object_id}')
+
+            try:
+                instance = model.objects.using(using).get(pk=object_id)
+            except model.DoesNotExist:
+                logger.error(f'  {model._meta.verbose_name} {object_id} not found for revert')
+                raise
+
+            # Revert to the initial state (prechange_data from first change)
+            first_change = collapsed.changes[0]
+            initial_data = first_change.prechange_data or {}
+
+            logger.debug(f'    Reverting to initial state with {len(initial_data)} fields')
+            update_object(instance, initial_data, using=using)
+
+        # Undoing a DELETE: restore the object
+        elif collapsed.final_action == 'delete':
+            logger.debug(f'  Undoing deletion (restoring) {model._meta.verbose_name} {object_id}')
+
+            # Use prechange_data from the first change (the original state before any changes)
+            first_change = collapsed.changes[0]
+            prechange_data = first_change.prechange_data or {}
+
+            deserialized = deserialize_object(model, prechange_data, pk=object_id)
+            instance = deserialized.object
+
+            # Restore GenericForeignKey fields
+            for field in instance._meta.private_fields:
+                if isinstance(field, GenericForeignKey):
+                    ct_field = getattr(instance, field.ct_field)
+                    fk_field = getattr(instance, field.fk_field)
+                    if ct_field and fk_field:
+                        setattr(instance, field.name, ct_field.get_object_for_this_type(pk=fk_field))
+
+            instance.full_clean()
+            instance.save(using=using)
+
     def merge(self, user, commit=True):
         """
         Apply all changes in the Branch to the main schema by replaying them in
@@ -1007,8 +1073,8 @@ class Branch(JobsMixin, PrimaryModel):
 
     def revert(self, user, commit=True):
         """
-        Undo all changes associated with a previously merged Branch in the main schema by replaying them in
-        reverse order and calling undo() on each.
+        Undo all changes associated with a previously merged Branch in the main schema.
+        Uses the same collapsing logic as merge, but applies changes in reverse order.
         """
         logger = logging.getLogger('netbox_branching.branch.revert')
         logger.info(f'Reverting branch {self} ({self.schema_name})')
@@ -1021,8 +1087,8 @@ class Branch(JobsMixin, PrimaryModel):
         # Emit pre-revert signal
         pre_revert.send(sender=self.__class__, branch=self, user=user)
 
-        # Retrieve applied changes before we update the Branch's status
-        if changes := self.get_changes().order_by('-time'):
+        # Retrieve applied changes
+        if changes := self.get_changes():
             logger.info(f"Found {len(changes)} changes to revert")
         else:
             logger.info("No changes found; aborting.")
@@ -1043,13 +1109,58 @@ class Branch(JobsMixin, PrimaryModel):
             with transaction.atomic():
                 models = set()
 
-                # Undo each change from the Branch
+                # Group changes by object and create CollapsedChange objects
+                logger.info("Collapsing ObjectChanges by object...")
+                collapsed_changes = {}
+
                 for change in changes:
-                    models.add(change.changed_object_type.model_class())
+                    key = (change.changed_object_type.id, change.changed_object_id)
+
+                    if key not in collapsed_changes:
+                        model_class = change.changed_object_type.model_class()
+                        collapsed = Branch.CollapsedChange(key, model_class)
+                        collapsed_changes[key] = collapsed
+                        logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
+
+                    collapsed_changes[key].changes.append(change)
+
+                logger.info(f"  {len(changes)} changes collapsed into {len(collapsed_changes)} objects")
+
+                # Collapse each object's changes
+                logger.info("Determining final action for each object...")
+                for key, collapsed in collapsed_changes.items():
+                    final_action, merged_data, last_change = Branch._collapse_changes_for_object(
+                        collapsed.changes, logger
+                    )
+                    collapsed.final_action = final_action
+                    collapsed.merged_data = merged_data
+                    collapsed.last_change = last_change
+
+                # Order collapsed changes based on dependencies (same as merge)
+                ordered_changes = Branch._order_collapsed_changes(collapsed_changes, logger)
+
+                # REVERSE the order for revert (undo in opposite order)
+                logger.info(f"Reversing order for revert: {len(ordered_changes)} collapsed changes")
+                reversed_changes = list(reversed(ordered_changes))
+
+                # Undo collapsed changes in reverse order
+                logger.info(f"Undoing {len(reversed_changes)} collapsed changes in reverse order...")
+                for i, collapsed in enumerate(reversed_changes, 1):
+                    model_class = collapsed.model_class
+                    models.add(model_class)
+
+                    # Use the last change's metadata for tracking
+                    last_change = collapsed.last_change
+                    logger.info(
+                        f"[{i}/{len(reversed_changes)}] Undoing {collapsed.final_action} "
+                        f"{model_class._meta.verbose_name} (ID: {collapsed.key[1]})"
+                    )
+
                     with event_tracking(request):
-                        request.id = change.request_id
-                        request.user = change.user
-                        change.undo(self, logger=logger)
+                        request.id = last_change.request_id
+                        request.user = last_change.user
+                        self._undo_collapsed_change(collapsed, using=DEFAULT_DB_ALIAS, logger=logger)
+
                 if not commit:
                     raise AbortTransaction()
 
@@ -1071,7 +1182,7 @@ class Branch(JobsMixin, PrimaryModel):
         self.merged_by = None
         self.save()
 
-        # Record a branch event for the merge
+        # Record a branch event for the revert
         logger.debug(f"Recording branch event: {BranchEventTypeChoices.REVERTED}")
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.REVERTED)
 
