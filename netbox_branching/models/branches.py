@@ -532,8 +532,8 @@ class Branch(JobsMixin, PrimaryModel):
         Collapse a list of ObjectChanges for a single object.
         Returns: (final_action, merged_data, last_change)
 
-        A key point is that we only care about the final state of the object. Also 
-        each ChangeObject needs to be correct so the final state is correct, i.e. 
+        A key point is that we only care about the final state of the object. Also
+        each ChangeObject needs to be correct so the final state is correct, i.e.
         if we delete an object, there aren't going to be other objects still referencing it.
 
         ChangeObject can have CREATE, UPDATE, and DELETE actions.
