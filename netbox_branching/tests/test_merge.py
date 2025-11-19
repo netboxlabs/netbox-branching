@@ -52,8 +52,9 @@ class MergeTestCase(TransactionTestCase):
 
     def test_merge_basic_create(self):
         """
-        Test basic create operation.
-        Verifies object is created in main and ObjectChange was tracked.
+        Test basic create operation with merge and revert.
+        Merge: creates object in main
+        Revert: deletes the created object
         """
         # Create branch
         branch = self._create_and_provision_branch()
@@ -81,20 +82,28 @@ class MergeTestCase(TransactionTestCase):
         # Merge branch
         branch.merge(user=self.user, commit=True)
 
-        # Verify site exists in main
+        # Verify site exists in main after merge
         self.assertTrue(Site.objects.filter(id=site_id).exists())
         site = Site.objects.get(id=site_id)
         self.assertEqual(site.name, 'Test Site')
         self.assertEqual(site.slug, 'test-site')
 
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify site is deleted after revert
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
     def test_merge_basic_update(self):
         """
-        Test basic update operation.
-        Verifies object is updated in main and ObjectChange was tracked.
+        Test basic update operation with merge and revert.
+        Merge: updates object in main
+        Revert: restores object to original state
         """
         # Create site in main
         site = Site.objects.create(name='Original Site', slug='test-site', description='Original')
         site_id = site.id
+        original_description = site.description
 
         # Create branch
         branch = self._create_and_provision_branch()
@@ -123,18 +132,28 @@ class MergeTestCase(TransactionTestCase):
         # Merge branch
         branch.merge(user=self.user, commit=True)
 
-        # Verify site is updated in main
+        # Verify site is updated in main after merge
         site = Site.objects.get(id=site_id)
         self.assertEqual(site.description, 'Updated')
 
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify site is restored to original state after revert
+        site = Site.objects.get(id=site_id)
+        self.assertEqual(site.description, original_description)
+
     def test_merge_basic_delete(self):
         """
-        Test basic delete operation.
-        Verifies object is deleted in main and ObjectChange was tracked.
+        Test basic delete operation with merge and revert.
+        Merge: deletes object from main
+        Revert: restores the deleted object with original values
         """
         # Create site in main
         site = Site.objects.create(name='Test Site', slug='test-site')
         site_id = site.id
+        original_name = site.name
+        original_slug = site.slug
 
         # Create branch
         branch = self._create_and_provision_branch()
@@ -164,10 +183,20 @@ class MergeTestCase(TransactionTestCase):
         # Verify site is deleted in main
         self.assertFalse(Site.objects.filter(id=site_id).exists())
 
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify site is restored after revert
+        self.assertTrue(Site.objects.filter(id=site_id).exists())
+        site = Site.objects.get(id=site_id)
+        self.assertEqual(site.name, original_name)
+        self.assertEqual(site.slug, original_slug)
+
     def test_merge_basic_create_update_delete(self):
         """
-        Test create, update, then delete same object.
-        Verifies object is skipped (not in main) after collapsing.
+        Test create, update, then delete same object with merge and revert.
+        Merge: skips object (not created in main) after collapsing
+        Revert: no-op since object was never created in main
         """
         # Create branch
         branch = self._create_and_provision_branch()
@@ -204,14 +233,22 @@ class MergeTestCase(TransactionTestCase):
         # Verify site does not exist in main (skipped during merge)
         self.assertFalse(Site.objects.filter(id=site_id).exists())
 
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify no changes occurred (object was never created in main)
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
     def test_merge_delete_then_create_same_slug(self):
         """
-        Test delete object, then create object with same unique constraint value (slug).
-        Verifies deletes free up unique constraints before creates.
+        Test delete object, then create object with same unique constraint value (slug) with merge and revert.
+        Merge: deletes old object and creates new object with same slug
+        Revert: deletes new object and restores original object
         """
         # Create site in main
         site1 = Site.objects.create(name='Site 1', slug='site-1')
         site1_id = site1.id
+        original_name = site1.name
 
         # Create branch
         branch = self._create_and_provision_branch()
@@ -246,10 +283,22 @@ class MergeTestCase(TransactionTestCase):
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify revert deleted new object and restored original
+        self.assertEqual(Site.objects.count(), 1)
+        self.assertTrue(Site.objects.filter(id=site1_id).exists())
+        self.assertFalse(Site.objects.filter(id=site2_id).exists())
+        site1_restored = Site.objects.get(id=site1_id)
+        self.assertEqual(site1_restored.name, original_name)
+        self.assertEqual(site1_restored.slug, 'site-1')
+
     def test_merge_create_device_and_delete_old(self):
         """
-        Test create new object, then delete old object.
-        Verifies proper ordering with cascade delete dependencies.
+        Test create new object, then delete old object with merge and revert.
+        Merge: creates new device with interface and deletes old device with interface
+        Revert: restores old device with interface and deletes new device with interface
         """
         # Create device with interface in main
         site = Site.objects.create(name='Site 1', slug='site-1')
@@ -260,6 +309,7 @@ class MergeTestCase(TransactionTestCase):
             role=self.device_role
         )
         device_a_id = device_a.id
+        device_a_name = device_a.name
 
         interface_a = Interface.objects.create(
             device=device_a,
@@ -267,6 +317,7 @@ class MergeTestCase(TransactionTestCase):
             type='1000base-t'
         )
         interface_a_id = interface_a.id
+        interface_a_name = interface_a.name
 
         # Create branch
         branch = self._create_and_provision_branch()
@@ -306,14 +357,31 @@ class MergeTestCase(TransactionTestCase):
         self.assertTrue(Device.objects.filter(id=device_b_id).exists())
         self.assertTrue(Interface.objects.filter(id=interface_b_id).exists())
 
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify revert restored old device/interface and deleted new ones
+        self.assertTrue(Device.objects.filter(id=device_a_id).exists())
+        self.assertTrue(Interface.objects.filter(id=interface_a_id).exists())
+        self.assertFalse(Device.objects.filter(id=device_b_id).exists())
+        self.assertFalse(Interface.objects.filter(id=interface_b_id).exists())
+
+        device_a_restored = Device.objects.get(id=device_a_id)
+        self.assertEqual(device_a_restored.name, device_a_name)
+
+        interface_a_restored = Interface.objects.get(id=interface_a_id)
+        self.assertEqual(interface_a_restored.name, interface_a_name)
+
     def test_merge_slug_rename_then_create(self):
         """
-        Test update object's unique field, then create new object with old value.
-        Verifies updates free up unique constraints before creates.
+        Test update object's unique field, then create new object with old value with merge and revert.
+        Merge: updates first object's slug and creates new object with old slug
+        Revert: deletes new object and restores old slug on first object
         """
         # Create site in main
         site1 = Site.objects.create(name='Site 1', slug='site-1')
         site1_id = site1.id
+        original_slug = site1.slug
 
         # Create branch
         branch = self._create_and_provision_branch()
@@ -344,14 +412,26 @@ class MergeTestCase(TransactionTestCase):
         site2 = Site.objects.get(id=site2_id)
         self.assertEqual(site2.slug, 'site-1')
 
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify revert deleted new object and restored old slug
+        self.assertEqual(Site.objects.count(), 1)
+        self.assertFalse(Site.objects.filter(id=site2_id).exists())
+        site1_restored = Site.objects.get(id=site1_id)
+        self.assertEqual(site1_restored.slug, original_slug)
+
     def test_merge_multiple_updates_collapsed(self):
         """
-        Test multiple updates to same object.
-        Verifies consecutive non-referencing updates are collapsed.
+        Test multiple updates to same object with merge and revert.
+        Merge: applies collapsed updates to object
+        Revert: restores object to original state
         """
         # Create site in main
         site = Site.objects.create(name='Site 1', slug='site-1', description='Original')
         site_id = site.id
+        original_name = site.name
+        original_description = site.description
 
         # Create branch
         branch = self._create_and_provision_branch()
@@ -382,10 +462,19 @@ class MergeTestCase(TransactionTestCase):
         self.assertEqual(site.name, 'Site 1 Modified')
         self.assertEqual(site.description, 'Update 2')
 
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify revert restored original state
+        site = Site.objects.get(id=site_id)
+        self.assertEqual(site.name, original_name)
+        self.assertEqual(site.description, original_description)
+
     def test_merge_create_with_multiple_updates(self):
         """
-        Test create object then update it multiple times.
-        Verifies create is kept separate from updates.
+        Test create object then update it multiple times with merge and revert.
+        Merge: creates object with final state after collapsed updates
+        Revert: deletes the created object
         """
         # Create branch
         branch = self._create_and_provision_branch()
@@ -416,10 +505,17 @@ class MergeTestCase(TransactionTestCase):
         self.assertEqual(site.description, 'Modified 2')
         self.assertEqual(site.slug, 'new-site')
 
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify revert deleted the created object
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
     def test_merge_complex_dependency_chain(self):
         """
-        Test complex scenario with multiple creates, updates, and deletes.
-        Verifies correct ordering with FK dependencies and references.
+        Test complex scenario with multiple creates, updates, and deletes with merge and revert.
+        Merge: creates new devices with interfaces, updates device, and deletes old device
+        Revert: deletes all created objects in reverse order and restores deleted device
         """
         # Create initial devices in main
         site = Site.objects.create(name='Site 1', slug='site-1')
@@ -430,6 +526,7 @@ class MergeTestCase(TransactionTestCase):
             role=self.device_role
         )
         device_a_id = device_a.id
+        device_a_name = device_a.name
 
         # Create branch
         branch = self._create_and_provision_branch()
@@ -459,18 +556,20 @@ class MergeTestCase(TransactionTestCase):
             device_c_id = device_c.id
 
             # Create interface on device_b
-            Interface.objects.create(
+            interface_b1 = Interface.objects.create(
                 device=device_b,
                 name='eth0',
                 type='1000base-t'
             )
+            interface_b1_id = interface_b1.id
 
             # Create another interface on device_b
-            Interface.objects.create(
+            interface_b2 = Interface.objects.create(
                 device=device_b,
                 name='eth1',
                 type='1000base-t'
             )
+            interface_b2_id = interface_b2.id
 
             # Update device_b
             device_b.name = 'Device B Updated'
@@ -491,10 +590,24 @@ class MergeTestCase(TransactionTestCase):
         self.assertEqual(device_b.name, 'Device B Updated')
         self.assertEqual(device_b.interfaces.count(), 2)
 
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify revert deleted all created objects and restored deleted device
+        self.assertTrue(Device.objects.filter(id=device_a_id).exists())
+        self.assertFalse(Device.objects.filter(id=device_b_id).exists())
+        self.assertFalse(Device.objects.filter(id=device_c_id).exists())
+        self.assertFalse(Interface.objects.filter(id=interface_b1_id).exists())
+        self.assertFalse(Interface.objects.filter(id=interface_b2_id).exists())
+
+        device_a_restored = Device.objects.get(id=device_a_id)
+        self.assertEqual(device_a_restored.name, device_a_name)
+
     def test_merge_conflicting_slug_create_update_delete(self):
         """
-        Test create object with conflicting unique constraint, update it, then delete it.
-        Verifies skipped object doesn't cause constraint violations.
+        Test create object with conflicting unique constraint, update it, then delete it with merge and revert.
+        Merge: skips branch object (collapsed to no-op)
+        Revert: no-op since object was never created in main
         """
         # Create branch
         branch = self._create_and_provision_branch()
@@ -532,10 +645,19 @@ class MergeTestCase(TransactionTestCase):
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify no changes occurred (object was never created in main)
+        self.assertTrue(Site.objects.filter(id=site_main_id).exists())
+        self.assertFalse(Site.objects.filter(id=site_branch_id).exists())
+        self.assertEqual(Site.objects.filter(slug='conflict-slug').count(), 1)
+
     def test_merge_slug_update_causes_then_resolves_conflict(self):
         """
-        Test create object, update to conflicting unique constraint, then update to resolve.
-        Verifies final non-conflicting state merges successfully.
+        Test create object, update to conflicting unique constraint, then update to resolve with merge and revert.
+        Merge: creates object with final non-conflicting slug
+        Revert: deletes the created object
         """
         # Create branch
         branch = self._create_and_provision_branch()
@@ -578,3 +700,10 @@ class MergeTestCase(TransactionTestCase):
         # Verify branch status
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify revert deleted the created object
+        self.assertTrue(Site.objects.filter(id=site_main_id).exists())
+        self.assertFalse(Site.objects.filter(id=site_branch_id).exists())

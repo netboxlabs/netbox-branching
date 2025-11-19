@@ -909,22 +909,21 @@ class Branch(JobsMixin, PrimaryModel):
             except model.DoesNotExist:
                 logger.debug(f'  {model._meta.verbose_name} {object_id} does not exist; skipping')
 
-        # Undoing an UPDATE: revert to initial state
+        # Undoing an UPDATE: revert to the original state
         elif collapsed.final_action == 'update':
             logger.debug(f'  Undoing update of {model._meta.verbose_name} {object_id}')
 
+            # Get the original state from the first change
+            first_change = collapsed.changes[0]
+            # Make a copy to avoid modifying cached property result
+            revert_data = dict(first_change.diff()['pre'])
+
+            # Load the instance and apply the original state
             try:
                 instance = model.objects.using(using).get(pk=object_id)
+                update_object(instance, revert_data, using=using)
             except model.DoesNotExist:
-                logger.error(f'  {model._meta.verbose_name} {object_id} not found for revert')
-                raise
-
-            # Revert to the initial state (prechange_data from first change)
-            first_change = collapsed.changes[0]
-            initial_data = first_change.prechange_data or {}
-
-            logger.debug(f'    Reverting to initial state with {len(initial_data)} fields')
-            update_object(instance, initial_data, using=using)
+                logger.debug(f'  {model._meta.verbose_name} {object_id} does not exist; skipping')
 
         # Undoing a DELETE: restore the object
         elif collapsed.final_action == 'delete':
