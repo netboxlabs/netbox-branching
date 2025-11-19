@@ -531,6 +531,9 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Collapse a list of ObjectChanges for a single object.
         Returns: (final_action, merged_data, last_change)
+
+        Simplified DELETE logic: If DELETE appears anywhere in the changes,
+        ignore all other changes and keep only the DELETE.
         """
         if not changes:
             return None, None, None
@@ -538,23 +541,33 @@ class Branch(JobsMixin, PrimaryModel):
         # Sort by time (oldest first)
         changes = sorted(changes, key=lambda c: c.time)
 
+        # Check if there's a DELETE anywhere in the changes
+        has_delete = any(c.action == 'delete' for c in changes)
+        has_create = any(c.action == 'create' for c in changes)
+
+        logger.debug(f"  Collapsing {len(changes)} changes...")
+
+        if has_delete:
+            if has_create:
+                # CREATE + DELETE = skip entirely
+                logger.debug("  -> Action: SKIP (created and deleted in branch)")
+                return 'skip', None, changes[-1]
+            else:
+                # Just DELETE (ignore all other changes like updates)
+                # Use prechange_data from first ObjectChange (the original state)
+                logger.debug(f"  -> Action: DELETE (keeping only DELETE, ignoring {len(changes) - 1} other changes)")
+                delete_change = next(c for c in changes if c.action == 'delete')
+
+                # Copy prechange_data from first change to ensure we have the original state
+                delete_change.prechange_data = changes[0].prechange_data
+
+                return 'delete', delete_change.prechange_data, delete_change
+
+        # No DELETE - handle CREATE or UPDATEs
         first_action = changes[0].action
-        last_action = changes[-1].action
         last_change = changes[-1]
 
-        logger.debug(f"  Collapsing {len(changes)} changes: first={first_action}, last={last_action}")
-
-        # Case 1: Created then deleted -> skip entirely
-        if first_action == 'create' and last_action == 'delete':
-            logger.debug("  -> Action: SKIP (created and deleted in branch)")
-            return 'skip', None, last_change
-
-        # Case 2: Deleted -> just delete (should be only one delete)
-        if last_action == 'delete':
-            logger.debug("  -> Action: DELETE")
-            return 'delete', changes[-1].prechange_data, last_change
-
-        # Case 3: Created (with possible updates) -> single create
+        # Created (with possible updates) -> single create
         if first_action == 'create':
             merged_data = {}
             for change in changes:
@@ -564,7 +577,7 @@ class Branch(JobsMixin, PrimaryModel):
             logger.debug(f"  -> Action: CREATE (collapsed {len(changes)} changes)")
             return 'create', merged_data, last_change
 
-        # Case 4: Only updates -> single update
+        # Only updates -> single update
         merged_data = {}
         # Start with prechange_data of first change as baseline
         if changes[0].prechange_data:
@@ -776,28 +789,29 @@ class Branch(JobsMixin, PrimaryModel):
         ordered_keys = Branch._topological_sort_with_cycle_detection(to_process, logger)
 
         # Group by model and refine order within each model
-        logger.info("Refining order within models (updates before creates)...")
+        logger.info("Refining order within models (deletes before creates to free unique constraints)...")
         by_model = defaultdict(list)
         for key in ordered_keys:
             collapsed = to_process[key]
             by_model[collapsed.model_class].append(collapsed)
 
-        # Within each model: updates, then creates, then deletes
+        # Within each model: updates, then deletes, then creates
+        # This ensures deletes free up unique constraints (like slugs) before creates claim them
         result = []
         for model_class, changes in by_model.items():
             updates = [c for c in changes if c.final_action == 'update']
-            creates = [c for c in changes if c.final_action == 'create']
             deletes = [c for c in changes if c.final_action == 'delete']
+            creates = [c for c in changes if c.final_action == 'create']
 
             if updates or creates or deletes:
                 logger.debug(
                     f"  {model_class.__name__}: {len(updates)} updates, "
-                    f"{len(creates)} creates, {len(deletes)} deletes"
+                    f"{len(deletes)} deletes, {len(creates)} creates"
                 )
 
             result.extend(updates)
-            result.extend(creates)
             result.extend(deletes)
+            result.extend(creates)
 
         logger.info(f"Ordering complete: {len(result)} changes to apply")
         return result
