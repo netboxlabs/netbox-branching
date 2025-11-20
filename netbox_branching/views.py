@@ -188,7 +188,7 @@ class BaseBranchActionView(generic.ObjectView):
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
         action_permitted = getattr(branch, f'can_{self.action}')
-        form = self.form(branch, allow_commit=action_permitted)
+        form = self.form(branch, allow_commit=action_permitted, action=self.action)
 
         return render(request, self.template_name, {
             'branch': branch,
@@ -201,7 +201,7 @@ class BaseBranchActionView(generic.ObjectView):
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
         action_permitted = getattr(branch, f'can_{self.action}')
-        form = self.form(branch, request.POST, allow_commit=action_permitted)
+        form = self.form(branch, request.POST, allow_commit=action_permitted, action=self.action)
 
         if branch.status not in self.valid_states:
             messages.error(request, _(
@@ -240,6 +240,10 @@ class BranchMergeView(BaseBranchActionView):
     action = 'merge'
 
     def do_action(self, branch, request, form):
+        # Save the collapse_changes setting to the branch
+        branch.merged_using_collapsed = form.cleaned_data.get('collapse_changes', False)
+        branch.save()
+
         # Enqueue a background job to merge the Branch
         MergeBranchJob.enqueue(
             instance=branch,

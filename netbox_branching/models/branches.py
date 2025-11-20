@@ -97,6 +97,11 @@ class Branch(JobsMixin, PrimaryModel):
         null=True,
         related_name='+'
     )
+    merged_using_collapsed = models.BooleanField(
+        verbose_name=_('merged using collapsed'),
+        default=False,
+        help_text=_('Whether the merge was performed using the collapsed strategy')
+    )
 
     _preaction_validators = {
         'sync': set(),
@@ -1219,11 +1224,13 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
-                # Choose merge strategy
-                if True:
-                    self._merge_iterative(changes, request, commit, logger)
-                else:
+                # Choose merge strategy based on merged_using_collapsed setting
+                if self.merged_using_collapsed:
+                    logger.debug("Merging using collapsed strategy")
                     self._merge_collapsed(changes, request, commit, logger)
+                else:
+                    logger.debug("Merging using iterative strategy")
+                    self._merge_iterative(changes, request, commit, logger)
 
         except Exception as e:
             if err_message := str(e):
@@ -1370,11 +1377,13 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
-                # Choose revert strategy
-                if True:
-                    self._revert_iterative(changes, request, commit, logger)
-                else:
+                # Choose revert strategy based on merged_using_collapsed setting
+                if self.merged_using_collapsed:
+                    logger.debug("Reverting using collapsed strategy")
                     self._revert_collapsed(changes, request, commit, logger)
+                else:
+                    logger.debug("Reverting using iterative strategy")
+                    self._revert_iterative(changes, request, commit, logger)
 
         except Exception as e:
             if err_message := str(e):
@@ -1389,6 +1398,7 @@ class Branch(JobsMixin, PrimaryModel):
         self.status = BranchStatusChoices.READY
         self.merged_time = None
         self.merged_by = None
+        self.merged_using_collapsed = False
         self.save()
 
         # Record a branch event for the merge
