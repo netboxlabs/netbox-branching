@@ -657,8 +657,13 @@ class Branch(JobsMixin, PrimaryModel):
         references = set()
         for field in model_class._meta.get_fields():
             if isinstance(field, models.ForeignKey):
+                # Try both the attname (device_id) and the field name (device)
                 fk_field_name = field.attname  # e.g., 'device_id'
                 fk_value = data.get(fk_field_name)
+
+                # If not found, try the field name without _id suffix
+                if not fk_value:
+                    fk_value = data.get(field.name)
 
                 if fk_value:
                     # Get the content type of the related model
@@ -679,8 +684,20 @@ class Branch(JobsMixin, PrimaryModel):
         Returns: (ordered_list, cycles_detected)
 
         If cycles are detected, breaks them and continues, returning the partial order.
+
+        When multiple nodes have no dependencies, they are ordered by action type priority:
+        DELETE (0) -> UPDATE (1) -> CREATE (2)
+        This maintains the initial grouping when there are no explicit dependencies.
         """
         logger.info("Performing topological sort...")
+
+        # Define action priority (lower number = higher priority = processed first)
+        action_priority = {
+            'delete': 0,  # DELETEs should happen first
+            'update': 1,  # UPDATEs in the middle
+            'create': 2,  # CREATEs should happen last
+            'skip': 3,    # SKIPs should never be in the sort, but just in case
+        }
 
         # Create a copy of dependencies to modify
         remaining = {key: set(collapsed.depends_on) for key, collapsed in collapsed_changes.items()}
@@ -702,6 +719,10 @@ class Branch(JobsMixin, PrimaryModel):
                 key = next(iter(remaining))
                 ready = [key]
                 logger.warning(f"  Breaking cycle by processing {collapsed_changes[key]} first")
+            else:
+                # Sort ready nodes by action priority to maintain DELETE -> UPDATE -> CREATE ordering
+                # when there are no dependencies between them
+                ready.sort(key=lambda k: action_priority.get(collapsed_changes[k].final_action, 99))
 
             # Process ready nodes
             for key in ready:
@@ -718,120 +739,6 @@ class Branch(JobsMixin, PrimaryModel):
             ordered.extend(remaining.keys())
 
         logger.info(f"  Topological sort completed: {len(ordered)} changes ordered")
-        return ordered
-
-    @staticmethod
-    def _order_collapsed_changes_for_revert(collapsed_changes, logger):
-        """
-        Order collapsed changes for revert operation, respecting dependencies.
-
-        For revert, we're undoing operations:
-        1. Undo CREATEs (delete created objects): children before parents
-        2. Undo UPDATEs (restore original values): any order
-        3. Undo DELETEs (restore deleted objects): PARENTS before CHILDREN
-
-        Algorithm:
-        1. Initial ordering: Undo CREATEs, Undo UPDATEs, Undo DELETEs
-        2. Build dependency graph:
-           - For undo CREATEs: if object A references object B, delete A before B (children first)
-           - For undo DELETEs: if object A referenced object B, restore B before A (parents first)
-        3. Topological sort respecting dependencies
-
-        Returns: ordered list of CollapsedChange objects
-        """
-        logger.info(f"Ordering {len(collapsed_changes)} collapsed changes for revert...")
-
-        # Remove skipped objects
-        to_process = {k: v for k, v in collapsed_changes.items() if v.final_action != 'skip'}
-        skipped = [v for v in collapsed_changes.values() if v.final_action == 'skip']
-
-        logger.info(f"  {len(skipped)} changes will be skipped (created and deleted in branch)")
-        logger.info(f"  {len(to_process)} changes to process")
-
-        if not to_process:
-            return []
-
-        # Group by action type (what needs to be undone)
-        undo_creates = sorted(
-            [v for v in to_process.values() if v.final_action == 'create'],
-            key=lambda c: c.last_change.time
-        )
-        undo_updates = sorted(
-            [v for v in to_process.values() if v.final_action == 'update'],
-            key=lambda c: c.last_change.time
-        )
-        undo_deletes = sorted(
-            [v for v in to_process.values() if v.final_action == 'delete'],
-            key=lambda c: c.last_change.time
-        )
-
-        logger.info(
-            f"  Revert groups: {len(undo_creates)} creates to undo, "
-            f"{len(undo_updates)} updates to undo, {len(undo_deletes)} deletes to undo"
-        )
-
-        # Reset dependencies
-        for collapsed in to_process.values():
-            collapsed.depends_on = set()
-            collapsed.depended_by = set()
-
-        # Build lookup maps
-        undo_creates_map = {c.key: c for c in undo_creates}
-        undo_deletes_map = {c.key: c for c in undo_deletes}
-
-        logger.info("Building dependency graph for revert...")
-
-        # 1. For undo CREATEs: if A references B, must delete A before B (children first)
-        logger.debug("  Analyzing undo CREATE dependencies...")
-        for undo_create in undo_creates:
-            if undo_create.postchange_data:
-                refs = Branch._get_fk_references(
-                    undo_create.model_class,
-                    undo_create.postchange_data,
-                    undo_creates_map.keys()
-                )
-                for ref_key in refs:
-                    if ref_key != undo_create.key:
-                        # This object references another created object
-                        # Must delete this object BEFORE the referenced object
-                        ref_create = undo_creates_map[ref_key]
-                        ref_create.depends_on.add(undo_create.key)
-                        undo_create.depended_by.add(ref_key)
-                        logger.debug(
-                            f"    Undo {ref_create} depends on undo {undo_create} "
-                            f"(delete child before parent)"
-                        )
-
-        # 2. For undo DELETEs: if A referenced B, must restore B before A (parents first)
-        logger.debug("  Analyzing undo DELETE dependencies...")
-        for undo_delete in undo_deletes:
-            if undo_delete.prechange_data:
-                refs = Branch._get_fk_references(
-                    undo_delete.model_class,
-                    undo_delete.prechange_data,
-                    undo_deletes_map.keys()
-                )
-                for ref_key in refs:
-                    # This object referenced another deleted object
-                    # Must restore the referenced object BEFORE this object
-                    ref_delete = undo_deletes_map[ref_key]
-                    undo_delete.depends_on.add(ref_key)
-                    ref_delete.depended_by.add(undo_delete.key)
-                    logger.debug(
-                        f"    Undo {undo_delete} depends on undo {ref_delete} "
-                        f"(restore parent before child)"
-                    )
-
-        # 3. Use topological sort to order all changes
-        total_deps = sum(len(c.depends_on) for c in to_process.values())
-        logger.info(f"  Dependency graph built: {total_deps} dependencies")
-        logger.info("  Performing topological sort...")
-        ordered_keys = Branch._topological_sort_with_cycle_detection(to_process, logger)
-
-        # Convert keys back to CollapsedChange objects
-        ordered = [to_process[key] for key in ordered_keys]
-
-        logger.info(f"  Revert ordering completed: {len(ordered)} changes ordered")
         return ordered
 
     @staticmethod
@@ -959,6 +866,28 @@ class Branch(JobsMixin, PrimaryModel):
                         logger.debug(
                             f"    {create} depends on {ref_create} "
                             f"(CREATE references another created object)"
+                        )
+
+        # 3. Check DELETEs for dependencies on other DELETEs
+        logger.debug("  Analyzing DELETE dependencies...")
+        for delete in deletes:
+            if delete.prechange_data:
+                # Check if this DELETE references other deleted objects
+                refs = Branch._get_fk_references(
+                    delete.model_class,
+                    delete.prechange_data,
+                    deletes_map.keys()
+                )
+                for ref_key in refs:
+                    if ref_key != delete.key:  # Don't self-reference
+                        # This delete references another deleted object
+                        # The referenced object must be deleted AFTER this one (child before parent)
+                        ref_delete = deletes_map[ref_key]
+                        ref_delete.depends_on.add(delete.key)
+                        delete.depended_by.add(ref_key)
+                        logger.debug(
+                            f"    {ref_delete} depends on {delete} "
+                            f"(child DELETE must happen before parent DELETE)"
                         )
 
         total_deps = sum(len(c.depends_on) for c in to_process.values())
@@ -1314,8 +1243,9 @@ class Branch(JobsMixin, PrimaryModel):
             collapsed.postchange_data = postchange_data
             collapsed.last_change = last_change
 
-        # Order collapsed changes for revert (handles dependencies differently than merge)
-        ordered_changes = Branch._order_collapsed_changes_for_revert(collapsed_changes, logger)
+        # Order collapsed changes for revert (reverse of merge order)
+        merge_order = Branch._order_collapsed_changes(collapsed_changes, logger)
+        ordered_changes = list(reversed(merge_order))
 
         # Undo collapsed changes in dependency order
         logger.info(f"Undoing {len(ordered_changes)} collapsed changes in dependency order...")
