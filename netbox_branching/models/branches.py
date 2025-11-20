@@ -1101,251 +1101,87 @@ class Branch(JobsMixin, PrimaryModel):
             instance.full_clean()
             instance.save(using=using)
 
-    def merge_collapsed(self, user, commit=True):
+    def _merge_iterative(self, changes, request, commit, logger):
         """
-        Apply all changes in the Branch to the main schema by replaying them in
-        chronological order.
+        Apply changes iteratively (one at a time) in chronological order.
         """
-        logger = logging.getLogger('netbox_branching.branch.merge')
-        logger.info(f'Merging branch {self} ({self.schema_name})')
+        models = set()
 
-        if not self.ready:
-            raise Exception(f"Branch {self} is not ready to merge")
-        if commit and not self.can_merge:
-            raise Exception("Merging this branch is not permitted.")
+        # Apply each change from the Branch
+        for change in changes:
+            models.add(change.changed_object_type.model_class())
+            with event_tracking(request):
+                request.id = change.request_id
+                request.user = change.user
+                change.apply(self, using=DEFAULT_DB_ALIAS, logger=logger)
+        if not commit:
+            raise AbortTransaction()
 
-        # Emit pre-merge signal
-        pre_merge.send(sender=self.__class__, branch=self, user=user)
+        # Perform cleanup tasks
+        self._cleanup(models)
 
-        # Retrieve staged changes before we update the Branch's status
-        if changes := self.get_unmerged_changes().order_by('time'):
-            logger.info(f"Found {len(changes)} changes to merge")
-        else:
-            logger.info("No changes found; aborting.")
-            return
-
-        # Update Branch status
-        logger.debug(f"Setting branch status to {BranchStatusChoices.MERGING}")
-        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MERGING)
-
-        # Create a dummy request for the event_tracking() context manager
-        request = RequestFactory().get(reverse('home'))
-
-        # Prep & connect the signal receiver for recording AppliedChanges
-        handler = partial(record_applied_change, branch=self)
-        post_save.connect(handler, sender=ObjectChange_, weak=False)
-
-        try:
-            with transaction.atomic():
-                models = set()
-
-                # Group and collapse changes by object
-                logger.info("Collapsing ObjectChanges by object...")
-                collapsed_changes = {}
-
-                for change in changes:
-                    key = (change.changed_object_type.id, change.changed_object_id)
-
-                    if key not in collapsed_changes:
-                        model_class = change.changed_object_type.model_class()
-                        collapsed = Branch.CollapsedChange(key, model_class)
-                        collapsed_changes[key] = collapsed
-                        logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
-
-                    collapsed_changes[key].changes.append(change)
-
-                logger.info(f"  {len(changes)} changes collapsed into {len(collapsed_changes)} objects")
-
-                # Collapse each object's changes
-                logger.info("Determining final action for each object...")
-                for key, collapsed in collapsed_changes.items():
-                    final_action, prechange_data, postchange_data, last_change = Branch._collapse_changes_for_object(
-                        collapsed.changes, logger
-                    )
-                    collapsed.final_action = final_action
-                    collapsed.prechange_data = prechange_data
-                    collapsed.postchange_data = postchange_data
-                    collapsed.last_change = last_change
-
-                # Order collapsed changes based on dependencies
-                ordered_changes = Branch._order_collapsed_changes(collapsed_changes, logger)
-
-                # Apply collapsed changes in order
-                logger.info(f"Applying {len(ordered_changes)} collapsed changes...")
-                for i, collapsed in enumerate(ordered_changes, 1):
-                    model_class = collapsed.model_class
-                    models.add(model_class)
-
-                    # Use the last change's metadata for tracking
-                    last_change = collapsed.last_change
-
-                    logger.info(f"  [{i}/{len(ordered_changes)}] {collapsed.final_action.upper()} "
-                               f"{model_class.__name__}:{collapsed.key[1]} "
-                               f"(from {len(collapsed.changes)} original changes)")
-
-                    with event_tracking(request):
-                        request.id = last_change.request_id
-                        request.user = last_change.user
-
-                        # Apply the collapsed change
-                        self._apply_collapsed_change(collapsed, using=DEFAULT_DB_ALIAS, logger=logger)
-
-                if not commit:
-                    raise AbortTransaction()
-
-                # Perform cleanup tasks
-                self._cleanup(models)
-
-        except Exception as e:
-            if err_message := str(e):
-                logger.error(err_message)
-            # Disconnect signal receiver & restore original branch status
-            post_save.disconnect(handler, sender=ObjectChange_)
-            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
-            raise e
-
-        # Update the Branch's status to "merged"
-        logger.debug(f"Setting branch status to {BranchStatusChoices.MERGED}")
-        self.status = BranchStatusChoices.MERGED
-        self.merged_time = timezone.now()
-        self.merged_by = user
-        self.save()
-
-        # Record a branch event for the merge
-        logger.debug(f"Recording branch event: {BranchEventTypeChoices.MERGED}")
-        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MERGED)
-
-        # Emit post-merge signal
-        post_merge.send(sender=self.__class__, branch=self, user=user)
-
-        logger.info('Merging completed')
-
-        # Disconnect the signal receiver
-        post_save.disconnect(handler, sender=ObjectChange_)
-
-    merge_collapsed.alters_data = True
-
-    def revert_collapsed(self, user, commit=True):
+    def _merge_collapsed(self, changes, request, commit, logger):
         """
-        Undo all changes associated with a previously merged Branch in the main schema.
-        Uses the same collapsing logic as merge, but applies changes in reverse order.
+        Apply changes after collapsing them by object and ordering by dependencies.
         """
-        logger = logging.getLogger('netbox_branching.branch.revert')
-        logger.info(f'Reverting branch {self} ({self.schema_name})')
+        models = set()
 
-        if not self.merged:
-            raise Exception("Only merged branches can be reverted.")
-        if commit and not self.can_revert:
-            raise Exception("Reverting this branch is not permitted.")
+        # Group and collapse changes by object
+        logger.info("Collapsing ObjectChanges by object...")
+        collapsed_changes = {}
 
-        # Emit pre-revert signal
-        pre_revert.send(sender=self.__class__, branch=self, user=user)
+        for change in changes:
+            key = (change.changed_object_type.id, change.changed_object_id)
 
-        # Retrieve applied changes
-        if changes := self.get_changes():
-            logger.info(f"Found {len(changes)} changes to revert")
-        else:
-            logger.info("No changes found; aborting.")
-            return
+            if key not in collapsed_changes:
+                model_class = change.changed_object_type.model_class()
+                collapsed = Branch.CollapsedChange(key, model_class)
+                collapsed_changes[key] = collapsed
+                logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
 
-        # Update Branch status
-        logger.debug(f"Setting branch status to {BranchStatusChoices.REVERTING}")
-        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.REVERTING)
+            collapsed_changes[key].changes.append(change)
 
-        # Create a dummy request for the event_tracking() context manager
-        request = RequestFactory().get(reverse('home'))
+        logger.info(f"  {len(changes)} changes collapsed into {len(collapsed_changes)} objects")
 
-        # Prep & connect the signal receiver for recording AppliedChanges
-        handler = partial(record_applied_change, branch=self)
-        post_save.connect(handler, sender=ObjectChange_, weak=False)
+        # Collapse each object's changes
+        logger.info("Determining final action for each object...")
+        for key, collapsed in collapsed_changes.items():
+            final_action, prechange_data, postchange_data, last_change = Branch._collapse_changes_for_object(
+                collapsed.changes, logger
+            )
+            collapsed.final_action = final_action
+            collapsed.prechange_data = prechange_data
+            collapsed.postchange_data = postchange_data
+            collapsed.last_change = last_change
 
-        try:
-            with transaction.atomic():
-                models = set()
+        # Order collapsed changes based on dependencies
+        ordered_changes = Branch._order_collapsed_changes(collapsed_changes, logger)
 
-                # Group changes by object and create CollapsedChange objects
-                logger.info("Collapsing ObjectChanges by object...")
-                collapsed_changes = {}
+        # Apply collapsed changes in order
+        logger.info(f"Applying {len(ordered_changes)} collapsed changes...")
+        for i, collapsed in enumerate(ordered_changes, 1):
+            model_class = collapsed.model_class
+            models.add(model_class)
 
-                for change in changes:
-                    key = (change.changed_object_type.id, change.changed_object_id)
+            # Use the last change's metadata for tracking
+            last_change = collapsed.last_change
 
-                    if key not in collapsed_changes:
-                        model_class = change.changed_object_type.model_class()
-                        collapsed = Branch.CollapsedChange(key, model_class)
-                        collapsed_changes[key] = collapsed
-                        logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
+            logger.info(f"  [{i}/{len(ordered_changes)}] {collapsed.final_action.upper()} "
+                       f"{model_class.__name__}:{collapsed.key[1]} "
+                       f"(from {len(collapsed.changes)} original changes)")
 
-                    collapsed_changes[key].changes.append(change)
+            with event_tracking(request):
+                request.id = last_change.request_id
+                request.user = last_change.user
 
-                logger.info(f"  {len(changes)} changes collapsed into {len(collapsed_changes)} objects")
+                # Apply the collapsed change
+                self._apply_collapsed_change(collapsed, using=DEFAULT_DB_ALIAS, logger=logger)
 
-                # Collapse each object's changes
-                logger.info("Determining final action for each object...")
-                for key, collapsed in collapsed_changes.items():
-                    final_action, prechange_data, postchange_data, last_change = Branch._collapse_changes_for_object(
-                        collapsed.changes, logger
-                    )
-                    collapsed.final_action = final_action
-                    collapsed.prechange_data = prechange_data
-                    collapsed.postchange_data = postchange_data
-                    collapsed.last_change = last_change
+        if not commit:
+            raise AbortTransaction()
 
-                # Order collapsed changes for revert (handles dependencies differently than merge)
-                ordered_changes = Branch._order_collapsed_changes_for_revert(collapsed_changes, logger)
-
-                # Undo collapsed changes in dependency order
-                logger.info(f"Undoing {len(ordered_changes)} collapsed changes in dependency order...")
-                for i, collapsed in enumerate(ordered_changes, 1):
-                    model_class = collapsed.model_class
-                    models.add(model_class)
-
-                    # Use the last change's metadata for tracking
-                    last_change = collapsed.last_change
-                    logger.info(
-                        f"[{i}/{len(ordered_changes)}] Undoing {collapsed.final_action} "
-                        f"{model_class._meta.verbose_name} (ID: {collapsed.key[1]})"
-                    )
-
-                    with event_tracking(request):
-                        request.id = last_change.request_id
-                        request.user = last_change.user
-                        self._undo_collapsed_change(collapsed, using=DEFAULT_DB_ALIAS, logger=logger)
-
-                if not commit:
-                    raise AbortTransaction()
-
-                # Perform cleanup tasks
-                self._cleanup(models)
-
-        except Exception as e:
-            if err_message := str(e):
-                logger.error(err_message)
-            # Disconnect signal receiver & restore original branch status
-            post_save.disconnect(handler, sender=ObjectChange_)
-            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MERGED)
-            raise e
-
-        # Update the Branch's status to "ready"
-        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
-        self.status = BranchStatusChoices.READY
-        self.merged_time = None
-        self.merged_by = None
-        self.save()
-
-        # Record a branch event for the revert
-        logger.debug(f"Recording branch event: {BranchEventTypeChoices.REVERTED}")
-        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.REVERTED)
-
-        # Emit post-revert signal
-        post_revert.send(sender=self.__class__, branch=self, user=user)
-
-        logger.info('Reversion completed')
-
-        # Disconnect the signal receiver
-        post_save.disconnect(handler, sender=ObjectChange_)
-
-    revert_collapsed.alters_data = True
+        # Perform cleanup tasks
+        self._cleanup(models)
 
     def merge(self, user, commit=True):
         """
@@ -1383,20 +1219,11 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
-                models = set()
-
-                # Apply each change from the Branch
-                for change in changes:
-                    models.add(change.changed_object_type.model_class())
-                    with event_tracking(request):
-                        request.id = change.request_id
-                        request.user = change.user
-                        change.apply(self, using=DEFAULT_DB_ALIAS, logger=logger)
-                if not commit:
-                    raise AbortTransaction()
-
-                # Perform cleanup tasks
-                self._cleanup(models)
+                # Choose merge strategy
+                if True:
+                    self._merge_iterative(changes, request, commit, logger)
+                else:
+                    self._merge_collapsed(changes, request, commit, logger)
 
         except Exception as e:
             if err_message := str(e):
@@ -1426,6 +1253,86 @@ class Branch(JobsMixin, PrimaryModel):
         post_save.disconnect(handler, sender=ObjectChange_)
 
     merge.alters_data = True
+
+    def _revert_iterative(self, changes, request, commit, logger):
+        """
+        Undo changes iteratively (one at a time) in reverse chronological order.
+        """
+        models = set()
+
+        # Undo each change from the Branch
+        for change in changes:
+            models.add(change.changed_object_type.model_class())
+            with event_tracking(request):
+                request.id = change.request_id
+                request.user = change.user
+                change.undo(self, logger=logger)
+        if not commit:
+            raise AbortTransaction()
+
+        # Perform cleanup tasks
+        self._cleanup(models)
+
+    def _revert_collapsed(self, changes, request, commit, logger):
+        """
+        Undo changes after collapsing them by object and ordering by dependencies.
+        """
+        models = set()
+
+        # Group changes by object and create CollapsedChange objects
+        logger.info("Collapsing ObjectChanges by object...")
+        collapsed_changes = {}
+
+        for change in changes:
+            key = (change.changed_object_type.id, change.changed_object_id)
+
+            if key not in collapsed_changes:
+                model_class = change.changed_object_type.model_class()
+                collapsed = Branch.CollapsedChange(key, model_class)
+                collapsed_changes[key] = collapsed
+                logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
+
+            collapsed_changes[key].changes.append(change)
+
+        logger.info(f"  {len(changes)} changes collapsed into {len(collapsed_changes)} objects")
+
+        # Collapse each object's changes
+        logger.info("Determining final action for each object...")
+        for key, collapsed in collapsed_changes.items():
+            final_action, prechange_data, postchange_data, last_change = Branch._collapse_changes_for_object(
+                collapsed.changes, logger
+            )
+            collapsed.final_action = final_action
+            collapsed.prechange_data = prechange_data
+            collapsed.postchange_data = postchange_data
+            collapsed.last_change = last_change
+
+        # Order collapsed changes for revert (handles dependencies differently than merge)
+        ordered_changes = Branch._order_collapsed_changes_for_revert(collapsed_changes, logger)
+
+        # Undo collapsed changes in dependency order
+        logger.info(f"Undoing {len(ordered_changes)} collapsed changes in dependency order...")
+        for i, collapsed in enumerate(ordered_changes, 1):
+            model_class = collapsed.model_class
+            models.add(model_class)
+
+            # Use the last change's metadata for tracking
+            last_change = collapsed.last_change
+            logger.info(
+                f"[{i}/{len(ordered_changes)}] Undoing {collapsed.final_action} "
+                f"{model_class._meta.verbose_name} (ID: {collapsed.key[1]})"
+            )
+
+            with event_tracking(request):
+                request.id = last_change.request_id
+                request.user = last_change.user
+                self._undo_collapsed_change(collapsed, using=DEFAULT_DB_ALIAS, logger=logger)
+
+        if not commit:
+            raise AbortTransaction()
+
+        # Perform cleanup tasks
+        self._cleanup(models)
 
     def revert(self, user, commit=True):
         """
@@ -1463,20 +1370,11 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
-                models = set()
-
-                # Undo each change from the Branch
-                for change in changes:
-                    models.add(change.changed_object_type.model_class())
-                    with event_tracking(request):
-                        request.id = change.request_id
-                        request.user = change.user
-                        change.undo(self, logger=logger)
-                if not commit:
-                    raise AbortTransaction()
-
-                # Perform cleanup tasks
-                self._cleanup(models)
+                # Choose revert strategy
+                if True:
+                    self._revert_iterative(changes, request, commit, logger)
+                else:
+                    self._revert_collapsed(changes, request, commit, logger)
 
         except Exception as e:
             if err_message := str(e):
