@@ -48,7 +48,6 @@ class MergeTestCase(TransactionTestCase):
 
         branch = Branch(name=name)
         branch.save(provision=False)
-        print(f"branch status: {branch.status}")
         branch.provision(user=self.user)
 
         # Wait for branch to be provisioned (background task)
@@ -58,7 +57,6 @@ class MergeTestCase(TransactionTestCase):
 
         while elapsed < max_wait:
             branch.refresh_from_db()
-            print(f"checking branch status: {branch.status}")
             if branch.status == BranchStatusChoices.READY:
                 break
             time.sleep(wait_interval)
@@ -121,22 +119,25 @@ class MergeTestCase(TransactionTestCase):
         Merge: updates object in main
         Revert: restores object to original state
         """
-        # Create site in main
-        site = Site.objects.create(name='Original Site', slug='test-site', description='Original')
+        # Create a request context for creating the site
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # Create site in main WITH event tracking (like the real app does)
+        with event_tracking(request):
+            site = Site.objects.create(name='Original Site', slug='test-site', description='Original', custom_field_data={})
         site_id = site.id
         original_description = site.description
 
         # Create branch
         branch = self._create_and_provision_branch()
 
-        # Create a request context for event tracking
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-
         # In branch: update site
         with activate_branch(branch), event_tracking(request):
             site = Site.objects.get(id=site_id)
+            # IMPORTANT: Call snapshot() before modifying (like views/API do)
+            site.snapshot()
             site.description = 'Updated'
             site.save()
 
@@ -147,13 +148,7 @@ class MergeTestCase(TransactionTestCase):
             changed_object_type=site_ct,
             changed_object_id=site_id
         )
-        print("")
-        print("--------------------------------")
-        for change in changes:
-            print(f"change.action: {change.action}")
-            print(f"change.prechange_data: {change.prechange_data}")
-            print(f"change.postchange_data: {change.postchange_data}")
-            print("")
+
         self.assertEqual(changes.count(), 1)
         self.assertEqual(changes.first().action, 'update')
 
@@ -239,6 +234,8 @@ class MergeTestCase(TransactionTestCase):
             site = Site.objects.create(name='Temp Site', slug='temp-site')
             site_id = site.id
 
+            # IMPORTANT: Call snapshot() before modifying (like views/API do)
+            site.snapshot()
             site.description = 'Modified'
             site.save()
 
@@ -422,6 +419,8 @@ class MergeTestCase(TransactionTestCase):
         # In branch: rename site1 slug, create new site with old slug
         with activate_branch(branch), event_tracking(request):
             site1 = Site.objects.get(id=site1_id)
+            # IMPORTANT: Call snapshot() before modifying (like views/API do)
+            site1.snapshot()
             site1.slug = 'site-1-renamed'
             site1.save()
 
@@ -473,12 +472,16 @@ class MergeTestCase(TransactionTestCase):
         with activate_branch(branch), event_tracking(request):
             site = Site.objects.get(id=site_id)
 
+            # IMPORTANT: Call snapshot() before modifying (like views/API do)
+            site.snapshot()
             site.description = 'Update 1'
             site.save()
 
+            site.snapshot()
             site.description = 'Update 2'
             site.save()
 
+            site.snapshot()
             site.name = 'Site 1 Modified'
             site.save()
 
@@ -517,9 +520,12 @@ class MergeTestCase(TransactionTestCase):
             site = Site.objects.create(name='New Site', slug='new-site', description='Initial')
             site_id = site.id
 
+            # IMPORTANT: Call snapshot() before modifying (like views/API do)
+            site.snapshot()
             site.description = 'Modified 1'
             site.save()
 
+            site.snapshot()
             site.description = 'Modified 2'
             site.name = 'New Site Final'
             site.save()
@@ -600,6 +606,8 @@ class MergeTestCase(TransactionTestCase):
             interface_b2_id = interface_b2.id
 
             # Update device_b
+            # IMPORTANT: Call snapshot() before modifying (like views/API do)
+            device_b.snapshot()
             device_b.name = 'Device B Updated'
             device_b.save()
 
@@ -655,6 +663,8 @@ class MergeTestCase(TransactionTestCase):
             site_branch_id = site_branch.id
 
             # Update description
+            # IMPORTANT: Call snapshot() before modifying (like views/API do)
+            site_branch.snapshot()
             site_branch.description = 'Updated in branch'
             site_branch.save()
 
@@ -705,10 +715,13 @@ class MergeTestCase(TransactionTestCase):
             site_branch_id = site_branch.id
 
             # Update to conflicting slug
+            # IMPORTANT: Call snapshot() before modifying (like views/API do)
+            site_branch.snapshot()
             site_branch.slug = 'conflict-slug'
             site_branch.save()
 
             # Update again to resolve conflict
+            site_branch.snapshot()
             site_branch.slug = 'resolved-slug'
             site_branch.save()
 
