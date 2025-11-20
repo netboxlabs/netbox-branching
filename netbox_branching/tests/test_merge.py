@@ -44,10 +44,31 @@ class MergeTestCase(TransactionTestCase):
 
     def _create_and_provision_branch(self, name='Test Branch'):
         """Helper to create and provision a branch."""
+        import time
+
         branch = Branch(name=name)
         branch.save(provision=False)
+        print(f"branch status: {branch.status}")
         branch.provision(user=self.user)
-        branch.refresh_from_db()  # Refresh to get updated status
+
+        # Wait for branch to be provisioned (background task)
+        max_wait = 30  # Maximum 30 seconds
+        wait_interval = 0.1  # Check every 100ms
+        elapsed = 0
+
+        while elapsed < max_wait:
+            branch.refresh_from_db()
+            print(f"checking branch status: {branch.status}")
+            if branch.status == BranchStatusChoices.READY:
+                break
+            time.sleep(wait_interval)
+            elapsed += wait_interval
+        else:
+            raise TimeoutError(
+                f"Branch {branch.name} did not become READY within {max_wait} seconds. "
+                f"Status: {branch.status}"
+            )
+
         return branch
 
     def test_merge_basic_create(self):
@@ -126,6 +147,13 @@ class MergeTestCase(TransactionTestCase):
             changed_object_type=site_ct,
             changed_object_id=site_id
         )
+        print("")
+        print("--------------------------------")
+        for change in changes:
+            print(f"change.action: {change.action}")
+            print(f"change.prechange_data: {change.prechange_data}")
+            print(f"change.postchange_data: {change.postchange_data}")
+            print("")
         self.assertEqual(changes.count(), 1)
         self.assertEqual(changes.first().action, 'update')
 

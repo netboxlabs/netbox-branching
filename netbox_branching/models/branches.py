@@ -512,7 +512,8 @@ class Branch(JobsMixin, PrimaryModel):
             self.model_class = model_class
             self.changes = []  # List of ObjectChange instances, ordered by time
             self.final_action = None  # 'create', 'update', 'delete', or 'skip'
-            self.merged_data = None  # The collapsed postchange_data
+            self.prechange_data = None  # The original state (from first ObjectChange)
+            self.postchange_data = None  # The final state (collapsed from all changes)
             self.last_change = None  # The most recent ObjectChange (for metadata)
 
             # Dependencies for ordering
@@ -527,10 +528,43 @@ class Branch(JobsMixin, PrimaryModel):
             )
 
     @staticmethod
+    def _diff_object_change_data(action, prechange_data, postchange_data):
+        """
+        Compute diff between prechange_data and postchange_data for a given action.
+        Mirrors the logic of ObjectChange.diff() method.
+
+        Returns: dict with 'pre' and 'post' keys containing changed attributes
+        """
+        from utilities.data import shallow_compare_dict
+        from core.choices import ObjectChangeActionChoices
+
+        prechange_data = prechange_data or {}
+        postchange_data = postchange_data or {}
+
+        # Determine which attributes have changed
+        if action == ObjectChangeActionChoices.ACTION_CREATE:
+            changed_attrs = sorted(postchange_data.keys())
+        elif action == ObjectChangeActionChoices.ACTION_DELETE:
+            changed_attrs = sorted(prechange_data.keys())
+        else:
+            # TODO: Support deep (recursive) comparison
+            changed_data = shallow_compare_dict(prechange_data, postchange_data)
+            changed_attrs = sorted(changed_data.keys())
+
+        return {
+            'pre': {
+                k: prechange_data.get(k) for k in changed_attrs
+            },
+            'post': {
+                k: postchange_data.get(k) for k in changed_attrs
+            },
+        }
+
+    @staticmethod
     def _collapse_changes_for_object(changes, logger):
         """
         Collapse a list of ObjectChanges for a single object.
-        Returns: (final_action, merged_data, last_change)
+        Returns: (final_action, prechange_data, postchange_data, last_change)
 
         A key point is that we only care about the final state of the object. Also
         each ChangeObject needs to be correct so the final state is correct, i.e.
@@ -546,7 +580,7 @@ class Branch(JobsMixin, PrimaryModel):
 
         """
         if not changes:
-            return None, None, None
+            return None, None, None, None
 
         # Sort by time (oldest first)
         changes = sorted(changes, key=lambda c: c.time)
@@ -561,43 +595,50 @@ class Branch(JobsMixin, PrimaryModel):
             if has_create:
                 # CREATE + DELETE = skip entirely
                 logger.debug("  -> Action: SKIP (created and deleted in branch)")
-                return 'skip', None, changes[-1]
+                return 'skip', None, None, changes[-1]
             else:
                 # Just DELETE (ignore all other changes like updates)
-                # Use prechange_data from first ObjectChange (the original state)
+                # prechange_data: original state from first change
+                # postchange_data: postchange_data from DELETE ObjectChange
                 logger.debug(f"  -> Action: DELETE (keeping only DELETE, ignoring {len(changes) - 1} other changes)")
                 delete_change = next(c for c in changes if c.action == 'delete')
-
-                # Copy prechange_data from first change to ensure we have the original state
-                delete_change.prechange_data = changes[0].prechange_data
-
-                return 'delete', delete_change.prechange_data, delete_change
+                prechange_data = changes[0].prechange_data
+                postchange_data = delete_change.postchange_data  # Should be None for DELETE, but use actual value
+                return 'delete', prechange_data, postchange_data, delete_change
 
         # No DELETE - handle CREATE or UPDATEs
         first_action = changes[0].action
+        first_change = changes[0]
         last_change = changes[-1]
 
         # Created (with possible updates) -> single create
         if first_action == 'create':
-            merged_data = {}
+            # prechange_data: from first ObjectChange (should be None for CREATE)
+            # postchange_data: merged from all changes
+            prechange_data = first_change.prechange_data
+            postchange_data = {}
             for change in changes:
                 # Merge postchange_data, later changes overwrite earlier ones
                 if change.postchange_data:
-                    merged_data.update(change.postchange_data)
+                    postchange_data.update(change.postchange_data)
             logger.debug(f"  -> Action: CREATE (collapsed {len(changes)} changes)")
-            return 'create', merged_data, last_change
+            return 'create', prechange_data, postchange_data, last_change
 
         # Only updates -> single update
-        merged_data = {}
+        # prechange_data: original state from first change
+        # postchange_data: final state after all updates
+        prechange_data = first_change.prechange_data
+        postchange_data = {}
         # Start with prechange_data of first change as baseline
-        if changes[0].prechange_data:
-            merged_data.update(changes[0].prechange_data)
+        if prechange_data:
+            postchange_data.update(prechange_data)
         # Apply each change's postchange_data
         for change in changes:
             if change.postchange_data:
-                merged_data.update(change.postchange_data)
+                postchange_data.update(change.postchange_data)
+
         logger.debug(f"  -> Action: UPDATE (collapsed {len(changes)} changes)")
-        return 'update', merged_data, last_change
+        return 'update', prechange_data, postchange_data, last_change
 
     @staticmethod
     def _get_fk_references(model_class, data, changed_objects):
@@ -764,10 +805,10 @@ class Branch(JobsMixin, PrimaryModel):
             # Check if UPDATE references created object in postchange_data
             # This means the UPDATE needs the CREATE to exist first
             # The CREATE must happen BEFORE the UPDATE
-            if update.merged_data:
+            if update.postchange_data:
                 postchange_refs = Branch._get_fk_references(
                     update.model_class,
-                    update.merged_data,
+                    update.postchange_data,
                     creates_map.keys()
                 )
                 for ref_key in postchange_refs:
@@ -783,11 +824,11 @@ class Branch(JobsMixin, PrimaryModel):
         # 2. Check CREATEs for dependencies on other CREATEs
         logger.debug("  Analyzing CREATE dependencies...")
         for create in creates:
-            if create.merged_data:
+            if create.postchange_data:
                 # Check if this CREATE references other created objects
                 refs = Branch._get_fk_references(
                     create.model_class,
-                    create.merged_data,
+                    create.postchange_data,
                     creates_map.keys()
                 )
                 for ref_key in refs:
@@ -834,9 +875,9 @@ class Branch(JobsMixin, PrimaryModel):
             logger.debug(f'  Creating {model._meta.verbose_name} {object_id}')
 
             if hasattr(model, 'deserialize_object'):
-                instance = model.deserialize_object(collapsed.merged_data, pk=object_id)
+                instance = model.deserialize_object(collapsed.postchange_data, pk=object_id)
             else:
-                instance = deserialize_object(model, collapsed.merged_data, pk=object_id)
+                instance = deserialize_object(model, collapsed.postchange_data, pk=object_id)
 
             try:
                 instance.object.full_clean()
@@ -860,7 +901,7 @@ class Branch(JobsMixin, PrimaryModel):
             # We need to figure out what changed between initial and final state
             first_change = collapsed.changes[0]
             initial_data = first_change.prechange_data or {}
-            final_data = collapsed.merged_data or {}
+            final_data = collapsed.postchange_data or {}
 
             # Only update fields that actually changed
             changed_fields = {}
@@ -885,11 +926,12 @@ class Branch(JobsMixin, PrimaryModel):
     def _undo_collapsed_change(self, collapsed, using=DEFAULT_DB_ALIAS, logger=None):
         """
         Undo a collapsed change from the database (reverse of apply).
-        Similar to ObjectChange.undo() but works with collapsed data.
+        Follows the same pattern as ObjectChange.undo().
         """
         from django.contrib.contenttypes.fields import GenericForeignKey
         from utilities.serialization import deserialize_object
         from netbox_branching.utilities import update_object
+        from core.choices import ObjectChangeActionChoices
 
         logger = logger or logging.getLogger('netbox_branching.branch._undo_collapsed_change')
         model = collapsed.model_class
@@ -902,7 +944,6 @@ class Branch(JobsMixin, PrimaryModel):
         # Undoing a CREATE: delete the object
         if collapsed.final_action == 'create':
             logger.debug(f'  Undoing creation of {model._meta.verbose_name} {object_id}')
-
             try:
                 instance = model.objects.using(using).get(pk=object_id)
                 instance.delete(using=using)
@@ -913,15 +954,15 @@ class Branch(JobsMixin, PrimaryModel):
         elif collapsed.final_action == 'update':
             logger.debug(f'  Undoing update of {model._meta.verbose_name} {object_id}')
 
-            # Get the original state from the first change
-            first_change = collapsed.changes[0]
-            # Make a copy to avoid modifying cached property result
-            revert_data = dict(first_change.diff()['pre'])
-
-            # Load the instance and apply the original state
             try:
                 instance = model.objects.using(using).get(pk=object_id)
-                update_object(instance, revert_data, using=using)
+                # Compute diff and apply 'pre' values (like ObjectChange.undo() does)
+                diff = Branch._diff_object_change_data(
+                    ObjectChangeActionChoices.ACTION_UPDATE,
+                    collapsed.prechange_data,
+                    collapsed.postchange_data
+                )
+                update_object(instance, diff['pre'], using=using)
             except model.DoesNotExist:
                 logger.debug(f'  {model._meta.verbose_name} {object_id} does not exist; skipping')
 
@@ -929,10 +970,9 @@ class Branch(JobsMixin, PrimaryModel):
         elif collapsed.final_action == 'delete':
             logger.debug(f'  Undoing deletion (restoring) {model._meta.verbose_name} {object_id}')
 
-            # Use prechange_data from the first change (the original state before any changes)
-            first_change = collapsed.changes[0]
-            prechange_data = first_change.prechange_data or {}
+            prechange_data = collapsed.prechange_data or {}
 
+            # Restore from prechange_data (like ObjectChange.undo() does)
             deserialized = deserialize_object(model, prechange_data, pk=object_id)
             instance = deserialized.object
 
@@ -1005,11 +1045,12 @@ class Branch(JobsMixin, PrimaryModel):
                 # Collapse each object's changes
                 logger.info("Determining final action for each object...")
                 for key, collapsed in collapsed_changes.items():
-                    final_action, merged_data, last_change = Branch._collapse_changes_for_object(
+                    final_action, prechange_data, postchange_data, last_change = Branch._collapse_changes_for_object(
                         collapsed.changes, logger
                     )
                     collapsed.final_action = final_action
-                    collapsed.merged_data = merged_data
+                    collapsed.prechange_data = prechange_data
+                    collapsed.postchange_data = postchange_data
                     collapsed.last_change = last_change
 
                 # Order collapsed changes based on dependencies
@@ -1128,11 +1169,12 @@ class Branch(JobsMixin, PrimaryModel):
                 # Collapse each object's changes
                 logger.info("Determining final action for each object...")
                 for key, collapsed in collapsed_changes.items():
-                    final_action, merged_data, last_change = Branch._collapse_changes_for_object(
+                    final_action, prechange_data, postchange_data, last_change = Branch._collapse_changes_for_object(
                         collapsed.changes, logger
                     )
                     collapsed.final_action = final_action
-                    collapsed.merged_data = merged_data
+                    collapsed.prechange_data = prechange_data
+                    collapsed.postchange_data = postchange_data
                     collapsed.last_change = last_change
 
                 # Order collapsed changes based on dependencies (same as merge)
