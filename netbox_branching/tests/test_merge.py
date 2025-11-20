@@ -126,7 +126,9 @@ class MergeTestCase(TransactionTestCase):
 
         # Create site in main WITH event tracking (like the real app does)
         with event_tracking(request):
-            site = Site.objects.create(name='Original Site', slug='test-site', description='Original', custom_field_data={})
+            site = Site.objects.create(
+                name='Original Site', slug='test-site', description='Original', custom_field_data={}
+            )
         site_id = site.id
         original_description = site.description
 

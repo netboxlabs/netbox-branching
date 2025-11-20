@@ -716,6 +716,120 @@ class Branch(JobsMixin, PrimaryModel):
         return ordered
 
     @staticmethod
+    def _order_collapsed_changes_for_revert(collapsed_changes, logger):
+        """
+        Order collapsed changes for revert operation, respecting dependencies.
+
+        For revert, we're undoing operations:
+        1. Undo CREATEs (delete created objects): children before parents
+        2. Undo UPDATEs (restore original values): any order
+        3. Undo DELETEs (restore deleted objects): PARENTS before CHILDREN
+
+        Algorithm:
+        1. Initial ordering: Undo CREATEs, Undo UPDATEs, Undo DELETEs
+        2. Build dependency graph:
+           - For undo CREATEs: if object A references object B, delete A before B (children first)
+           - For undo DELETEs: if object A referenced object B, restore B before A (parents first)
+        3. Topological sort respecting dependencies
+
+        Returns: ordered list of CollapsedChange objects
+        """
+        logger.info(f"Ordering {len(collapsed_changes)} collapsed changes for revert...")
+
+        # Remove skipped objects
+        to_process = {k: v for k, v in collapsed_changes.items() if v.final_action != 'skip'}
+        skipped = [v for v in collapsed_changes.values() if v.final_action == 'skip']
+
+        logger.info(f"  {len(skipped)} changes will be skipped (created and deleted in branch)")
+        logger.info(f"  {len(to_process)} changes to process")
+
+        if not to_process:
+            return []
+
+        # Group by action type (what needs to be undone)
+        undo_creates = sorted(
+            [v for v in to_process.values() if v.final_action == 'create'],
+            key=lambda c: c.last_change.time
+        )
+        undo_updates = sorted(
+            [v for v in to_process.values() if v.final_action == 'update'],
+            key=lambda c: c.last_change.time
+        )
+        undo_deletes = sorted(
+            [v for v in to_process.values() if v.final_action == 'delete'],
+            key=lambda c: c.last_change.time
+        )
+
+        logger.info(
+            f"  Revert groups: {len(undo_creates)} creates to undo, "
+            f"{len(undo_updates)} updates to undo, {len(undo_deletes)} deletes to undo"
+        )
+
+        # Reset dependencies
+        for collapsed in to_process.values():
+            collapsed.depends_on = set()
+            collapsed.depended_by = set()
+
+        # Build lookup maps
+        undo_creates_map = {c.key: c for c in undo_creates}
+        undo_deletes_map = {c.key: c for c in undo_deletes}
+
+        logger.info("Building dependency graph for revert...")
+
+        # 1. For undo CREATEs: if A references B, must delete A before B (children first)
+        logger.debug("  Analyzing undo CREATE dependencies...")
+        for undo_create in undo_creates:
+            if undo_create.postchange_data:
+                refs = Branch._get_fk_references(
+                    undo_create.model_class,
+                    undo_create.postchange_data,
+                    undo_creates_map.keys()
+                )
+                for ref_key in refs:
+                    if ref_key != undo_create.key:
+                        # This object references another created object
+                        # Must delete this object BEFORE the referenced object
+                        ref_create = undo_creates_map[ref_key]
+                        ref_create.depends_on.add(undo_create.key)
+                        undo_create.depended_by.add(ref_key)
+                        logger.debug(
+                            f"    Undo {ref_create} depends on undo {undo_create} "
+                            f"(delete child before parent)"
+                        )
+
+        # 2. For undo DELETEs: if A referenced B, must restore B before A (parents first)
+        logger.debug("  Analyzing undo DELETE dependencies...")
+        for undo_delete in undo_deletes:
+            if undo_delete.prechange_data:
+                refs = Branch._get_fk_references(
+                    undo_delete.model_class,
+                    undo_delete.prechange_data,
+                    undo_deletes_map.keys()
+                )
+                for ref_key in refs:
+                    # This object referenced another deleted object
+                    # Must restore the referenced object BEFORE this object
+                    ref_delete = undo_deletes_map[ref_key]
+                    undo_delete.depends_on.add(ref_key)
+                    ref_delete.depended_by.add(undo_delete.key)
+                    logger.debug(
+                        f"    Undo {undo_delete} depends on undo {ref_delete} "
+                        f"(restore parent before child)"
+                    )
+
+        # 3. Use topological sort to order all changes
+        total_deps = sum(len(c.depends_on) for c in to_process.values())
+        logger.info(f"  Dependency graph built: {total_deps} dependencies")
+        logger.info("  Performing topological sort...")
+        ordered_keys = Branch._topological_sort_with_cycle_detection(to_process, logger)
+
+        # Convert keys back to CollapsedChange objects
+        ordered = [to_process[key] for key in ordered_keys]
+
+        logger.info(f"  Revert ordering completed: {len(ordered)} changes ordered")
+        return ordered
+
+    @staticmethod
     def _order_collapsed_changes(collapsed_changes, logger):
         """
         Order collapsed changes respecting dependencies and time.
@@ -1177,23 +1291,19 @@ class Branch(JobsMixin, PrimaryModel):
                     collapsed.postchange_data = postchange_data
                     collapsed.last_change = last_change
 
-                # Order collapsed changes based on dependencies (same as merge)
-                ordered_changes = Branch._order_collapsed_changes(collapsed_changes, logger)
+                # Order collapsed changes for revert (handles dependencies differently than merge)
+                ordered_changes = Branch._order_collapsed_changes_for_revert(collapsed_changes, logger)
 
-                # REVERSE the order for revert (undo in opposite order)
-                logger.info(f"Reversing order for revert: {len(ordered_changes)} collapsed changes")
-                reversed_changes = list(reversed(ordered_changes))
-
-                # Undo collapsed changes in reverse order
-                logger.info(f"Undoing {len(reversed_changes)} collapsed changes in reverse order...")
-                for i, collapsed in enumerate(reversed_changes, 1):
+                # Undo collapsed changes in dependency order
+                logger.info(f"Undoing {len(ordered_changes)} collapsed changes in dependency order...")
+                for i, collapsed in enumerate(ordered_changes, 1):
                     model_class = collapsed.model_class
                     models.add(model_class)
 
                     # Use the last change's metadata for tracking
                     last_change = collapsed.last_change
                     logger.info(
-                        f"[{i}/{len(reversed_changes)}] Undoing {collapsed.final_action} "
+                        f"[{i}/{len(ordered_changes)}] Undoing {collapsed.final_action} "
                         f"{model_class._meta.verbose_name} (ID: {collapsed.key[1]})"
                     )
 
