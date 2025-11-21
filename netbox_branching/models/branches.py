@@ -678,18 +678,25 @@ class Branch(JobsMixin, PrimaryModel):
         return references
 
     @staticmethod
-    def _topological_sort_with_cycle_detection(collapsed_changes, logger):
+    def _dependency_order_by_references(collapsed_changes, logger):
         """
-        Topological sort with cycle detection.
-        Returns: (ordered_list, cycles_detected)
+        Orders collapsed changes using topological sort with cycle detection.
 
-        If cycles are detected, breaks them and continues, returning the partial order.
+        Uses Kahn's algorithm to order nodes respecting their dependency graph.
+        Reference: https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm
 
-        When multiple nodes have no dependencies, they are ordered by action type priority:
-        DELETE (0) -> UPDATE (1) -> CREATE (2)
-        This maintains the initial grouping when there are no explicit dependencies.
+        The algorithm processes nodes in "layers" - first all nodes with no dependencies,
+        then all nodes whose dependencies have been satisfied, and so on.
+
+        When multiple nodes have no dependencies (equal priority in the dependency graph),
+        they are ordered by action type priority: DELETE (0) -> UPDATE (1) -> CREATE (2).
+        This maintains the action type grouping when there are no explicit FK dependencies.
+
+        If cycles are detected, breaks them and continues, returning a partial order.
+
+        Returns: ordered list of keys
         """
-        logger.info("Performing topological sort...")
+        logger.info("Adjusting ordering by references...")
 
         # Define action priority (lower number = higher priority = processed first)
         action_priority = {
@@ -714,15 +721,39 @@ class Branch(JobsMixin, PrimaryModel):
 
             if not ready:
                 # No nodes without dependencies - we have a cycle
-                logger.warning("  Cycle detected in dependency graph. Breaking cycle to continue.")
-                # Pick a node arbitrarily to break the cycle
-                key = next(iter(remaining))
-                ready = [key]
-                logger.warning(f"  Breaking cycle by processing {collapsed_changes[key]} first")
+                logger.error("  Cycle detected in dependency graph.")
+
+                # Log details about the nodes involved in the cycle
+                for key, deps in list(remaining.items())[:5]:  # Show first 5 nodes
+                    collapsed = collapsed_changes[key]
+                    model_name = collapsed.model_class.__name__
+                    obj_id = collapsed.key[1]
+                    action = collapsed.final_action.upper()
+
+                    # Try to get identifying info
+                    data = collapsed.postchange_data or collapsed.prechange_data or {}
+                    identifying_info = []
+                    for field in ['name', 'slug', 'label']:
+                        if field in data:
+                            identifying_info.append(f"{field}={data[field]!r}")
+                    info_str = f" ({', '.join(identifying_info)})" if identifying_info else ""
+
+                    logger.error(f"    {action} {model_name} (ID: {obj_id}){info_str} depends on: {deps}")
+
+                if len(remaining) > 5:
+                    logger.error(f"    ... and {len(remaining) - 5} more nodes in cycle")
+
+                raise Exception(
+                    f"Cycle detected in dependency graph. {len(remaining)} changes are involved in "
+                    f"circular dependencies and cannot be ordered. Check the logs above for details."
+                )
             else:
-                # Sort ready nodes by action priority to maintain DELETE -> UPDATE -> CREATE ordering
-                # when there are no dependencies between them
-                ready.sort(key=lambda k: action_priority.get(collapsed_changes[k].final_action, 99))
+                # Sort ready nodes by action priority (primary) and time (secondary)
+                # This maintains DELETE -> UPDATE -> CREATE ordering, with time ordering within each group
+                ready.sort(key=lambda k: (
+                    action_priority.get(collapsed_changes[k].final_action, 99),
+                    collapsed_changes[k].last_change.time
+                ))
 
             # Process ready nodes
             for key in ready:
@@ -734,11 +765,35 @@ class Branch(JobsMixin, PrimaryModel):
                     deps.discard(key)
 
         if iteration >= max_iterations:
-            logger.error("  Topological sort exceeded maximum iterations. Possible complex cycle.")
-            # Add remaining nodes in arbitrary order
-            ordered.extend(remaining.keys())
+            logger.error("  Ordering by references exceeded maximum iterations. Possible complex cycle.")
 
-        logger.info(f"  Topological sort completed: {len(ordered)} changes ordered")
+            # Log details about the remaining unprocessed nodes
+            for key, deps in list(remaining.items())[:5]:  # Show first 5 nodes
+                collapsed = collapsed_changes[key]
+                model_name = collapsed.model_class.__name__
+                obj_id = collapsed.key[1]
+                action = collapsed.final_action.upper()
+
+                # Try to get identifying info
+                data = collapsed.postchange_data or collapsed.prechange_data or {}
+                identifying_info = []
+                for field in ['name', 'slug', 'label']:
+                    if field in data:
+                        identifying_info.append(f"{field}={data[field]!r}")
+                info_str = f" ({', '.join(identifying_info)})" if identifying_info else ""
+
+                logger.error(f"    {action} {model_name} (ID: {obj_id}){info_str} still depends on: {deps}")
+
+            if len(remaining) > 5:
+                logger.error(f"    ... and {len(remaining) - 5} more unprocessed nodes")
+
+            raise Exception(
+                f"Ordering by references exceeded maximum iterations ({max_iterations}). "
+                f"{len(remaining)} changes could not be ordered, possibly due to a complex cycle. "
+                f"Check the logs above for details."
+            )
+
+        logger.info(f"  Ordering by references completed: {len(ordered)} changes ordered")
         return ordered
 
     @staticmethod
@@ -894,7 +949,7 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info(f"  Dependency graph built: {total_deps} dependencies")
 
         # Topological sort to respect dependencies
-        ordered_keys = Branch._topological_sort_with_cycle_detection(to_process, logger)
+        ordered_keys = Branch._dependency_order_by_references(to_process, logger)
 
         # Convert keys back to collapsed changes
         result = [to_process[key] for key in ordered_keys]
