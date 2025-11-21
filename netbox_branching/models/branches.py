@@ -324,7 +324,8 @@ class Branch(JobsMixin, PrimaryModel):
         migrators = defaultdict(list)
         for migration in self.applied_migrations:
             app_label, name = migration.split('.')
-            module = importlib.import_module(f'{app_label}.migrations.{name}')
+            module_name = f'{app_label}.migrations.{name}'
+            module = importlib.import_module(module_name)
             for object_type, migrator in getattr(module, 'objectchange_migrators', {}).items():
                 migrators[object_type].append(migrator)
         return migrators
@@ -1112,6 +1113,7 @@ class Branch(JobsMixin, PrimaryModel):
                 request.id = change.request_id
                 request.user = change.user
                 change.apply(self, using=DEFAULT_DB_ALIAS, logger=logger)
+
         if not commit:
             raise AbortTransaction()
 

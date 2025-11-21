@@ -248,7 +248,8 @@ class BranchMergeView(BaseBranchActionView):
         MergeBranchJob.enqueue(
             instance=branch,
             user=request.user,
-            commit=form.cleaned_data['commit']
+            commit=form.cleaned_data['commit'],
+            job_timeout=MergeBranchJob.Meta.job_timeout
         )
         messages.success(request, _("Merging of branch {branch} in progress").format(branch=branch))
 
