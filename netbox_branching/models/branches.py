@@ -658,7 +658,6 @@ class Branch(JobsMixin, PrimaryModel):
         references = set()
         for field in model_class._meta.get_fields():
             if isinstance(field, models.ForeignKey):
-                # Django's serializer uses field.name (e.g., 'device'), not field.attname (e.g., 'device_id')
                 fk_value = data.get(field.name)
 
                 if fk_value:
