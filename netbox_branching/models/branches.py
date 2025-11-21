@@ -649,8 +649,8 @@ class Branch(JobsMixin, PrimaryModel):
     @staticmethod
     def _get_fk_references(model_class, data, changed_objects):
         """
-        Get FK references from data that point to objects in changed_objects.
-        Returns: set of (content_type_id, object_id) tuples
+        Find foreign key references in the given data that point to objects in changed_objects.
+        Returns a set of (content_type_id, object_id) tuples.
         """
         if not data:
             return set()
@@ -658,13 +658,8 @@ class Branch(JobsMixin, PrimaryModel):
         references = set()
         for field in model_class._meta.get_fields():
             if isinstance(field, models.ForeignKey):
-                # Try both the attname (device_id) and the field name (device)
-                fk_field_name = field.attname  # e.g., 'device_id'
-                fk_value = data.get(fk_field_name)
-
-                # If not found, try the field name without _id suffix
-                if not fk_value:
-                    fk_value = data.get(field.name)
+                # Django's serializer uses field.name (e.g., 'device'), not field.attname (e.g., 'device_id')
+                fk_value = data.get(field.name)
 
                 if fk_value:
                     # Get the content type of the related model
@@ -977,6 +972,7 @@ class Branch(JobsMixin, PrimaryModel):
         Apply a collapsed change to the database.
         Similar to ObjectChange.apply() but works with collapsed data.
         """
+        from utilities.serialization import deserialize_object
         from netbox_branching.utilities import update_object
 
         logger = logger or logging.getLogger('netbox_branching.branch._apply_collapsed_change')
@@ -1045,7 +1041,10 @@ class Branch(JobsMixin, PrimaryModel):
         Undo a collapsed change from the database (reverse of apply).
         Follows the same pattern as ObjectChange.undo().
         """
+        from django.contrib.contenttypes.fields import GenericForeignKey
+        from utilities.serialization import deserialize_object
         from netbox_branching.utilities import update_object
+        from core.choices import ObjectChangeActionChoices
 
         logger = logger or logging.getLogger('netbox_branching.branch._undo_collapsed_change')
         model = collapsed.model_class
