@@ -678,6 +678,103 @@ class Branch(JobsMixin, PrimaryModel):
         return references
 
     @staticmethod
+    def _build_fk_dependency_graph(deletes, updates, creates, deletes_map, creates_map, logger):
+        """
+        Build the FK dependency graph between collapsed changes.
+
+        Analyzes foreign key references in the data to determine which changes depend on others:
+        - UPDATEs that remove FK references must happen before DELETEs
+        - UPDATEs that add FK references must happen after CREATEs
+        - CREATEs that reference other created objects must happen after those CREATEs
+        - DELETEs of child objects must happen before DELETEs of parent objects
+
+        Modifies the CollapsedChange objects in place by setting their depends_on and depended_by sets.
+        """
+        # 1. Check UPDATEs for dependencies
+        logger.debug("  Analyzing UPDATE dependencies...")
+        for update in updates:
+            # Check if UPDATE references deleted object in prechange_data
+            # This means the UPDATE had a reference that it's removing
+            # The UPDATE must happen BEFORE the DELETE so the FK reference is removed first
+            if update.changes[0].prechange_data:
+                prechange_refs = Branch._get_fk_references(
+                    update.model_class,
+                    update.changes[0].prechange_data,
+                    deletes_map.keys()
+                )
+                for ref_key in prechange_refs:
+                    # DELETE depends on UPDATE (UPDATE removes reference, then DELETE can proceed)
+                    delete_collapsed = deletes_map[ref_key]
+                    delete_collapsed.depends_on.add(update.key)
+                    update.depended_by.add(ref_key)
+                    logger.debug(
+                        f"    {delete_collapsed} depends on {update} "
+                        f"(UPDATE removes FK reference before DELETE)"
+                    )
+
+            # Check if UPDATE references created object in postchange_data
+            # This means the UPDATE needs the CREATE to exist first
+            # The CREATE must happen BEFORE the UPDATE
+            if update.postchange_data:
+                postchange_refs = Branch._get_fk_references(
+                    update.model_class,
+                    update.postchange_data,
+                    creates_map.keys()
+                )
+                for ref_key in postchange_refs:
+                    # UPDATE depends on CREATE
+                    create_collapsed = creates_map[ref_key]
+                    update.depends_on.add(ref_key)
+                    create_collapsed.depended_by.add(update.key)
+                    logger.debug(
+                        f"    {update} depends on {create_collapsed} "
+                        f"(UPDATE references created object)"
+                    )
+
+        # 2. Check CREATEs for dependencies on other CREATEs
+        logger.debug("  Analyzing CREATE dependencies...")
+        for create in creates:
+            if create.postchange_data:
+                # Check if this CREATE references other created objects
+                refs = Branch._get_fk_references(
+                    create.model_class,
+                    create.postchange_data,
+                    creates_map.keys()
+                )
+                for ref_key in refs:
+                    if ref_key != create.key:  # Don't self-reference
+                        # CREATE depends on another CREATE
+                        ref_create = creates_map[ref_key]
+                        create.depends_on.add(ref_key)
+                        ref_create.depended_by.add(create.key)
+                        logger.debug(
+                            f"    {create} depends on {ref_create} "
+                            f"(CREATE references another created object)"
+                        )
+
+        # 3. Check DELETEs for dependencies on other DELETEs
+        logger.debug("  Analyzing DELETE dependencies...")
+        for delete in deletes:
+            if delete.prechange_data:
+                # Check if this DELETE references other deleted objects
+                refs = Branch._get_fk_references(
+                    delete.model_class,
+                    delete.prechange_data,
+                    deletes_map.keys()
+                )
+                for ref_key in refs:
+                    if ref_key != delete.key:  # Don't self-reference
+                        # This delete references another deleted object
+                        # The referenced object must be deleted AFTER this one (child before parent)
+                        ref_delete = deletes_map[ref_key]
+                        ref_delete.depends_on.add(delete.key)
+                        delete.depended_by.add(ref_key)
+                        logger.debug(
+                            f"    {ref_delete} depends on {delete} "
+                            f"(child DELETE must happen before parent DELETE)"
+                        )
+
+    @staticmethod
     def _dependency_order_by_references(collapsed_changes, logger):
         """
         Orders collapsed changes using topological sort with cycle detection.
@@ -860,90 +957,7 @@ class Branch(JobsMixin, PrimaryModel):
         creates_map = {c.key: c for c in creates}
 
         logger.info("Building dependency graph...")
-
-        # 1. Check UPDATEs for dependencies
-        logger.debug("  Analyzing UPDATE dependencies...")
-        for update in updates:
-            # Check if UPDATE references deleted object in prechange_data
-            # This means the UPDATE had a reference that it's removing
-            # The UPDATE must happen BEFORE the DELETE so the FK reference is removed first
-            if update.changes[0].prechange_data:
-                prechange_refs = Branch._get_fk_references(
-                    update.model_class,
-                    update.changes[0].prechange_data,
-                    deletes_map.keys()
-                )
-                for ref_key in prechange_refs:
-                    # DELETE depends on UPDATE (UPDATE removes reference, then DELETE can proceed)
-                    delete_collapsed = deletes_map[ref_key]
-                    delete_collapsed.depends_on.add(update.key)
-                    update.depended_by.add(ref_key)
-                    logger.debug(
-                        f"    {delete_collapsed} depends on {update} "
-                        f"(UPDATE removes FK reference before DELETE)"
-                    )
-
-            # Check if UPDATE references created object in postchange_data
-            # This means the UPDATE needs the CREATE to exist first
-            # The CREATE must happen BEFORE the UPDATE
-            if update.postchange_data:
-                postchange_refs = Branch._get_fk_references(
-                    update.model_class,
-                    update.postchange_data,
-                    creates_map.keys()
-                )
-                for ref_key in postchange_refs:
-                    # UPDATE depends on CREATE
-                    create_collapsed = creates_map[ref_key]
-                    update.depends_on.add(ref_key)
-                    create_collapsed.depended_by.add(update.key)
-                    logger.debug(
-                        f"    {update} depends on {create_collapsed} "
-                        f"(UPDATE references created object)"
-                    )
-
-        # 2. Check CREATEs for dependencies on other CREATEs
-        logger.debug("  Analyzing CREATE dependencies...")
-        for create in creates:
-            if create.postchange_data:
-                # Check if this CREATE references other created objects
-                refs = Branch._get_fk_references(
-                    create.model_class,
-                    create.postchange_data,
-                    creates_map.keys()
-                )
-                for ref_key in refs:
-                    if ref_key != create.key:  # Don't self-reference
-                        # CREATE depends on another CREATE
-                        ref_create = creates_map[ref_key]
-                        create.depends_on.add(ref_key)
-                        ref_create.depended_by.add(create.key)
-                        logger.debug(
-                            f"    {create} depends on {ref_create} "
-                            f"(CREATE references another created object)"
-                        )
-
-        # 3. Check DELETEs for dependencies on other DELETEs
-        logger.debug("  Analyzing DELETE dependencies...")
-        for delete in deletes:
-            if delete.prechange_data:
-                # Check if this DELETE references other deleted objects
-                refs = Branch._get_fk_references(
-                    delete.model_class,
-                    delete.prechange_data,
-                    deletes_map.keys()
-                )
-                for ref_key in refs:
-                    if ref_key != delete.key:  # Don't self-reference
-                        # This delete references another deleted object
-                        # The referenced object must be deleted AFTER this one (child before parent)
-                        ref_delete = deletes_map[ref_key]
-                        ref_delete.depends_on.add(delete.key)
-                        delete.depended_by.add(ref_key)
-                        logger.debug(
-                            f"    {ref_delete} depends on {delete} "
-                            f"(child DELETE must happen before parent DELETE)"
-                        )
+        Branch._build_fk_dependency_graph(deletes, updates, creates, deletes_map, creates_map, logger)
 
         total_deps = sum(len(c.depends_on) for c in to_process.values())
         logger.info(f"  Dependency graph built: {total_deps} dependencies")
