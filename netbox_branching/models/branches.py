@@ -8,6 +8,7 @@ from functools import cached_property, partial
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
@@ -21,7 +22,10 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from mptt.models import MPTTModel
 
+from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
+from utilities.data import shallow_compare_dict
+from utilities.serialization import deserialize_object
 from netbox.config import get_config
 from netbox.context import current_request
 from netbox.context_managers import event_tracking
@@ -540,9 +544,6 @@ class Branch(JobsMixin, PrimaryModel):
 
         Returns: dict with 'pre' and 'post' keys containing changed attributes
         """
-        from utilities.data import shallow_compare_dict
-        from core.choices import ObjectChangeActionChoices
-
         prechange_data = prechange_data or {}
         postchange_data = postchange_data or {}
 
@@ -678,7 +679,7 @@ class Branch(JobsMixin, PrimaryModel):
         return references
 
     @staticmethod
-    def _build_fk_dependency_graph(deletes, updates, creates, deletes_map, creates_map, logger):
+    def _build_fk_dependency_graph(deletes, updates, creates, logger):
         """
         Build the FK dependency graph between collapsed changes.
 
@@ -690,6 +691,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         Modifies the CollapsedChange objects in place by setting their depends_on and depended_by sets.
         """
+        # Build lookup maps for efficient dependency checking
+        deletes_map = {c.key: c for c in deletes}
+        creates_map = {c.key: c for c in creates}
+
         # 1. Check UPDATEs for dependencies
         logger.debug("  Analyzing UPDATE dependencies...")
         for update in updates:
@@ -952,12 +957,8 @@ class Branch(JobsMixin, PrimaryModel):
             collapsed.depends_on = set()
             collapsed.depended_by = set()
 
-        # Build lookup maps for efficient dependency checking
-        deletes_map = {c.key: c for c in deletes}
-        creates_map = {c.key: c for c in creates}
-
         logger.info("Building dependency graph...")
-        Branch._build_fk_dependency_graph(deletes, updates, creates, deletes_map, creates_map, logger)
+        Branch._build_fk_dependency_graph(deletes, updates, creates, logger)
 
         total_deps = sum(len(c.depends_on) for c in to_process.values())
         logger.info(f"  Dependency graph built: {total_deps} dependencies")
@@ -976,7 +977,6 @@ class Branch(JobsMixin, PrimaryModel):
         Apply a collapsed change to the database.
         Similar to ObjectChange.apply() but works with collapsed data.
         """
-        from utilities.serialization import deserialize_object
         from netbox_branching.utilities import update_object
 
         logger = logger or logging.getLogger('netbox_branching.branch._apply_collapsed_change')
@@ -1045,10 +1045,7 @@ class Branch(JobsMixin, PrimaryModel):
         Undo a collapsed change from the database (reverse of apply).
         Follows the same pattern as ObjectChange.undo().
         """
-        from django.contrib.contenttypes.fields import GenericForeignKey
-        from utilities.serialization import deserialize_object
         from netbox_branching.utilities import update_object
-        from core.choices import ObjectChangeActionChoices
 
         logger = logger or logging.getLogger('netbox_branching.branch._undo_collapsed_change')
         model = collapsed.model_class
