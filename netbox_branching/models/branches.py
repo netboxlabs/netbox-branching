@@ -531,9 +531,11 @@ class Branch(JobsMixin, PrimaryModel):
             self.depended_by = set()  # Set of keys that depend on this change
 
         def __repr__(self):
-            ct_id, obj_id = self.key
+            # Key can be (ct_id, obj_id) or (ct_id, obj_id, suffix) for split operations
+            obj_id = self.key[1]
+            suffix = f" ({self.key[2]})" if len(self.key) > 2 else ""
             return (
-                f"<CollapsedChange {self.model_class.__name__}:{obj_id} "
+                f"<CollapsedChange {self.model_class.__name__}:{obj_id}{suffix} "
                 f"action={self.final_action} changes={len(self.changes)}>"
             )
 
@@ -775,9 +777,131 @@ class Branch(JobsMixin, PrimaryModel):
                         )
 
     @staticmethod
+    def _find_cycle_nodes(collapsed_changes, logger):
+        """
+        Find nodes involved in dependency cycles.
+        Returns a set of keys that are part of cycles, or None if no cycles.
+        """
+        # Build dependency counts
+        in_degree = {key: len(c.depends_on) for key, c in collapsed_changes.items()}
+        remaining = dict(in_degree)
+
+        # Process nodes with no dependencies
+        while True:
+            ready = [key for key, deps_count in remaining.items() if deps_count == 0]
+            if not ready:
+                break
+
+            for key in ready:
+                del remaining[key]
+                # Decrease dependency count for nodes that depended on this one
+                collapsed = collapsed_changes[key]
+                for dependent_key in collapsed.depended_by:
+                    if dependent_key in remaining:
+                        remaining[dependent_key] -= 1
+
+        # Any remaining nodes are part of cycles
+        if remaining:
+            logger.debug(f"  Found {len(remaining)} nodes in cycles")
+            return set(remaining.keys())
+        return None
+
+    @staticmethod
+    def _try_split_cycle_creates(collapsed_changes, cycle_nodes, logger):
+        """
+        Try to break cycles by splitting CREATE operations that have nullable FK fields
+        pointing to other objects in the cycle.
+
+        Returns True if any splits were made, False otherwise.
+        """
+        splits_made = False
+        creates_map = {key: c for key, c in collapsed_changes.items() if c.final_action == 'create'}
+
+        for key in cycle_nodes:
+            collapsed = collapsed_changes.get(key)
+            if not collapsed or collapsed.final_action != 'create':
+                continue
+
+            # Check if this CREATE has FK dependencies on other nodes in the cycle
+            has_cycle_fk = False
+            for dep_key in collapsed.depends_on:
+                if dep_key in cycle_nodes:
+                    has_cycle_fk = True
+                    break
+
+            if not has_cycle_fk:
+                continue
+
+            # Find nullable FK fields in postchange_data that point to cycle nodes
+            nullable_fks = {}
+            if collapsed.postchange_data:
+                model_class = collapsed.model_class
+                logger.debug(f"    Checking {model_class.__name__} for nullable FKs...")
+                for field in model_class._meta.get_fields():
+                    if isinstance(field, models.ForeignKey):
+                        logger.debug(f"      Field {field.name}: nullable={field.null}")
+                        if field.null:
+                            # ObjectChange stores FK fields using field.name, not field.name_id
+                            fk_value = collapsed.postchange_data.get(field.name)
+                            logger.debug(f"        FK field {field.name} = {fk_value}")
+
+                            if fk_value is not None:
+                                # Check if this FK points to an object in the cycle
+                                related_model = field.related_model
+                                from django.contrib.contenttypes.models import ContentType
+                                related_ct = ContentType.objects.get_for_model(related_model)
+                                ref_key = (related_ct.id, fk_value)
+                                logger.debug(f"        Points to {related_model.__name__} {fk_value}, ref_key={ref_key}, in_cycle={ref_key in cycle_nodes}")
+
+                                if ref_key in cycle_nodes:
+                                    nullable_fks[field.name] = fk_value
+                                    logger.debug(f"    Found nullable FK {field.name} causing cycle in {collapsed}")
+
+            if not nullable_fks:
+                continue
+
+            # Split this CREATE: keep FK fields NULL, create UPDATE to set them
+            logger.info(f"  Splitting {collapsed} to break cycle (deferring {len(nullable_fks)} FK fields: {list(nullable_fks.keys())})")
+
+            # Modify CREATE to have NULL for the problematic FK fields
+            create_postchange = dict(collapsed.postchange_data)
+            for fk_field_name in nullable_fks:
+                create_postchange[fk_field_name] = None
+
+            # Store original postchange_data and update the CREATE
+            original_postchange = collapsed.postchange_data
+            collapsed.postchange_data = create_postchange
+
+            # Create new UPDATE operation with a new unique key
+            # Use a tuple (ct_id, obj_id, 'update_fk') to make it unique
+            update_key = (key[0], key[1], 'update_fk')
+            update_collapsed = Branch.CollapsedChange(update_key, collapsed.model_class)
+            update_collapsed.changes = [collapsed.last_change]
+            update_collapsed.final_action = 'update'
+            update_collapsed.prechange_data = dict(create_postchange)  # State after CREATE
+            update_collapsed.postchange_data = dict(original_postchange)  # Final state with FKs set
+            update_collapsed.last_change = collapsed.last_change
+
+            # Add UPDATE to collapsed_changes
+            collapsed_changes[update_key] = update_collapsed
+
+            # The UPDATE depends on the CREATE
+            update_collapsed.depends_on.add(key)
+            collapsed.depended_by.add(update_key)
+
+            # The UPDATE also depends on the FK target objects
+            # (these dependencies will be set up properly when we rebuild the dependency graph)
+
+            splits_made = True
+
+        return splits_made
+
+    @staticmethod
     def _dependency_order_by_references(collapsed_changes, logger):
         """
         Orders collapsed changes using topological sort with cycle detection.
+        If cycles are detected, attempts to break them by splitting CREATE operations
+        with nullable FK fields.
 
         Uses Kahn's algorithm to order nodes respecting their dependency graph.
         Reference: https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm
@@ -818,7 +942,10 @@ class Branch(JobsMixin, PrimaryModel):
 
             if not ready:
                 # No nodes without dependencies - we have a cycle
-                logger.error("  Cycle detected in dependency graph.")
+                logger.warning("  Cycle detected in dependency graph. Attempting to break cycle...")
+
+                # Find nodes in the cycle
+                cycle_nodes = set(remaining.keys())
 
                 # Log details about the nodes involved in the cycle
                 for key, deps in list(remaining.items())[:5]:  # Show first 5 nodes
@@ -835,15 +962,43 @@ class Branch(JobsMixin, PrimaryModel):
                             identifying_info.append(f"{field}={data[field]!r}")
                     info_str = f" ({', '.join(identifying_info)})" if identifying_info else ""
 
-                    logger.error(f"    {action} {model_name} (ID: {obj_id}){info_str} depends on: {deps}")
+                    logger.warning(f"    {action} {model_name} (ID: {obj_id}){info_str} depends on: {deps}")
 
                 if len(remaining) > 5:
-                    logger.error(f"    ... and {len(remaining) - 5} more nodes in cycle")
+                    logger.warning(f"    ... and {len(remaining) - 5} more nodes in cycle")
 
-                raise Exception(
-                    f"Cycle detected in dependency graph. {len(remaining)} changes are involved in "
-                    f"circular dependencies and cannot be ordered. Check the logs above for details."
-                )
+                # Try to break the cycle by splitting CREATE operations
+                splits_made = Branch._try_split_cycle_creates(collapsed_changes, cycle_nodes, logger)
+
+                if not splits_made:
+                    # Could not break the cycle
+                    logger.error("  Failed to break cycle - no CREATE operations with nullable FK fields found")
+                    raise Exception(
+                        f"Cycle detected in dependency graph. {len(remaining)} changes are involved in "
+                        f"circular dependencies and cannot be ordered. Check the logs above for details."
+                    )
+
+                # Splits were made, need to rebuild dependencies and restart
+                logger.info("  Cycle broken by splitting CREATE operations. Rebuilding dependencies...")
+
+                # Clear existing dependencies
+                for collapsed in collapsed_changes.values():
+                    collapsed.depends_on.clear()
+                    collapsed.depended_by.clear()
+
+                # Separate changes by action
+                deletes = [c for c in collapsed_changes.values() if c.final_action == 'delete']
+                updates = [c for c in collapsed_changes.values() if c.final_action == 'update']
+                creates = [c for c in collapsed_changes.values() if c.final_action == 'create']
+
+                # Rebuild dependency graph
+                Branch._build_fk_dependency_graph(deletes, updates, creates, logger)
+
+                # Restart ordering from scratch
+                remaining = {key: set(collapsed.depends_on) for key, collapsed in collapsed_changes.items()}
+                ordered = []
+                iteration = 0
+                continue
             else:
                 # Sort ready nodes by action priority (primary) and time (secondary)
                 # This maintains DELETE -> UPDATE -> CREATE ordering, with time ordering within each group
@@ -1012,8 +1167,7 @@ class Branch(JobsMixin, PrimaryModel):
 
             # Calculate what fields changed from the collapsed changes
             # We need to figure out what changed between initial and final state
-            first_change = collapsed.changes[0]
-            initial_data = first_change.prechange_data or {}
+            initial_data = collapsed.prechange_data or {}
             final_data = collapsed.postchange_data or {}
 
             # Only update fields that actually changed

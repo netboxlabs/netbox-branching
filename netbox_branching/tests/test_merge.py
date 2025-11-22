@@ -8,6 +8,7 @@ from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
 
+from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
 from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchStatusChoices
@@ -750,3 +751,75 @@ class MergeTestCase(TransactionTestCase):
         # Verify revert deleted the created object
         self.assertTrue(Site.objects.filter(id=site_main_id).exists())
         self.assertFalse(Site.objects.filter(id=site_branch_id).exists())
+
+    def test_merge_circuit_termination_circular_dependency(self):
+        """
+        Test merge with Circuit and CircuitTermination circular dependency.
+
+        This tests the scenario where:
+        - Circuit.termination_a → CircuitTermination (nullable FK)
+        - CircuitTermination.circuit → Circuit (required FK)
+
+        By keeping CREATE and UPDATE operations separate, we avoid circular dependencies:
+        1. CREATE Circuit with termination_a=NULL
+        2. CREATE CircuitTermination with circuit pointing to Circuit
+        3. UPDATE Circuit to set termination_a to CircuitTermination
+        """
+        # Create provider and circuit type in main
+        provider = Provider.objects.create(name='Provider 1', slug='provider-1')
+        circuit_type = CircuitType.objects.create(name='Circuit Type 1', slug='circuit-type-1')
+        site = Site.objects.create(name='Site 1', slug='site-1')
+
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In branch: create Circuit and CircuitTermination with circular dependency
+        with activate_branch(branch), event_tracking(request):
+            # Step 1: Create Circuit without termination_a (will be NULL initially)
+            circuit = Circuit.objects.create(
+                cid='TEST-001',
+                provider=provider,
+                type=circuit_type
+            )
+            circuit_id = circuit.id
+
+            # Step 2: Create CircuitTermination pointing to the Circuit
+            termination = CircuitTermination.objects.create(
+                circuit=circuit,
+                termination=site,
+                term_side='A'
+            )
+            termination_id = termination.id
+
+            # Step 3: Update Circuit to set termination_a to the CircuitTermination
+            # This creates the circular reference
+            circuit.snapshot()
+            circuit.termination_a = termination
+            circuit.save()
+
+        # Merge branch - should succeed without circular dependency issues
+        branch.merge(user=self.user, commit=True)
+
+        # Verify main schema - both objects should exist with correct relationships
+        circuit = Circuit.objects.get(id=circuit_id)
+        termination = CircuitTermination.objects.get(id=termination_id)
+
+        self.assertEqual(circuit.cid, 'TEST-001')
+        self.assertEqual(circuit.termination_a_id, termination_id)
+        self.assertEqual(termination.circuit_id, circuit_id)
+
+        # Verify branch status
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        # Revert branch - should cleanly remove both objects
+        branch.revert(user=self.user, commit=True)
+
+        # Verify revert deleted both objects
+        self.assertFalse(Circuit.objects.filter(id=circuit_id).exists())
+        self.assertFalse(CircuitTermination.objects.filter(id=termination_id).exists())
