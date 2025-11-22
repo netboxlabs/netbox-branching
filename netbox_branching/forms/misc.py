@@ -20,13 +20,23 @@ class BranchActionForm(forms.Form):
         label=_('Commit changes'),
         help_text=_('Leave unchecked to perform a dry run')
     )
+    collapse_changes = forms.BooleanField(
+        required=False,
+        initial=False,
+        label=_('Collapse Object Changes'),
+        help_text=_('Use the collapsed merge strategy')
+    )
 
-    def __init__(self, branch, *args, allow_commit=True, **kwargs):
+    def __init__(self, branch, *args, allow_commit=True, action=None, **kwargs):
         self.branch = branch
         super().__init__(*args, **kwargs)
 
         if not allow_commit:
             self.fields['commit'].disabled = True
+
+        # Only show collapse_changes for merge operations, not revert
+        if action == 'revert':
+            del self.fields['collapse_changes']
 
     def clean(self):
         super().clean()

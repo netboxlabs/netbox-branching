@@ -8,6 +8,8 @@ from functools import cached_property, partial
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
@@ -20,7 +22,10 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from mptt.models import MPTTModel
 
+from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
+from utilities.data import shallow_compare_dict
+from utilities.serialization import deserialize_object
 from netbox.config import get_config
 from netbox.context import current_request
 from netbox.context_managers import event_tracking
@@ -95,6 +100,11 @@ class Branch(JobsMixin, PrimaryModel):
         blank=True,
         null=True,
         related_name='+'
+    )
+    merged_using_collapsed = models.BooleanField(
+        verbose_name=_('merged using collapsed'),
+        default=False,
+        help_text=_('Whether the merge was performed using the collapsed strategy')
     )
 
     _preaction_validators = {
@@ -314,7 +324,8 @@ class Branch(JobsMixin, PrimaryModel):
         migrators = defaultdict(list)
         for migration in self.applied_migrations:
             app_label, name = migration.split('.')
-            module = importlib.import_module(f'{app_label}.migrations.{name}')
+            module_name = f'{app_label}.migrations.{name}'
+            module = importlib.import_module(module_name)
             for object_type, migrator in getattr(module, 'objectchange_migrators', {}).items():
                 migrators[object_type].append(migrator)
         return migrators
@@ -501,6 +512,778 @@ class Branch(JobsMixin, PrimaryModel):
 
     migrate.alters_data = True
 
+    # Helper class and functions for collapsing ObjectChanges during merge
+    class CollapsedChange:
+        """
+        Represents a collapsed set of ObjectChanges for a single object.
+        """
+        def __init__(self, key, model_class):
+            self.key = key  # (content_type_id, object_id)
+            self.model_class = model_class
+            self.changes = []  # List of ObjectChange instances, ordered by time
+            self.final_action = None  # 'create', 'update', 'delete', or 'skip'
+            self.prechange_data = None  # The original state (from first ObjectChange)
+            self.postchange_data = None  # The final state (collapsed from all changes)
+            self.last_change = None  # The most recent ObjectChange (for metadata)
+
+            # Dependencies for ordering
+            self.depends_on = set()  # Set of keys this change depends on
+            self.depended_by = set()  # Set of keys that depend on this change
+
+        def __repr__(self):
+            # Key can be (ct_id, obj_id) or (ct_id, obj_id, suffix) for split operations
+            obj_id = self.key[1]
+            suffix = f" ({self.key[2]})" if len(self.key) > 2 else ""
+            return (
+                f"<CollapsedChange {self.model_class.__name__}:{obj_id}{suffix} "
+                f"action={self.final_action} changes={len(self.changes)}>"
+            )
+
+    @staticmethod
+    def _diff_object_change_data(action, prechange_data, postchange_data):
+        """
+        Compute diff between prechange_data and postchange_data for a given action.
+        Mirrors the logic of ObjectChange.diff() method.
+
+        Returns: dict with 'pre' and 'post' keys containing changed attributes
+        """
+        prechange_data = prechange_data or {}
+        postchange_data = postchange_data or {}
+
+        # Determine which attributes have changed
+        if action == ObjectChangeActionChoices.ACTION_CREATE:
+            changed_attrs = sorted(postchange_data.keys())
+        elif action == ObjectChangeActionChoices.ACTION_DELETE:
+            changed_attrs = sorted(prechange_data.keys())
+        else:
+            # TODO: Support deep (recursive) comparison
+            changed_data = shallow_compare_dict(prechange_data, postchange_data)
+            changed_attrs = sorted(changed_data.keys())
+
+        return {
+            'pre': {
+                k: prechange_data.get(k) for k in changed_attrs
+            },
+            'post': {
+                k: postchange_data.get(k) for k in changed_attrs
+            },
+        }
+
+    @staticmethod
+    def _collapse_changes_for_object(changes, logger):
+        """
+        Collapse a list of ObjectChanges for a single object.
+        Returns: (final_action, prechange_data, postchange_data, last_change)
+
+        A key point is that we only care about the final state of the object. Also
+        each ChangeObject needs to be correct so the final state is correct, i.e.
+        if we delete an object, there aren't going to be other objects still referencing it.
+
+        ChangeObject can have CREATE, UPDATE, and DELETE actions.
+        We need to collapse these changes into a single action.
+        We can have the following cases:
+           - CREATE + (any updates) + DELETE = skip entirely
+           - (anything other than CREATE) + DELETE = DELETE
+           - CREATE + UPDATEs = CREATE
+           - multiple UPDATEs = UPDATE
+
+        """
+        if not changes:
+            return None, None, None, None
+
+        # Sort by time (oldest first)
+        changes = sorted(changes, key=lambda c: c.time)
+
+        # Check if there's a DELETE anywhere in the changes
+        has_delete = any(c.action == 'delete' for c in changes)
+        has_create = any(c.action == 'create' for c in changes)
+
+        logger.debug(f"  Collapsing {len(changes)} changes...")
+
+        if has_delete:
+            if has_create:
+                # CREATE + DELETE = skip entirely
+                logger.debug("  -> Action: SKIP (created and deleted in branch)")
+                return 'skip', None, None, changes[-1]
+            else:
+                # Just DELETE (ignore all other changes like updates)
+                # prechange_data: original state from first change
+                # postchange_data: postchange_data from DELETE ObjectChange
+                logger.debug(f"  -> Action: DELETE (keeping only DELETE, ignoring {len(changes) - 1} other changes)")
+                delete_change = next(c for c in changes if c.action == 'delete')
+                prechange_data = changes[0].prechange_data
+                postchange_data = delete_change.postchange_data  # Should be None for DELETE, but use actual value
+                return 'delete', prechange_data, postchange_data, delete_change
+
+        # No DELETE - handle CREATE or UPDATEs
+        first_action = changes[0].action
+        first_change = changes[0]
+        last_change = changes[-1]
+
+        # Created (with possible updates) -> single create
+        if first_action == 'create':
+            # prechange_data: from first ObjectChange (should be None for CREATE)
+            # postchange_data: merged from all changes
+            prechange_data = first_change.prechange_data
+            postchange_data = {}
+            for change in changes:
+                # Merge postchange_data, later changes overwrite earlier ones
+                if change.postchange_data:
+                    postchange_data.update(change.postchange_data)
+            logger.debug(f"  -> Action: CREATE (collapsed {len(changes)} changes)")
+            return 'create', prechange_data, postchange_data, last_change
+
+        # Only updates -> single update
+        # prechange_data: original state from first change
+        # postchange_data: final state after all updates
+        prechange_data = first_change.prechange_data
+        postchange_data = {}
+        # Start with prechange_data of first change as baseline
+        if prechange_data:
+            postchange_data.update(prechange_data)
+        # Apply each change's postchange_data
+        for change in changes:
+            if change.postchange_data:
+                postchange_data.update(change.postchange_data)
+
+        logger.debug(f"  -> Action: UPDATE (collapsed {len(changes)} changes)")
+        return 'update', prechange_data, postchange_data, last_change
+
+    @staticmethod
+    def _get_fk_references(model_class, data, changed_objects):
+        """
+        Find foreign key references in the given data that point to objects in changed_objects.
+        Returns a set of (content_type_id, object_id) tuples.
+        """
+        if not data:
+            return set()
+
+        references = set()
+        for field in model_class._meta.get_fields():
+            if isinstance(field, models.ForeignKey):
+                fk_value = data.get(field.name)
+
+                if fk_value:
+                    # Get the content type of the related model
+                    related_model = field.related_model
+                    related_ct = ContentType.objects.get_for_model(related_model)
+                    ref_key = (related_ct.id, fk_value)
+
+                    # Only track if this object is in our changed_objects
+                    if ref_key in changed_objects:
+                        references.add(ref_key)
+
+        return references
+
+    @staticmethod
+    def _build_fk_dependency_graph(deletes, updates, creates, logger):
+        """
+        Build the FK dependency graph between collapsed changes.
+
+        Analyzes foreign key references in the data to determine which changes depend on others:
+        - UPDATEs that remove FK references must happen before DELETEs
+        - UPDATEs that add FK references must happen after CREATEs
+        - CREATEs that reference other created objects must happen after those CREATEs
+        - DELETEs of child objects must happen before DELETEs of parent objects
+
+        Modifies the CollapsedChange objects in place by setting their depends_on and depended_by sets.
+        """
+        # Build lookup maps for efficient dependency checking
+        deletes_map = {c.key: c for c in deletes}
+        creates_map = {c.key: c for c in creates}
+
+        # 1. Check UPDATEs for dependencies
+        logger.debug("  Analyzing UPDATE dependencies...")
+        for update in updates:
+            # Check if UPDATE references deleted object in prechange_data
+            # This means the UPDATE had a reference that it's removing
+            # The UPDATE must happen BEFORE the DELETE so the FK reference is removed first
+            if update.changes[0].prechange_data:
+                prechange_refs = Branch._get_fk_references(
+                    update.model_class,
+                    update.changes[0].prechange_data,
+                    deletes_map.keys()
+                )
+                for ref_key in prechange_refs:
+                    # DELETE depends on UPDATE (UPDATE removes reference, then DELETE can proceed)
+                    delete_collapsed = deletes_map[ref_key]
+                    delete_collapsed.depends_on.add(update.key)
+                    update.depended_by.add(ref_key)
+                    logger.debug(
+                        f"    {delete_collapsed} depends on {update} "
+                        f"(UPDATE removes FK reference before DELETE)"
+                    )
+
+            # Check if UPDATE references created object in postchange_data
+            # This means the UPDATE needs the CREATE to exist first
+            # The CREATE must happen BEFORE the UPDATE
+            if update.postchange_data:
+                postchange_refs = Branch._get_fk_references(
+                    update.model_class,
+                    update.postchange_data,
+                    creates_map.keys()
+                )
+                for ref_key in postchange_refs:
+                    # UPDATE depends on CREATE
+                    create_collapsed = creates_map[ref_key]
+                    update.depends_on.add(ref_key)
+                    create_collapsed.depended_by.add(update.key)
+                    logger.debug(
+                        f"    {update} depends on {create_collapsed} "
+                        f"(UPDATE references created object)"
+                    )
+
+        # 2. Check CREATEs for dependencies on other CREATEs
+        logger.debug("  Analyzing CREATE dependencies...")
+        for create in creates:
+            if create.postchange_data:
+                # Check if this CREATE references other created objects
+                refs = Branch._get_fk_references(
+                    create.model_class,
+                    create.postchange_data,
+                    creates_map.keys()
+                )
+                for ref_key in refs:
+                    if ref_key != create.key:  # Don't self-reference
+                        # CREATE depends on another CREATE
+                        ref_create = creates_map[ref_key]
+                        create.depends_on.add(ref_key)
+                        ref_create.depended_by.add(create.key)
+                        logger.debug(
+                            f"    {create} depends on {ref_create} "
+                            f"(CREATE references another created object)"
+                        )
+
+        # 3. Check DELETEs for dependencies on other DELETEs
+        logger.debug("  Analyzing DELETE dependencies...")
+        for delete in deletes:
+            if delete.prechange_data:
+                # Check if this DELETE references other deleted objects
+                refs = Branch._get_fk_references(
+                    delete.model_class,
+                    delete.prechange_data,
+                    deletes_map.keys()
+                )
+                for ref_key in refs:
+                    if ref_key != delete.key:  # Don't self-reference
+                        # This delete references another deleted object
+                        # The referenced object must be deleted AFTER this one (child before parent)
+                        ref_delete = deletes_map[ref_key]
+                        ref_delete.depends_on.add(delete.key)
+                        delete.depended_by.add(ref_key)
+                        logger.debug(
+                            f"    {ref_delete} depends on {delete} "
+                            f"(child DELETE must happen before parent DELETE)"
+                        )
+
+    @staticmethod
+    def _has_fk_to(collapsed, target_model_class, target_obj_id):
+        """
+        Check if a CollapsedChange has a foreign key reference to a specific object.
+        Returns True if any FK field in postchange_data points to the target object.
+        """
+        if not collapsed.postchange_data:
+            return False
+
+        from django.contrib.contenttypes.models import ContentType
+        target_ct = ContentType.objects.get_for_model(target_model_class)
+
+        for field in collapsed.model_class._meta.get_fields():
+            if isinstance(field, models.ForeignKey):
+                fk_value = collapsed.postchange_data.get(field.name)
+                if fk_value:
+                    # Check if this FK points to target model
+                    related_model = field.related_model
+                    if related_model == target_model_class and fk_value == target_obj_id:
+                        return True
+        return False
+
+    @staticmethod
+    def _split_bidirectional_cycles(collapsed_changes, logger):
+        """
+        Preemptively detect and split CREATE operations involved in bidirectional FK cycles.
+
+        For each CREATE A with a nullable FK to CREATE B, check if CREATE B has any FK back to A.
+        If so, split CREATE A by setting the nullable FK to NULL and creating a separate UPDATE.
+
+        This handles the common case of bidirectional FK relationships (e.g., Circuit ↔ CircuitTermination)
+        without needing complex cycle detection during topological sort.
+        """
+        from django.contrib.contenttypes.models import ContentType
+
+        creates = {key: c for key, c in collapsed_changes.items() if c.final_action == 'create'}
+        splits_made = 0
+
+        for key_a, create_a in list(creates.items()):  # Use list() since we'll modify dict
+            if not create_a.postchange_data:
+                continue
+
+            # Find nullable FK fields in this CREATE
+            for field in create_a.model_class._meta.get_fields():
+                if not (isinstance(field, models.ForeignKey) and field.null):
+                    continue
+
+                fk_value = create_a.postchange_data.get(field.name)
+                if not fk_value:
+                    continue
+
+                # Get the target's key
+                related_model = field.related_model
+                target_ct = ContentType.objects.get_for_model(related_model)
+                key_b = (target_ct.id, fk_value)
+
+                # Is target also being created?
+                if key_b not in creates:
+                    continue
+
+                create_b = creates[key_b]
+
+                # Does target have FK back to us? (bidirectional cycle)
+                if Branch._has_fk_to(create_b, create_a.model_class, key_a[1]):
+                    logger.info(
+                        f"  Detected bidirectional cycle: {create_a.model_class.__name__}:{key_a[1]} ↔ "
+                        f"{create_b.model_class.__name__}:{key_b[1]} (via {field.name})"
+                    )
+                    logger.info(f"  Splitting {create_a.model_class.__name__}:{key_a[1]} to break cycle")
+
+                    # Split create_a: set nullable FK to NULL, create UPDATE to set it later
+                    original_postchange = dict(create_a.postchange_data)
+                    create_a.postchange_data[field.name] = None
+
+                    # Create UPDATE operation
+                    update_key = (key_a[0], key_a[1], f'update_{field.name}')
+                    update_collapsed = Branch.CollapsedChange(update_key, create_a.model_class)
+                    update_collapsed.changes = [create_a.last_change]
+                    update_collapsed.final_action = 'update'
+                    update_collapsed.prechange_data = dict(create_a.postchange_data)  # State after CREATE
+                    update_collapsed.postchange_data = original_postchange  # Final state with FK set
+                    update_collapsed.last_change = create_a.last_change
+
+                    # Add UPDATE to collapsed_changes
+                    collapsed_changes[update_key] = update_collapsed
+                    splits_made += 1
+
+                    # Don't check other fields in this CREATE - one split per CREATE is enough
+                    break
+
+        if splits_made > 0:
+            logger.info(f"  Split {splits_made} CREATE operations to prevent bidirectional cycles")
+
+    @staticmethod
+    def _dependency_order_by_references(collapsed_changes, logger):
+        """
+        Orders collapsed changes using topological sort with cycle detection.
+
+        Uses Kahn's algorithm to order nodes respecting their dependency graph.
+        Reference: https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm
+
+        The algorithm processes nodes in "layers" - first all nodes with no dependencies,
+        then all nodes whose dependencies have been satisfied, and so on.
+
+        When multiple nodes have no dependencies (equal priority in the dependency graph),
+        they are ordered by action type priority: DELETE (0) -> UPDATE (1) -> CREATE (2).
+        This maintains the action type grouping when there are no explicit FK dependencies.
+
+        If cycles are detected, raises an exception. Bidirectional cycles should be handled
+        by _split_bidirectional_cycles() before calling this method.
+
+        Returns: ordered list of keys
+        """
+        logger.info("Adjusting ordering by references...")
+
+        # Define action priority (lower number = higher priority = processed first)
+        action_priority = {
+            'delete': 0,  # DELETEs should happen first
+            'update': 1,  # UPDATEs in the middle
+            'create': 2,  # CREATEs should happen last
+            'skip': 3,    # SKIPs should never be in the sort, but just in case
+        }
+
+        # Create a copy of dependencies to modify
+        remaining = {key: set(collapsed.depends_on) for key, collapsed in collapsed_changes.items()}
+        ordered = []
+
+        iteration = 0
+        max_iterations = len(remaining) * 2  # Safety limit
+
+        while remaining and iteration < max_iterations:
+            iteration += 1
+
+            # Find all nodes with no dependencies
+            ready = [key for key, deps in remaining.items() if not deps]
+
+            if not ready:
+                # No nodes without dependencies - we have a cycle
+                logger.error("  Cycle detected in dependency graph!")
+
+                # Log details about the nodes involved in the cycle
+                for key, deps in list(remaining.items())[:5]:  # Show first 5 nodes
+                    collapsed = collapsed_changes[key]
+                    model_name = collapsed.model_class.__name__
+                    obj_id = collapsed.key[1]
+                    action = collapsed.final_action.upper()
+
+                    # Try to get identifying info
+                    data = collapsed.postchange_data or collapsed.prechange_data or {}
+                    identifying_info = []
+                    for field in ['name', 'slug', 'label']:
+                        if field in data:
+                            identifying_info.append(f"{field}={data[field]!r}")
+                    info_str = f" ({', '.join(identifying_info)})" if identifying_info else ""
+
+                    logger.error(f"    {action} {model_name} (ID: {obj_id}){info_str} depends on: {deps}")
+
+                if len(remaining) > 5:
+                    logger.error(f"    ... and {len(remaining) - 5} more nodes in cycle")
+
+                raise Exception(
+                    f"Cycle detected in dependency graph. {len(remaining)} changes are involved in "
+                    f"circular dependencies and cannot be ordered. This may indicate a complex cycle "
+                    f"that could not be automatically resolved. Check the logs above for details."
+                )
+            else:
+                # Sort ready nodes by action priority (primary) and time (secondary)
+                # This maintains DELETE -> UPDATE -> CREATE ordering, with time ordering within each group
+                ready.sort(key=lambda k: (
+                    action_priority.get(collapsed_changes[k].final_action, 99),
+                    collapsed_changes[k].last_change.time
+                ))
+
+            # Process ready nodes
+            for key in ready:
+                ordered.append(key)
+                del remaining[key]
+
+                # Remove this key from other nodes' dependencies
+                for deps in remaining.values():
+                    deps.discard(key)
+
+        if iteration >= max_iterations:
+            logger.error("  Ordering by references exceeded maximum iterations. Possible complex cycle.")
+
+            # Log details about the remaining unprocessed nodes
+            for key, deps in list(remaining.items())[:5]:  # Show first 5 nodes
+                collapsed = collapsed_changes[key]
+                model_name = collapsed.model_class.__name__
+                obj_id = collapsed.key[1]
+                action = collapsed.final_action.upper()
+
+                # Try to get identifying info
+                data = collapsed.postchange_data or collapsed.prechange_data or {}
+                identifying_info = []
+                for field in ['name', 'slug', 'label']:
+                    if field in data:
+                        identifying_info.append(f"{field}={data[field]!r}")
+                info_str = f" ({', '.join(identifying_info)})" if identifying_info else ""
+
+                logger.error(f"    {action} {model_name} (ID: {obj_id}){info_str} still depends on: {deps}")
+
+            if len(remaining) > 5:
+                logger.error(f"    ... and {len(remaining) - 5} more unprocessed nodes")
+
+            raise Exception(
+                f"Ordering by references exceeded maximum iterations ({max_iterations}). "
+                f"{len(remaining)} changes could not be ordered, possibly due to a complex cycle. "
+                f"Check the logs above for details."
+            )
+
+        logger.info(f"  Ordering by references completed: {len(ordered)} changes ordered")
+        return ordered
+
+    @staticmethod
+    def _order_collapsed_changes(collapsed_changes, logger):
+        """
+        Order collapsed changes respecting dependencies and time.
+
+        Algorithm:
+        1. Initial ordering by time: DELETEs, UPDATEs, CREATEs (each group sorted by time)
+        2. Build dependency graph:
+           - If UPDATE references deleted object in prechange_data → UPDATE must come before DELETE
+             (UPDATE removes the FK reference, allowing the DELETE to proceed)
+           - If UPDATE references created object in postchange_data → CREATE must come before UPDATE
+             (CREATE must exist before UPDATE can reference it)
+           - If CREATE references another created object in postchange_data → referenced CREATE must come first
+             (Referenced object must exist before referencing object is created)
+        3. Topological sort respecting dependencies
+
+        This ensures:
+        - DELETEs generally happen first to free unique constraints (time order within group)
+        - UPDATEs that remove FK references happen before their associated DELETEs
+        - CREATEs happen before UPDATEs/CREATEs that reference them
+
+        Returns: ordered list of CollapsedChange objects
+        """
+        logger.info(f"Ordering {len(collapsed_changes)} collapsed changes...")
+
+        # Remove skipped objects
+        to_process = {k: v for k, v in collapsed_changes.items() if v.final_action != 'skip'}
+        skipped = [v for v in collapsed_changes.values() if v.final_action == 'skip']
+
+        logger.info(f"  {len(skipped)} changes will be skipped (created and deleted in branch)")
+        logger.info(f"  {len(to_process)} changes to process")
+
+        if not to_process:
+            return []
+
+        # Reset dependencies
+        for collapsed in to_process.values():
+            collapsed.depends_on = set()
+            collapsed.depended_by = set()
+
+        # Preemptively detect and split bidirectional FK cycles
+        # This may add new UPDATE operations to to_process
+        logger.info("Checking for bidirectional FK cycles...")
+        Branch._split_bidirectional_cycles(to_process, logger)
+
+        # Group by action and sort each group by time (after splitting)
+        deletes = sorted(
+            [v for v in to_process.values() if v.final_action == 'delete'],
+            key=lambda c: c.last_change.time
+        )
+        updates = sorted(
+            [v for v in to_process.values() if v.final_action == 'update'],
+            key=lambda c: c.last_change.time
+        )
+        creates = sorted(
+            [v for v in to_process.values() if v.final_action == 'create'],
+            key=lambda c: c.last_change.time
+        )
+
+        logger.info(
+            f"  Groups after cycle splitting: {len(deletes)} deletes, "
+            f"{len(updates)} updates, {len(creates)} creates"
+        )
+
+        logger.info("Building dependency graph...")
+        Branch._build_fk_dependency_graph(deletes, updates, creates, logger)
+
+        total_deps = sum(len(c.depends_on) for c in to_process.values())
+        logger.info(f"  Dependency graph built: {total_deps} dependencies")
+
+        # Topological sort to respect dependencies
+        ordered_keys = Branch._dependency_order_by_references(to_process, logger)
+
+        # Convert keys back to collapsed changes
+        result = [to_process[key] for key in ordered_keys]
+
+        logger.info(f"Ordering complete: {len(result)} changes to apply")
+        return result
+
+    def _apply_collapsed_change(self, collapsed, using=DEFAULT_DB_ALIAS, logger=None):
+        """
+        Apply a collapsed change to the database.
+        Similar to ObjectChange.apply() but works with collapsed data.
+        """
+        from utilities.serialization import deserialize_object
+        from netbox_branching.utilities import update_object
+
+        logger = logger or logging.getLogger('netbox_branching.branch._apply_collapsed_change')
+        model = collapsed.model_class
+        object_id = collapsed.key[1]
+
+        # Run data migrators on the last change (to apply any necessary migrations)
+        last_change = collapsed.last_change
+        last_change.migrate(self)
+
+        # Creating a new object
+        if collapsed.final_action == 'create':
+            logger.debug(f'  Creating {model._meta.verbose_name} {object_id}')
+
+            if hasattr(model, 'deserialize_object'):
+                instance = model.deserialize_object(collapsed.postchange_data, pk=object_id)
+            else:
+                instance = deserialize_object(model, collapsed.postchange_data, pk=object_id)
+
+            try:
+                instance.object.full_clean()
+            except (FileNotFoundError) as e:
+                # If a file was deleted later in this branch it will fail here
+                # so we need to ignore it. We can assume the NetBox state is valid.
+                logger.warning(f'  Ignoring missing file: {e}')
+            instance.save(using=using)
+
+        # Modifying an object
+        elif collapsed.final_action == 'update':
+            logger.debug(f'  Updating {model._meta.verbose_name} {object_id}')
+
+            try:
+                instance = model.objects.using(using).get(pk=object_id)
+            except model.DoesNotExist:
+                logger.error(f'  {model._meta.verbose_name} {object_id} not found for update')
+                raise
+
+            # Calculate what fields changed from the collapsed changes
+            # We need to figure out what changed between initial and final state
+            initial_data = collapsed.prechange_data or {}
+            final_data = collapsed.postchange_data or {}
+
+            # Only update fields that actually changed
+            changed_fields = {}
+            for key, final_value in final_data.items():
+                initial_value = initial_data.get(key)
+                if initial_value != final_value:
+                    changed_fields[key] = final_value
+
+            logger.debug(f'    Updating {len(changed_fields)} fields: {list(changed_fields.keys())}')
+            update_object(instance, changed_fields, using=using)
+
+        # Deleting an object
+        elif collapsed.final_action == 'delete':
+            logger.debug(f'  Deleting {model._meta.verbose_name} {object_id}')
+
+            try:
+                instance = model.objects.using(using).get(pk=object_id)
+                instance.delete(using=using)
+            except model.DoesNotExist:
+                logger.debug(f'  {model._meta.verbose_name} {object_id} already deleted; skipping')
+
+    def _undo_collapsed_change(self, collapsed, using=DEFAULT_DB_ALIAS, logger=None):
+        """
+        Undo a collapsed change from the database (reverse of apply).
+        Follows the same pattern as ObjectChange.undo().
+        """
+        from django.contrib.contenttypes.fields import GenericForeignKey
+        from utilities.serialization import deserialize_object
+        from netbox_branching.utilities import update_object
+        from core.choices import ObjectChangeActionChoices
+
+        logger = logger or logging.getLogger('netbox_branching.branch._undo_collapsed_change')
+        model = collapsed.model_class
+        object_id = collapsed.key[1]
+
+        # Run data migrators on the last change (in revert mode)
+        last_change = collapsed.last_change
+        last_change.migrate(self, revert=True)
+
+        # Undoing a CREATE: delete the object
+        if collapsed.final_action == 'create':
+            logger.debug(f'  Undoing creation of {model._meta.verbose_name} {object_id}')
+            try:
+                instance = model.objects.using(using).get(pk=object_id)
+                instance.delete(using=using)
+            except model.DoesNotExist:
+                logger.debug(f'  {model._meta.verbose_name} {object_id} does not exist; skipping')
+
+        # Undoing an UPDATE: revert to the original state
+        elif collapsed.final_action == 'update':
+            logger.debug(f'  Undoing update of {model._meta.verbose_name} {object_id}')
+
+            try:
+                instance = model.objects.using(using).get(pk=object_id)
+                # Compute diff and apply 'pre' values (like ObjectChange.undo() does)
+                diff = Branch._diff_object_change_data(
+                    ObjectChangeActionChoices.ACTION_UPDATE,
+                    collapsed.prechange_data,
+                    collapsed.postchange_data
+                )
+                update_object(instance, diff['pre'], using=using)
+            except model.DoesNotExist:
+                logger.debug(f'  {model._meta.verbose_name} {object_id} does not exist; skipping')
+
+        # Undoing a DELETE: restore the object
+        elif collapsed.final_action == 'delete':
+            logger.debug(f'  Undoing deletion (restoring) {model._meta.verbose_name} {object_id}')
+
+            prechange_data = collapsed.prechange_data or {}
+
+            # Restore from prechange_data (like ObjectChange.undo() does)
+            deserialized = deserialize_object(model, prechange_data, pk=object_id)
+            instance = deserialized.object
+
+            # Restore GenericForeignKey fields
+            for field in instance._meta.private_fields:
+                if isinstance(field, GenericForeignKey):
+                    ct_field = getattr(instance, field.ct_field)
+                    fk_field = getattr(instance, field.fk_field)
+                    if ct_field and fk_field:
+                        setattr(instance, field.name, ct_field.get_object_for_this_type(pk=fk_field))
+
+            instance.full_clean()
+            instance.save(using=using)
+
+    def _merge_iterative(self, changes, request, commit, logger):
+        """
+        Apply changes iteratively (one at a time) in chronological order.
+        """
+        models = set()
+
+        # Apply each change from the Branch
+        for change in changes:
+            models.add(change.changed_object_type.model_class())
+            with event_tracking(request):
+                request.id = change.request_id
+                request.user = change.user
+                change.apply(self, using=DEFAULT_DB_ALIAS, logger=logger)
+
+        if not commit:
+            raise AbortTransaction()
+
+        # Perform cleanup tasks
+        self._cleanup(models)
+
+    def _merge_collapsed(self, changes, request, commit, logger):
+        """
+        Apply changes after collapsing them by object and ordering by dependencies.
+        """
+        models = set()
+
+        # Group and collapse changes by object
+        logger.info("Collapsing ObjectChanges by object...")
+        collapsed_changes = {}
+
+        for change in changes:
+            key = (change.changed_object_type.id, change.changed_object_id)
+
+            if key not in collapsed_changes:
+                model_class = change.changed_object_type.model_class()
+                collapsed = Branch.CollapsedChange(key, model_class)
+                collapsed_changes[key] = collapsed
+                logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
+
+            collapsed_changes[key].changes.append(change)
+
+        logger.info(f"  {len(changes)} changes collapsed into {len(collapsed_changes)} objects")
+
+        # Collapse each object's changes
+        logger.info("Determining final action for each object...")
+        for key, collapsed in collapsed_changes.items():
+            final_action, prechange_data, postchange_data, last_change = Branch._collapse_changes_for_object(
+                collapsed.changes, logger
+            )
+            collapsed.final_action = final_action
+            collapsed.prechange_data = prechange_data
+            collapsed.postchange_data = postchange_data
+            collapsed.last_change = last_change
+
+        # Order collapsed changes based on dependencies
+        ordered_changes = Branch._order_collapsed_changes(collapsed_changes, logger)
+
+        # Apply collapsed changes in order
+        logger.info(f"Applying {len(ordered_changes)} collapsed changes...")
+        for i, collapsed in enumerate(ordered_changes, 1):
+            model_class = collapsed.model_class
+            models.add(model_class)
+
+            # Use the last change's metadata for tracking
+            last_change = collapsed.last_change
+
+            logger.info(f"  [{i}/{len(ordered_changes)}] {collapsed.final_action.upper()} "
+                       f"{model_class.__name__}:{collapsed.key[1]} "
+                       f"(from {len(collapsed.changes)} original changes)")
+
+            with event_tracking(request):
+                request.id = last_change.request_id
+                request.user = last_change.user
+
+                # Apply the collapsed change
+                self._apply_collapsed_change(collapsed, using=DEFAULT_DB_ALIAS, logger=logger)
+
+        if not commit:
+            raise AbortTransaction()
+
+        # Perform cleanup tasks
+        self._cleanup(models)
+
     def merge(self, user, commit=True):
         """
         Apply all changes in the Branch to the main schema by replaying them in
@@ -537,20 +1320,13 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
-                models = set()
-
-                # Apply each change from the Branch
-                for change in changes:
-                    models.add(change.changed_object_type.model_class())
-                    with event_tracking(request):
-                        request.id = change.request_id
-                        request.user = change.user
-                        change.apply(self, using=DEFAULT_DB_ALIAS, logger=logger)
-                if not commit:
-                    raise AbortTransaction()
-
-                # Perform cleanup tasks
-                self._cleanup(models)
+                # Choose merge strategy based on merged_using_collapsed setting
+                if self.merged_using_collapsed:
+                    logger.debug("Merging using collapsed strategy")
+                    self._merge_collapsed(changes, request, commit, logger)
+                else:
+                    logger.debug("Merging using iterative strategy")
+                    self._merge_iterative(changes, request, commit, logger)
 
         except Exception as e:
             if err_message := str(e):
@@ -580,6 +1356,87 @@ class Branch(JobsMixin, PrimaryModel):
         post_save.disconnect(handler, sender=ObjectChange_)
 
     merge.alters_data = True
+
+    def _revert_iterative(self, changes, request, commit, logger):
+        """
+        Undo changes iteratively (one at a time) in reverse chronological order.
+        """
+        models = set()
+
+        # Undo each change from the Branch
+        for change in changes:
+            models.add(change.changed_object_type.model_class())
+            with event_tracking(request):
+                request.id = change.request_id
+                request.user = change.user
+                change.undo(self, logger=logger)
+        if not commit:
+            raise AbortTransaction()
+
+        # Perform cleanup tasks
+        self._cleanup(models)
+
+    def _revert_collapsed(self, changes, request, commit, logger):
+        """
+        Undo changes after collapsing them by object and ordering by dependencies.
+        """
+        models = set()
+
+        # Group changes by object and create CollapsedChange objects
+        logger.info("Collapsing ObjectChanges by object...")
+        collapsed_changes = {}
+
+        for change in changes:
+            key = (change.changed_object_type.id, change.changed_object_id)
+
+            if key not in collapsed_changes:
+                model_class = change.changed_object_type.model_class()
+                collapsed = Branch.CollapsedChange(key, model_class)
+                collapsed_changes[key] = collapsed
+                logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
+
+            collapsed_changes[key].changes.append(change)
+
+        logger.info(f"  {len(changes)} changes collapsed into {len(collapsed_changes)} objects")
+
+        # Collapse each object's changes
+        logger.info("Determining final action for each object...")
+        for key, collapsed in collapsed_changes.items():
+            final_action, prechange_data, postchange_data, last_change = Branch._collapse_changes_for_object(
+                collapsed.changes, logger
+            )
+            collapsed.final_action = final_action
+            collapsed.prechange_data = prechange_data
+            collapsed.postchange_data = postchange_data
+            collapsed.last_change = last_change
+
+        # Order collapsed changes for revert (reverse of merge order)
+        merge_order = Branch._order_collapsed_changes(collapsed_changes, logger)
+        ordered_changes = list(reversed(merge_order))
+
+        # Undo collapsed changes in dependency order
+        logger.info(f"Undoing {len(ordered_changes)} collapsed changes in dependency order...")
+        for i, collapsed in enumerate(ordered_changes, 1):
+            model_class = collapsed.model_class
+            models.add(model_class)
+
+            # Use the last change's metadata for tracking
+            last_change = collapsed.last_change
+            logger.info(
+                f"[{i}/{len(ordered_changes)}] Undoing {collapsed.final_action} "
+                f"{model_class._meta.verbose_name} (ID: {collapsed.key[1]})"
+            )
+
+            with event_tracking(request):
+                request.id = last_change.request_id
+                request.user = last_change.user
+                self._undo_collapsed_change(collapsed, using=DEFAULT_DB_ALIAS, logger=logger)
+
+        if not commit:
+            raise AbortTransaction()
+
+        # Perform cleanup tasks
+        self._cleanup(models)
 
     def revert(self, user, commit=True):
         """
@@ -617,20 +1474,13 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
-                models = set()
-
-                # Undo each change from the Branch
-                for change in changes:
-                    models.add(change.changed_object_type.model_class())
-                    with event_tracking(request):
-                        request.id = change.request_id
-                        request.user = change.user
-                        change.undo(self, logger=logger)
-                if not commit:
-                    raise AbortTransaction()
-
-                # Perform cleanup tasks
-                self._cleanup(models)
+                # Choose revert strategy based on merged_using_collapsed setting
+                if self.merged_using_collapsed:
+                    logger.debug("Reverting using collapsed strategy")
+                    self._revert_collapsed(changes, request, commit, logger)
+                else:
+                    logger.debug("Reverting using iterative strategy")
+                    self._revert_iterative(changes, request, commit, logger)
 
         except Exception as e:
             if err_message := str(e):
@@ -645,6 +1495,7 @@ class Branch(JobsMixin, PrimaryModel):
         self.status = BranchStatusChoices.READY
         self.merged_time = None
         self.merged_by = None
+        self.merged_using_collapsed = False
         self.save()
 
         # Record a branch event for the merge

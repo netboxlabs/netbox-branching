@@ -78,7 +78,8 @@ class BranchViewSet(ModelViewSet):
         job = MergeBranchJob.enqueue(
             instance=branch,
             user=request.user,
-            commit=commit
+            commit=commit,
+            job_timeout=MergeBranchJob.Meta.job_timeout
         )
 
         return Response(JobSerializer(job, context={'request': request}).data)
