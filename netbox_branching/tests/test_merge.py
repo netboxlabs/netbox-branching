@@ -759,11 +759,6 @@ class MergeTestCase(TransactionTestCase):
         This tests the scenario where:
         - Circuit.termination_a → CircuitTermination (nullable FK)
         - CircuitTermination.circuit → Circuit (required FK)
-
-        By keeping CREATE and UPDATE operations separate, we avoid circular dependencies:
-        1. CREATE Circuit with termination_a=NULL
-        2. CREATE CircuitTermination with circuit pointing to Circuit
-        3. UPDATE Circuit to set termination_a to CircuitTermination
         """
         # Create provider and circuit type in main
         provider = Provider.objects.create(name='Provider 1', slug='provider-1')
