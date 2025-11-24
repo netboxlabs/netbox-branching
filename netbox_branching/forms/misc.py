@@ -23,8 +23,8 @@ class BranchActionForm(forms.Form):
     collapse_changes = forms.BooleanField(
         required=False,
         initial=False,
-        label=_('Collapse Object Changes'),
-        help_text=_('Use the collapsed merge strategy')
+        label=_('Squash Object Changes'),
+        help_text=_('Combine multiple Changelogs for an object into a single operation.')
     )
 
     def __init__(self, branch, *args, allow_commit=True, action=None, **kwargs):
