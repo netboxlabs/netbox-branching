@@ -114,7 +114,8 @@ class BranchViewSet(ModelViewSet):
 
     @extend_schema(
         methods=['post'],
-        responses={200: serializers.BranchSerializer()},)
+        responses={200: serializers.BranchSerializer()},
+    )
     @action(detail=True, methods=['post'])
     def archive(self, request, pk):
         """

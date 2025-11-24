@@ -2,15 +2,15 @@ import json
 
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.db import connections
+from django.db import connection, connections
 from django.test import Client, TransactionTestCase
 from django.urls import reverse
 
 from dcim.models import Site
-from users.models import Token
-
+from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME
 from netbox_branching.models import Branch
+from users.models import Token
 
 
 class APITestCase(TransactionTestCase):
@@ -123,7 +123,6 @@ class BranchArchiveAPITestCase(TransactionTestCase):
         branch.provision(self.user)
         branch.refresh_from_db()
 
-        from netbox_branching.choices import BranchStatusChoices
         Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.MERGED)
         branch.refresh_from_db()
         self.assertEqual(branch.status, 'merged')
@@ -138,7 +137,6 @@ class BranchArchiveAPITestCase(TransactionTestCase):
         branch.refresh_from_db()
         self.assertEqual(branch.status, 'archived')
 
-        from django.db import connection
         with connection.cursor() as cursor:
             cursor.execute(
                 "SELECT schema_name FROM information_schema.schemata WHERE schema_name = %s",
@@ -161,7 +159,6 @@ class BranchArchiveAPITestCase(TransactionTestCase):
         branch.provision(self.user)
         branch.refresh_from_db()
 
-        from netbox_branching.choices import BranchStatusChoices
         Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.MERGED)
         branch.refresh_from_db()
 
@@ -189,7 +186,6 @@ class BranchArchiveAPITestCase(TransactionTestCase):
         branch.provision(self.user)
         branch.refresh_from_db()
 
-        from netbox_branching.choices import BranchStatusChoices
         Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.MERGED)
         branch.refresh_from_db()
 
