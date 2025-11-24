@@ -40,7 +40,7 @@ from netbox_branching.signals import *
 from netbox_branching.utilities import BranchActionIndicator
 from netbox_branching.utilities import (
     ChangeSummary, activate_branch, get_branchable_object_types, get_sql_results, get_tables_to_replicate,
-    record_applied_change,
+    record_applied_change, update_object,
 )
 from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet
@@ -522,8 +522,8 @@ class Branch(JobsMixin, PrimaryModel):
             self.model_class = model_class
             self.changes = []  # List of ObjectChange instances, ordered by time
             self.final_action = None  # 'create', 'update', 'delete', or 'skip'
-            self.prechange_data = None  # The original state (from first ObjectChange)
-            self.postchange_data = None  # The final state (collapsed from all changes)
+            self.prechange_data = None
+            self.postchange_data = None
             self.last_change = None  # The most recent ObjectChange (for metadata)
 
             # Dependencies for ordering
@@ -531,7 +531,6 @@ class Branch(JobsMixin, PrimaryModel):
             self.depended_by = set()  # Set of keys that depend on this change
 
         def __repr__(self):
-            # Key can be (ct_id, obj_id) or (ct_id, obj_id, suffix) for split operations
             obj_id = self.key[1]
             suffix = f" ({self.key[2]})" if len(self.key) > 2 else ""
             return (
@@ -638,10 +637,10 @@ class Branch(JobsMixin, PrimaryModel):
         # postchange_data: final state after all updates
         prechange_data = first_change.prechange_data
         postchange_data = {}
-        # Start with prechange_data of first change as baseline
+
         if prechange_data:
             postchange_data.update(prechange_data)
-        # Apply each change's postchange_data
+
         for change in changes:
             if change.postchange_data:
                 postchange_data.update(change.postchange_data)
@@ -693,7 +692,6 @@ class Branch(JobsMixin, PrimaryModel):
         creates_map = {c.key: c for c in creates}
 
         # 1. Check UPDATEs for dependencies
-        logger.debug("  Analyzing UPDATE dependencies...")
         for update in updates:
             # Check if UPDATE references deleted object in prechange_data
             # This means the UPDATE had a reference that it's removing
@@ -734,7 +732,6 @@ class Branch(JobsMixin, PrimaryModel):
                     )
 
         # 2. Check CREATEs for dependencies on other CREATEs
-        logger.debug("  Analyzing CREATE dependencies...")
         for create in creates:
             if create.postchange_data:
                 # Check if this CREATE references other created objects
@@ -755,7 +752,6 @@ class Branch(JobsMixin, PrimaryModel):
                         )
 
         # 3. Check DELETEs for dependencies on other DELETEs
-        logger.debug("  Analyzing DELETE dependencies...")
         for delete in deletes:
             if delete.prechange_data:
                 # Check if this DELETE references other deleted objects
@@ -785,9 +781,6 @@ class Branch(JobsMixin, PrimaryModel):
         if not collapsed.postchange_data:
             return False
 
-        from django.contrib.contenttypes.models import ContentType
-        target_ct = ContentType.objects.get_for_model(target_model_class)
-
         for field in collapsed.model_class._meta.get_fields():
             if isinstance(field, models.ForeignKey):
                 fk_value = collapsed.postchange_data.get(field.name)
@@ -801,20 +794,20 @@ class Branch(JobsMixin, PrimaryModel):
     @staticmethod
     def _split_bidirectional_cycles(collapsed_changes, logger):
         """
-        Preemptively detect and split CREATE operations involved in bidirectional FK cycles.
+        Special case: Preemptively detect and split CREATE operations involved in
+        bidirectional FK cycles.
 
         For each CREATE A with a nullable FK to CREATE B, check if CREATE B has any FK back to A.
         If so, split CREATE A by setting the nullable FK to NULL and creating a separate UPDATE.
 
         This handles the common case of bidirectional FK relationships (e.g., Circuit ↔ CircuitTermination)
-        without needing complex cycle detection during topological sort.
+        without needing complex cycle detection.
         """
-        from django.contrib.contenttypes.models import ContentType
 
         creates = {key: c for key, c in collapsed_changes.items() if c.final_action == 'create'}
         splits_made = 0
 
-        for key_a, create_a in list(creates.items()):  # Use list() since we'll modify dict
+        for key_a, create_a in list(creates.items()):
             if not create_a.postchange_data:
                 continue
 
@@ -844,7 +837,6 @@ class Branch(JobsMixin, PrimaryModel):
                         f"  Detected bidirectional cycle: {create_a.model_class.__name__}:{key_a[1]} ↔ "
                         f"{create_b.model_class.__name__}:{key_b[1]} (via {field.name})"
                     )
-                    logger.info(f"  Splitting {create_a.model_class.__name__}:{key_a[1]} to break cycle")
 
                     # Split create_a: set nullable FK to NULL, create UPDATE to set it later
                     original_postchange = dict(create_a.postchange_data)
@@ -855,19 +847,40 @@ class Branch(JobsMixin, PrimaryModel):
                     update_collapsed = Branch.CollapsedChange(update_key, create_a.model_class)
                     update_collapsed.changes = [create_a.last_change]
                     update_collapsed.final_action = 'update'
-                    update_collapsed.prechange_data = dict(create_a.postchange_data)  # State after CREATE
-                    update_collapsed.postchange_data = original_postchange  # Final state with FK set
+                    update_collapsed.prechange_data = dict(create_a.postchange_data)
+                    update_collapsed.postchange_data = original_postchange
                     update_collapsed.last_change = create_a.last_change
 
                     # Add UPDATE to collapsed_changes
                     collapsed_changes[update_key] = update_collapsed
                     splits_made += 1
 
-                    # Don't check other fields in this CREATE - one split per CREATE is enough
                     break
 
-        if splits_made > 0:
-            logger.info(f"  Split {splits_made} CREATE operations to prevent bidirectional cycles")
+    @staticmethod
+    def _log_cycle_details(remaining, collapsed_changes, logger, max_to_show=5):
+        """
+        Log details about nodes involved in a dependency cycle.
+        Used for debugging when cycles are detected.
+        """
+        for key, deps in list(remaining.items())[:max_to_show]:
+            collapsed = collapsed_changes[key]
+            model_name = collapsed.model_class.__name__
+            obj_id = collapsed.key[1]
+            action = collapsed.final_action.upper()
+
+            # Try to get identifying info
+            data = collapsed.postchange_data or collapsed.prechange_data or {}
+            identifying_info = []
+            for field in ['name', 'slug', 'label']:
+                if field in data:
+                    identifying_info.append(f"{field}={data[field]!r}")
+            info_str = f" ({', '.join(identifying_info)})" if identifying_info else ""
+
+            logger.error(f"    {action} {model_name} (ID: {obj_id}){info_str} depends on: {deps}")
+
+        if len(remaining) > max_to_show:
+            logger.error(f"    ... and {len(remaining) - max_to_show} more nodes in cycle")
 
     @staticmethod
     def _dependency_order_by_references(collapsed_changes, logger):
@@ -882,7 +895,6 @@ class Branch(JobsMixin, PrimaryModel):
 
         When multiple nodes have no dependencies (equal priority in the dependency graph),
         they are ordered by action type priority: DELETE (0) -> UPDATE (1) -> CREATE (2).
-        This maintains the action type grouping when there are no explicit FK dependencies.
 
         If cycles are detected, raises an exception. Bidirectional cycles should be handled
         by _split_bidirectional_cycles() before calling this method.
@@ -914,27 +926,10 @@ class Branch(JobsMixin, PrimaryModel):
 
             if not ready:
                 # No nodes without dependencies - we have a cycle
-                logger.error("  Cycle detected in dependency graph!")
+                logger.error("  Cycle detected in dependency graph.")
 
-                # Log details about the nodes involved in the cycle
-                for key, deps in list(remaining.items())[:5]:  # Show first 5 nodes
-                    collapsed = collapsed_changes[key]
-                    model_name = collapsed.model_class.__name__
-                    obj_id = collapsed.key[1]
-                    action = collapsed.final_action.upper()
-
-                    # Try to get identifying info
-                    data = collapsed.postchange_data or collapsed.prechange_data or {}
-                    identifying_info = []
-                    for field in ['name', 'slug', 'label']:
-                        if field in data:
-                            identifying_info.append(f"{field}={data[field]!r}")
-                    info_str = f" ({', '.join(identifying_info)})" if identifying_info else ""
-
-                    logger.error(f"    {action} {model_name} (ID: {obj_id}){info_str} depends on: {deps}")
-
-                if len(remaining) > 5:
-                    logger.error(f"    ... and {len(remaining) - 5} more nodes in cycle")
+                # Log details about the nodes involved in the cycle (for debugging)
+                Branch._log_cycle_details(remaining, collapsed_changes, logger)
 
                 raise Exception(
                     f"Cycle detected in dependency graph. {len(remaining)} changes are involved in "
@@ -961,25 +956,8 @@ class Branch(JobsMixin, PrimaryModel):
         if iteration >= max_iterations:
             logger.error("  Ordering by references exceeded maximum iterations. Possible complex cycle.")
 
-            # Log details about the remaining unprocessed nodes
-            for key, deps in list(remaining.items())[:5]:  # Show first 5 nodes
-                collapsed = collapsed_changes[key]
-                model_name = collapsed.model_class.__name__
-                obj_id = collapsed.key[1]
-                action = collapsed.final_action.upper()
-
-                # Try to get identifying info
-                data = collapsed.postchange_data or collapsed.prechange_data or {}
-                identifying_info = []
-                for field in ['name', 'slug', 'label']:
-                    if field in data:
-                        identifying_info.append(f"{field}={data[field]!r}")
-                info_str = f" ({', '.join(identifying_info)})" if identifying_info else ""
-
-                logger.error(f"    {action} {model_name} (ID: {obj_id}){info_str} still depends on: {deps}")
-
-            if len(remaining) > 5:
-                logger.error(f"    ... and {len(remaining) - 5} more unprocessed nodes")
+            # Log details about the remaining unprocessed nodes (for debugging)
+            Branch._log_cycle_details(remaining, collapsed_changes, logger)
 
             raise Exception(
                 f"Ordering by references exceeded maximum iterations ({max_iterations}). "
@@ -1032,10 +1010,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         # Preemptively detect and split bidirectional FK cycles
         # This may add new UPDATE operations to to_process
-        logger.info("Checking for bidirectional FK cycles...")
         Branch._split_bidirectional_cycles(to_process, logger)
 
-        # Group by action and sort each group by time (after splitting)
+        # Group by action and sort each group by time - need this to build the
+        # dependency graph correctly
         deletes = sorted(
             [v for v in to_process.values() if v.final_action == 'delete'],
             key=lambda c: c.last_change.time
@@ -1049,24 +1027,11 @@ class Branch(JobsMixin, PrimaryModel):
             key=lambda c: c.last_change.time
         )
 
-        logger.info(
-            f"  Groups after cycle splitting: {len(deletes)} deletes, "
-            f"{len(updates)} updates, {len(creates)} creates"
-        )
-
-        logger.info("Building dependency graph...")
         Branch._build_fk_dependency_graph(deletes, updates, creates, logger)
-
-        total_deps = sum(len(c.depends_on) for c in to_process.values())
-        logger.info(f"  Dependency graph built: {total_deps} dependencies")
-
-        # Topological sort to respect dependencies
         ordered_keys = Branch._dependency_order_by_references(to_process, logger)
 
         # Convert keys back to collapsed changes
         result = [to_process[key] for key in ordered_keys]
-
-        logger.info(f"Ordering complete: {len(result)} changes to apply")
         return result
 
     def _apply_collapsed_change(self, collapsed, using=DEFAULT_DB_ALIAS, logger=None):
@@ -1074,8 +1039,6 @@ class Branch(JobsMixin, PrimaryModel):
         Apply a collapsed change to the database.
         Similar to ObjectChange.apply() but works with collapsed data.
         """
-        from utilities.serialization import deserialize_object
-        from netbox_branching.utilities import update_object
 
         logger = logger or logging.getLogger('netbox_branching.branch._apply_collapsed_change')
         model = collapsed.model_class
@@ -1142,10 +1105,6 @@ class Branch(JobsMixin, PrimaryModel):
         Undo a collapsed change from the database (reverse of apply).
         Follows the same pattern as ObjectChange.undo().
         """
-        from django.contrib.contenttypes.fields import GenericForeignKey
-        from utilities.serialization import deserialize_object
-        from netbox_branching.utilities import update_object
-        from core.choices import ObjectChangeActionChoices
 
         logger = logger or logging.getLogger('netbox_branching.branch._undo_collapsed_change')
         model = collapsed.model_class
@@ -1203,11 +1162,10 @@ class Branch(JobsMixin, PrimaryModel):
 
     def _merge_iterative(self, changes, request, commit, logger):
         """
-        Apply changes iteratively (one at a time) in chronological order.
+        Apply changes iteratively in chronological order.
         """
         models = set()
 
-        # Apply each change from the Branch
         for change in changes:
             models.add(change.changed_object_type.model_class())
             with event_tracking(request):
@@ -1218,7 +1176,6 @@ class Branch(JobsMixin, PrimaryModel):
         if not commit:
             raise AbortTransaction()
 
-        # Perform cleanup tasks
         self._cleanup(models)
 
     def _merge_collapsed(self, changes, request, commit, logger):
@@ -1227,7 +1184,6 @@ class Branch(JobsMixin, PrimaryModel):
         """
         models = set()
 
-        # Group and collapse changes by object
         logger.info("Collapsing ObjectChanges by object...")
         collapsed_changes = {}
 
@@ -1242,10 +1198,7 @@ class Branch(JobsMixin, PrimaryModel):
 
             collapsed_changes[key].changes.append(change)
 
-        logger.info(f"  {len(changes)} changes collapsed into {len(collapsed_changes)} objects")
-
         # Collapse each object's changes
-        logger.info("Determining final action for each object...")
         for key, collapsed in collapsed_changes.items():
             final_action, prechange_data, postchange_data, last_change = Branch._collapse_changes_for_object(
                 collapsed.changes, logger
@@ -1264,7 +1217,6 @@ class Branch(JobsMixin, PrimaryModel):
             model_class = collapsed.model_class
             models.add(model_class)
 
-            # Use the last change's metadata for tracking
             last_change = collapsed.last_change
 
             logger.info(f"  [{i}/{len(ordered_changes)}] {collapsed.final_action.upper()} "
