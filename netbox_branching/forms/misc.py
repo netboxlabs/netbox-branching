@@ -1,6 +1,7 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
+from netbox_branching.choices import BranchMergeStrategyChoices
 from netbox_branching.models import ChangeDiff
 
 __all__ = (
@@ -20,13 +21,23 @@ class BranchActionForm(forms.Form):
         label=_('Commit changes'),
         help_text=_('Leave unchecked to perform a dry run')
     )
+    merge_strategy = forms.ChoiceField(
+        choices=BranchMergeStrategyChoices,
+        initial=BranchMergeStrategyChoices.ITERATIVE,
+        label=_('Merge Strategy'),
+        help_text=_('Strategy to use when merging changes.')
+    )
 
-    def __init__(self, branch, *args, allow_commit=True, **kwargs):
+    def __init__(self, branch, *args, allow_commit=True, action=None, **kwargs):
         self.branch = branch
         super().__init__(*args, **kwargs)
 
         if not allow_commit:
             self.fields['commit'].disabled = True
+
+        # Only show merge_strategy for merge operations, not revert
+        if action == 'revert':
+            del self.fields['merge_strategy']
 
     def clean(self):
         super().clean()

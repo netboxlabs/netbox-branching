@@ -23,19 +23,19 @@ from mptt.models import MPTTModel
 from core.models import ObjectChange as ObjectChange_
 from netbox.config import get_config
 from netbox.context import current_request
-from netbox.context_managers import event_tracking
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
-from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
+from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.constants import BRANCH_ACTIONS
 from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
+from netbox_branching.merge_strategies import get_merge_strategy
 from netbox_branching.signals import *
 from netbox_branching.utilities import BranchActionIndicator
 from netbox_branching.utilities import (
-    ChangeSummary, activate_branch, get_branchable_object_types, get_sql_results, get_tables_to_replicate,
-    record_applied_change,
+    ChangeSummary, activate_branch, get_branchable_object_types, get_sql_results,
+    get_tables_to_replicate, record_applied_change,
 )
 from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet
@@ -95,6 +95,13 @@ class Branch(JobsMixin, PrimaryModel):
         blank=True,
         null=True,
         related_name='+'
+    )
+    merge_strategy = models.CharField(
+        verbose_name=_('merge strategy'),
+        max_length=50,
+        choices=BranchMergeStrategyChoices,
+        default=BranchMergeStrategyChoices.ITERATIVE,
+        help_text=_('Strategy used to merge this branch')
     )
 
     _preaction_validators = {
@@ -314,7 +321,8 @@ class Branch(JobsMixin, PrimaryModel):
         migrators = defaultdict(list)
         for migration in self.applied_migrations:
             app_label, name = migration.split('.')
-            module = importlib.import_module(f'{app_label}.migrations.{name}')
+            module_name = f'{app_label}.migrations.{name}'
+            module = importlib.import_module(module_name)
             for object_type, migrator in getattr(module, 'objectchange_migrators', {}).items():
                 migrators[object_type].append(migrator)
         return migrators
@@ -537,20 +545,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
-                models = set()
-
-                # Apply each change from the Branch
-                for change in changes:
-                    models.add(change.changed_object_type.model_class())
-                    with event_tracking(request):
-                        request.id = change.request_id
-                        request.user = change.user
-                        change.apply(self, using=DEFAULT_DB_ALIAS, logger=logger)
-                if not commit:
-                    raise AbortTransaction()
-
-                # Perform cleanup tasks
-                self._cleanup(models)
+                # Get and execute the appropriate merge strategy
+                strategy = get_merge_strategy(self.merge_strategy)
+                logger.debug(f"Merging using {self.merge_strategy} strategy")
+                strategy.merge(self, changes, request, commit, logger)
 
         except Exception as e:
             if err_message := str(e):
@@ -617,20 +615,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
-                models = set()
-
-                # Undo each change from the Branch
-                for change in changes:
-                    models.add(change.changed_object_type.model_class())
-                    with event_tracking(request):
-                        request.id = change.request_id
-                        request.user = change.user
-                        change.undo(self, logger=logger)
-                if not commit:
-                    raise AbortTransaction()
-
-                # Perform cleanup tasks
-                self._cleanup(models)
+                # Get and execute the appropriate revert strategy
+                strategy = get_merge_strategy(self.merge_strategy)
+                logger.debug(f"Reverting using {self.merge_strategy} strategy")
+                strategy.revert(self, changes, request, commit, logger)
 
         except Exception as e:
             if err_message := str(e):
@@ -645,6 +633,7 @@ class Branch(JobsMixin, PrimaryModel):
         self.status = BranchStatusChoices.READY
         self.merged_time = None
         self.merged_by = None
+        self.merge_strategy = BranchMergeStrategyChoices.ITERATIVE
         self.save()
 
         # Record a branch event for the merge
