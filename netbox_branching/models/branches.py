@@ -23,23 +23,19 @@ from mptt.models import MPTTModel
 from core.models import ObjectChange as ObjectChange_
 from netbox.config import get_config
 from netbox.context import current_request
-from netbox.context_managers import event_tracking
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
-from netbox_branching.collapse_merge import (
-    CollapsedChange,
-    order_collapsed_changes,
-)
 from netbox_branching.constants import BRANCH_ACTIONS
 from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
+from netbox_branching.merge_strategies import get_merge_strategy
 from netbox_branching.signals import *
 from netbox_branching.utilities import BranchActionIndicator
 from netbox_branching.utilities import (
-    ChangeSummary, activate_branch, get_branchable_object_types, get_sql_results, get_tables_to_replicate,
-    record_applied_change,
+    ChangeSummary, activate_branch, get_branchable_object_types, get_sql_results,
+    get_tables_to_replicate, record_applied_change,
 )
 from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet
@@ -513,76 +509,6 @@ class Branch(JobsMixin, PrimaryModel):
 
     migrate.alters_data = True
 
-    def _merge_iterative(self, changes, request, commit, logger):
-        """
-        Apply changes iteratively in chronological order.
-        """
-        models = set()
-
-        for change in changes:
-            models.add(change.changed_object_type.model_class())
-            with event_tracking(request):
-                request.id = change.request_id
-                request.user = change.user
-                change.apply(self, using=DEFAULT_DB_ALIAS, logger=logger)
-
-        if not commit:
-            raise AbortTransaction()
-
-        self._cleanup(models)
-
-    def _merge_collapsed(self, changes, request, commit, logger):
-        """
-        Apply changes after collapsing them by object and ordering by dependencies.
-        """
-        models = set()
-
-        logger.info("Collapsing ObjectChanges by object...")
-        collapsed_changes = {}
-
-        for change in changes:
-            key = (change.changed_object_type.id, change.changed_object_id)
-
-            if key not in collapsed_changes:
-                model_class = change.changed_object_type.model_class()
-                collapsed = CollapsedChange(key, model_class)
-                collapsed_changes[key] = collapsed
-                logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
-
-            collapsed_changes[key].changes.append(change)
-
-        # Collapse each object's changes
-        for key, collapsed in collapsed_changes.items():
-            collapsed.collapse(logger)
-
-        # Order collapsed changes based on dependencies
-        ordered_changes = order_collapsed_changes(collapsed_changes, logger)
-
-        # Apply collapsed changes in order
-        logger.info(f"Applying {len(ordered_changes)} collapsed changes...")
-        for i, collapsed in enumerate(ordered_changes, 1):
-            model_class = collapsed.model_class
-            models.add(model_class)
-
-            last_change = collapsed.last_change
-
-            logger.info(f"  [{i}/{len(ordered_changes)}] {collapsed.final_action.upper()} "
-                       f"{model_class.__name__}:{collapsed.key[1]} "
-                       f"(from {len(collapsed.changes)} original changes)")
-
-            with event_tracking(request):
-                request.id = last_change.request_id
-                request.user = last_change.user
-
-                # Apply the collapsed change
-                collapsed.apply(self, using=DEFAULT_DB_ALIAS, logger=logger)
-
-        if not commit:
-            raise AbortTransaction()
-
-        # Perform cleanup tasks
-        self._cleanup(models)
-
     def merge(self, user, commit=True):
         """
         Apply all changes in the Branch to the main schema by replaying them in
@@ -619,13 +545,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
-                # Choose merge strategy
-                if self.merge_strategy == BranchMergeStrategyChoices.SQUASH:
-                    logger.debug("Merging using squash strategy")
-                    self._merge_collapsed(changes, request, commit, logger)
-                else:
-                    logger.debug("Merging using iterative strategy")
-                    self._merge_iterative(changes, request, commit, logger)
+                # Get and execute the appropriate merge strategy
+                strategy = get_merge_strategy(self.merge_strategy)
+                logger.debug(f"Merging using {self.merge_strategy} strategy")
+                strategy.merge(self, changes, request, commit, logger)
 
         except Exception as e:
             if err_message := str(e):
@@ -655,81 +578,6 @@ class Branch(JobsMixin, PrimaryModel):
         post_save.disconnect(handler, sender=ObjectChange_)
 
     merge.alters_data = True
-
-    def _revert_iterative(self, changes, request, commit, logger):
-        """
-        Undo changes iteratively (one at a time) in reverse chronological order.
-        """
-        models = set()
-
-        # Undo each change from the Branch
-        for change in changes:
-            models.add(change.changed_object_type.model_class())
-            with event_tracking(request):
-                request.id = change.request_id
-                request.user = change.user
-                change.undo(self, logger=logger)
-        if not commit:
-            raise AbortTransaction()
-
-        # Perform cleanup tasks
-        self._cleanup(models)
-
-    def _revert_collapsed(self, changes, request, commit, logger):
-        """
-        Undo changes after collapsing them by object and ordering by dependencies.
-        """
-        models = set()
-
-        # Group changes by object and create CollapsedChange objects
-        logger.info("Collapsing ObjectChanges by object...")
-        collapsed_changes = {}
-
-        for change in changes:
-            key = (change.changed_object_type.id, change.changed_object_id)
-
-            if key not in collapsed_changes:
-                model_class = change.changed_object_type.model_class()
-                collapsed = CollapsedChange(key, model_class)
-                collapsed_changes[key] = collapsed
-                logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
-
-            collapsed_changes[key].changes.append(change)
-
-        logger.info(f"  {len(changes)} changes collapsed into {len(collapsed_changes)} objects")
-
-        # Collapse each object's changes
-        logger.info("Determining final action for each object...")
-        for key, collapsed in collapsed_changes.items():
-            collapsed.collapse(logger)
-
-        # Order collapsed changes for revert (reverse of merge order)
-        merge_order = order_collapsed_changes(collapsed_changes, logger)
-        ordered_changes = list(reversed(merge_order))
-
-        # Undo collapsed changes in dependency order
-        logger.info(f"Undoing {len(ordered_changes)} collapsed changes in dependency order...")
-        for i, collapsed in enumerate(ordered_changes, 1):
-            model_class = collapsed.model_class
-            models.add(model_class)
-
-            # Use the last change's metadata for tracking
-            last_change = collapsed.last_change
-            logger.info(
-                f"[{i}/{len(ordered_changes)}] Undoing {collapsed.final_action} "
-                f"{model_class._meta.verbose_name} (ID: {collapsed.key[1]})"
-            )
-
-            with event_tracking(request):
-                request.id = last_change.request_id
-                request.user = last_change.user
-                collapsed.undo(self, using=DEFAULT_DB_ALIAS, logger=logger)
-
-        if not commit:
-            raise AbortTransaction()
-
-        # Perform cleanup tasks
-        self._cleanup(models)
 
     def revert(self, user, commit=True):
         """
@@ -767,13 +615,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
-                # Choose revert strategy based on merge strategy
-                if self.merge_strategy == BranchMergeStrategyChoices.SQUASH:
-                    logger.debug("Reverting using squash strategy")
-                    self._revert_collapsed(changes, request, commit, logger)
-                else:
-                    logger.debug("Reverting using iterative strategy")
-                    self._revert_iterative(changes, request, commit, logger)
+                # Get and execute the appropriate revert strategy
+                strategy = get_merge_strategy(self.merge_strategy)
+                logger.debug(f"Reverting using {self.merge_strategy} strategy")
+                strategy.revert(self, changes, request, commit, logger)
 
         except Exception as e:
             if err_message := str(e):
