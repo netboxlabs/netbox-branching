@@ -49,7 +49,7 @@ def get_merge_strategy(strategy_name):
     Get the appropriate merge strategy instance based on the strategy name.
 
     Args:
-        strategy_name: String name of the strategy ('iterative' or 'squash')
+        strategy_name: String name of the strategy from BranchMergeStrategyChoices
 
     Returns:
         MergeStrategy instance
