@@ -50,8 +50,8 @@
       <div class="row">
         <div class="col col-6 offset-3">
           {% render_field form.commit %}
-          {% if form.collapse_changes %}
-            {% render_field form.collapse_changes %}
+          {% if form.merge_strategy %}
+            {% render_field form.merge_strategy %}
           {% endif %}
           <div class="text-center my-3">
             <a href="{{ branch.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>

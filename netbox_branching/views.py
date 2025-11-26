@@ -240,8 +240,8 @@ class BranchMergeView(BaseBranchActionView):
     action = 'merge'
 
     def do_action(self, branch, request, form):
-        # Save the collapse_changes setting to the branch
-        branch.merged_using_collapsed = form.cleaned_data.get('collapse_changes', False)
+        # Save the merge_strategy setting to the branch
+        branch.merge_strategy = form.cleaned_data.get('merge_strategy', 'iterative')
         branch.save()
 
         # Enqueue a background job to merge the Branch

@@ -46,6 +46,16 @@ class BranchStatusChoices(ChoiceSet):
     )
 
 
+class BranchMergeStrategyChoices(ChoiceSet):
+    ITERATIVE = 'iterative'
+    SQUASH = 'squash'
+
+    CHOICES = (
+        (ITERATIVE, _('Iterative'), 'blue'),
+        (SQUASH, _('Squash'), 'green'),
+    )
+
+
 class BranchEventTypeChoices(ChoiceSet):
     PROVISIONED = 'provisioned'
     SYNCED = 'synced'

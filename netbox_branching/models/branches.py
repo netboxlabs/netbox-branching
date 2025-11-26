@@ -32,7 +32,7 @@ from netbox.context_managers import event_tracking
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
-from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
+from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.collapse_merge import (
     CollapsedChange,
     order_collapsed_changes,
@@ -105,10 +105,12 @@ class Branch(JobsMixin, PrimaryModel):
         null=True,
         related_name='+'
     )
-    merged_using_collapsed = models.BooleanField(
-        verbose_name=_('merged using collapsed'),
-        default=False,
-        help_text=_('Whether the merge was performed using the collapsed strategy')
+    merge_strategy = models.CharField(
+        verbose_name=_('merge strategy'),
+        max_length=50,
+        choices=BranchMergeStrategyChoices,
+        default=BranchMergeStrategyChoices.ITERATIVE,
+        help_text=_('Strategy used to merge this branch')
     )
 
     _preaction_validators = {
@@ -622,9 +624,9 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
-                # Choose merge strategy based on merged_using_collapsed setting
-                if self.merged_using_collapsed:
-                    logger.debug("Merging using collapsed strategy")
+                # Choose merge strategy
+                if self.merge_strategy == BranchMergeStrategyChoices.SQUASH:
+                    logger.debug("Merging using squash strategy")
                     self._merge_collapsed(changes, request, commit, logger)
                 else:
                     logger.debug("Merging using iterative strategy")
@@ -770,9 +772,9 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
-                # Choose revert strategy based on merged_using_collapsed setting
-                if self.merged_using_collapsed:
-                    logger.debug("Reverting using collapsed strategy")
+                # Choose revert strategy based on merge strategy
+                if self.merge_strategy == BranchMergeStrategyChoices.SQUASH:
+                    logger.debug("Reverting using squash strategy")
                     self._revert_collapsed(changes, request, commit, logger)
                 else:
                     logger.debug("Reverting using iterative strategy")
@@ -791,7 +793,7 @@ class Branch(JobsMixin, PrimaryModel):
         self.status = BranchStatusChoices.READY
         self.merged_time = None
         self.merged_by = None
-        self.merged_using_collapsed = False
+        self.merge_strategy = BranchMergeStrategyChoices.ITERATIVE
         self.save()
 
         # Record a branch event for the merge

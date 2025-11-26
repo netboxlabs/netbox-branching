@@ -47,7 +47,7 @@ class MergeTestCase(TransactionTestCase):
         """Helper to create and provision a branch."""
         import time
 
-        branch = Branch(name=name, merged_using_collapsed=True)
+        branch = Branch(name=name, merge_strategy='squash')
         branch.save(provision=False)
         branch.provision(user=self.user)
 
