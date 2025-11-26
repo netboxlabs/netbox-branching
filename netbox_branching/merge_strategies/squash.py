@@ -73,7 +73,6 @@ class CollapsedChange:
         # Sort by time (oldest first)
         self.changes = sorted(self.changes, key=lambda c: c.time)
 
-        # Check if there's a DELETE anywhere in the changes
         has_delete = any(c.action == 'delete' for c in self.changes)
         has_create = any(c.action == 'create' for c in self.changes)
 
@@ -539,8 +538,7 @@ def _dependency_order_by_references(collapsed_changes, logger):
     When multiple nodes have no dependencies (equal priority in the dependency graph),
     they are ordered by action type priority: DELETE (0) -> UPDATE (1) -> CREATE (2).
 
-    If cycles are detected, raises an exception. Bidirectional cycles should be handled
-    by _split_bidirectional_cycles() before calling this method.
+    If cycles are detected, raises an exception.
 
     Returns: ordered list of keys
     """
@@ -628,7 +626,7 @@ def _order_collapsed_changes(collapsed_changes, logger):
     3. Topological sort respecting dependencies
 
     This ensures:
-    - DELETEs generally happen first to free unique constraints (time order within group)
+    - DELETEs generally happen first to free unique constraints
     - UPDATEs that remove FK references happen before their associated DELETEs
     - CREATEs happen before UPDATEs/CREATEs that reference them
 
