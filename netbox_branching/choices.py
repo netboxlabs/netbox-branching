@@ -51,8 +51,8 @@ class BranchMergeStrategyChoices(ChoiceSet):
     SQUASH = 'squash'
 
     CHOICES = (
-        (ITERATIVE, _('Iterative'), 'blue'),
-        (SQUASH, _('Squash'), 'green'),
+        (ITERATIVE, _('Iterative')),
+        (SQUASH, _('Squash')),
     )
 
 
