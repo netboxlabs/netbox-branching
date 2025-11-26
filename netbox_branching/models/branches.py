@@ -8,8 +8,6 @@ from functools import cached_property, partial
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.fields import GenericForeignKey
-from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
@@ -22,10 +20,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from mptt.models import MPTTModel
 
-from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
-from utilities.data import shallow_compare_dict
-from utilities.serialization import deserialize_object
 from netbox.config import get_config
 from netbox.context import current_request
 from netbox.context_managers import event_tracking
@@ -44,7 +39,7 @@ from netbox_branching.signals import *
 from netbox_branching.utilities import BranchActionIndicator
 from netbox_branching.utilities import (
     ChangeSummary, activate_branch, get_branchable_object_types, get_sql_results, get_tables_to_replicate,
-    record_applied_change, update_object,
+    record_applied_change,
 )
 from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet

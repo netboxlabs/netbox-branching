@@ -89,7 +89,9 @@ class CollapsedChange:
                 # Just DELETE (ignore all other changes like updates)
                 # prechange_data: original state from first change
                 # postchange_data: postchange_data from DELETE ObjectChange
-                logger.debug(f"  -> Action: DELETE (keeping only DELETE, ignoring {len(self.changes) - 1} other changes)")
+                logger.debug(
+                    f"  -> Action: DELETE (keeping only DELETE, ignoring {len(self.changes) - 1} other changes)"
+                )
                 delete_change = next(c for c in self.changes if c.action == 'delete')
                 self.final_action = 'delete'
                 self.prechange_data = self.changes[0].prechange_data
