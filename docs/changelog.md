@@ -1,5 +1,17 @@
 # Change Log
 
+## v0.7.3
+
+### Bug Fixes
+
+* [#353](https://github.com/netboxlabs/netbox-branching/issues/353) - Prohibit altering branch status via REST API (establishes a dedicated endpoint for archiving)
+* [#354](https://github.com/netboxlabs/netbox-branching/issues/354) - Ensure that queries for assigned tags utilize the active branch
+* [#358](https://github.com/netboxlabs/netbox-branching/issues/358) - Enforce `CONN_MAX_AGE` timeout for branch database connections
+* [#365](https://github.com/netboxlabs/netbox-branching/issues/365) - Temporarily disable object deletion check when syncing a branch from main to avoid validation failure
+* [#371](https://github.com/netboxlabs/netbox-branching/issues/371) - Ignore module import errors when discovering object migrators (fixes `ModuleNotFoundError` exception raised when attempting to merge a branch)
+
+---
+
 ## v0.7.2
 
 ### Enhancements
