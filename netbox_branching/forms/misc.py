@@ -5,13 +5,16 @@ from netbox_branching.choices import BranchMergeStrategyChoices
 from netbox_branching.models import ChangeDiff
 
 __all__ = (
-    'BranchActionForm',
+    'BranchSyncForm',
+    'BranchMergeForm',
+    'BranchRevertForm',
     'ConfirmationForm',
     'MigrateBranchForm',
 )
 
 
-class BranchActionForm(forms.Form):
+class BaseBranchActionForm(forms.Form):
+    """Base form for branch actions (sync, merge, revert)."""
     pk = forms.ModelMultipleChoiceField(
         queryset=ChangeDiff.objects.all(),
         required=False
@@ -21,23 +24,13 @@ class BranchActionForm(forms.Form):
         label=_('Commit changes'),
         help_text=_('Leave unchecked to perform a dry run')
     )
-    merge_strategy = forms.ChoiceField(
-        choices=BranchMergeStrategyChoices,
-        initial=BranchMergeStrategyChoices.ITERATIVE,
-        label=_('Merge Strategy'),
-        help_text=_('Strategy to use when merging changes.')
-    )
 
-    def __init__(self, branch, *args, allow_commit=True, action=None, **kwargs):
+    def __init__(self, branch, *args, allow_commit=True, **kwargs):
         self.branch = branch
         super().__init__(*args, **kwargs)
 
         if not allow_commit:
             self.fields['commit'].disabled = True
-
-        # Only show merge_strategy for merge operations, not revert
-        if action == 'revert':
-            del self.fields['merge_strategy']
 
     def clean(self):
         super().clean()
@@ -52,6 +45,26 @@ class BranchActionForm(forms.Form):
             raise forms.ValidationError(_("All conflicts must be acknowledged in order to merge the branch."))
 
         return self.cleaned_data
+
+
+class BranchSyncForm(BaseBranchActionForm):
+    """Form for syncing a branch."""
+    pass
+
+
+class BranchMergeForm(BaseBranchActionForm):
+    """Form for merging a branch."""
+    merge_strategy = forms.ChoiceField(
+        choices=BranchMergeStrategyChoices,
+        initial=BranchMergeStrategyChoices.ITERATIVE,
+        label=_('Merge Strategy'),
+        help_text=_('Strategy to use when merging changes.')
+    )
+
+
+class BranchRevertForm(BaseBranchActionForm):
+    """Form for reverting a branch."""
+    pass
 
 
 class ConfirmationForm(forms.Form):

@@ -164,7 +164,7 @@ class BaseBranchActionView(generic.ObjectView):
     Base view for syncing or merging a Branch.
     """
     queryset = Branch.objects.all()
-    form = forms.BranchActionForm
+    form = None  # Must be set by derived classes
     template_name = 'netbox_branching/branch_action.html'
     action = None
     valid_states = (
@@ -188,7 +188,7 @@ class BaseBranchActionView(generic.ObjectView):
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
         action_permitted = getattr(branch, f'can_{self.action}')
-        form = self.form(branch, allow_commit=action_permitted, action=self.action)
+        form = self.form(branch, allow_commit=action_permitted)
 
         return render(request, self.template_name, {
             'branch': branch,
@@ -201,7 +201,7 @@ class BaseBranchActionView(generic.ObjectView):
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
         action_permitted = getattr(branch, f'can_{self.action}')
-        form = self.form(branch, request.POST, allow_commit=action_permitted, action=self.action)
+        form = self.form(branch, request.POST, allow_commit=action_permitted)
 
         if branch.status not in self.valid_states:
             messages.error(request, _(
@@ -222,6 +222,7 @@ class BaseBranchActionView(generic.ObjectView):
 @register_model_view(Branch, 'sync')
 class BranchSyncView(BaseBranchActionView):
     action = 'sync'
+    form = forms.BranchSyncForm
 
     def do_action(self, branch, request, form):
         # Enqueue a background job to sync the Branch
@@ -238,6 +239,7 @@ class BranchSyncView(BaseBranchActionView):
 @register_model_view(Branch, 'merge')
 class BranchMergeView(BaseBranchActionView):
     action = 'merge'
+    form = forms.BranchMergeForm
 
     def do_action(self, branch, request, form):
         # Save the merge_strategy setting to the branch
@@ -259,6 +261,7 @@ class BranchMergeView(BaseBranchActionView):
 @register_model_view(Branch, 'revert')
 class BranchRevertView(BaseBranchActionView):
     action = 'revert'
+    form = forms.BranchRevertForm
     valid_states = (
         BranchStatusChoices.MERGED,
     )
