@@ -1,6 +1,3 @@
-"""
-Abstract base class for merge strategies.
-"""
 from abc import ABC, abstractmethod
 
 
