@@ -8,6 +8,8 @@ from utilities.exceptions import AbortTransaction
 from .signal_receivers import validate_object_deletion_in_branch
 from .utilities import ListHandler
 
+JOB_TIMEOUT = 3600  # 1 hour - increased for large operations
+
 __all__ = (
     'MergeBranchJob',
     'MigrateBranchJob',
@@ -107,12 +109,10 @@ class MergeBranchJob(JobRunner):
     """
     class Meta:
         name = 'Merge branch'
-        job_timeout = 3600  # 1 hour (in seconds) - increased from default 300s for large merges
 
     @property
     def job_timeout(self):
-        """Return the job timeout from Meta."""
-        return getattr(self.Meta, 'job_timeout', None)
+        return JOB_TIMEOUT
 
     def run(self, commit=True, *args, **kwargs):
         # Initialize logging
@@ -134,12 +134,10 @@ class RevertBranchJob(JobRunner):
     """
     class Meta:
         name = 'Revert branch'
-        job_timeout = 3600  # 1 hour - increased for large reverts
 
     @property
     def job_timeout(self):
-        """Return the job timeout from Meta."""
-        return getattr(self.Meta, 'job_timeout', None)
+        return JOB_TIMEOUT
 
     def run(self, commit=True, *args, **kwargs):
         # Initialize logging
