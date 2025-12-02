@@ -1,4 +1,7 @@
+import logging
+
 from abc import ABC, abstractmethod
+from mptt.models import MPTTModel
 
 
 __all__ = (
@@ -39,6 +42,19 @@ class MergeStrategy(ABC):
             logger: Logger instance for logging
         """
         pass
+
+    def _clean(self, models):
+        """
+        Called after syncing, merging, or reverting a branch.
+        """
+        logger = logging.getLogger('netbox_branching.branch')
+
+        for model in models:
+
+            # Recalculate MPTT as needed
+            if issubclass(model, MPTTModel):
+                logger.debug(f"Recalculating MPTT for model {model}")
+                model.objects.rebuild()
 
 
 def get_merge_strategy(strategy_name):

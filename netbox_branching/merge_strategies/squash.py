@@ -731,7 +731,7 @@ class SquashMergeStrategy(MergeStrategy):
             raise AbortTransaction()
 
         # Perform cleanup tasks
-        branch._cleanup(models)
+        self._clean(models)
 
     def revert(self, branch, changes, request, commit, logger):
         """
@@ -787,4 +787,4 @@ class SquashMergeStrategy(MergeStrategy):
             raise AbortTransaction()
 
         # Perform cleanup tasks
-        branch._cleanup(models)
+        self._clean(models)

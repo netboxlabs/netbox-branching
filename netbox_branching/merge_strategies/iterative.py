@@ -35,7 +35,7 @@ class IterativeMergeStrategy(MergeStrategy):
         if not commit:
             raise AbortTransaction()
 
-        branch._cleanup(models)
+        self._clean(models)
 
     def revert(self, branch, changes, request, commit, logger):
         """
@@ -55,4 +55,4 @@ class IterativeMergeStrategy(MergeStrategy):
             raise AbortTransaction()
 
         # Perform cleanup tasks
-        branch._cleanup(models)
+        self._clean(models)
