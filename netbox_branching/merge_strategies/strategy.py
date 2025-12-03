@@ -59,19 +59,27 @@ class MergeStrategy(ABC):
 
 def get_merge_strategy(strategy_name):
     """
-    Get the appropriate merge strategy instance based on the strategy name.
+    Get the appropriate merge strategy class based on the strategy name.
 
     Args:
         strategy_name: String name of the strategy from BranchMergeStrategyChoices
 
     Returns:
-        MergeStrategy instance
+        MergeStrategy class (caller should instantiate)
+
+    Raises:
+        ValueError: If the strategy name is unknown
     """
     from netbox_branching.choices import BranchMergeStrategyChoices
     from .iterative import IterativeMergeStrategy
     from .squash import SquashMergeStrategy
 
-    if strategy_name == BranchMergeStrategyChoices.SQUASH:
-        return SquashMergeStrategy()
-    else:
-        return IterativeMergeStrategy()
+    strategies = {
+        BranchMergeStrategyChoices.SQUASH: SquashMergeStrategy,
+        BranchMergeStrategyChoices.ITERATIVE: IterativeMergeStrategy,
+    }
+
+    try:
+        return strategies[strategy_name]
+    except KeyError as exc:
+        raise ValueError(f"Invalid strategy name: {strategy_name}") from exc
