@@ -3,16 +3,12 @@ Squash merge strategy implementation with functions for collapsing and ordering 
 """
 import logging
 
-from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import DEFAULT_DB_ALIAS, models
 
 from core.choices import ObjectChangeActionChoices
 from netbox.context_managers import event_tracking
-from netbox_branching.utilities import update_object
-from utilities.data import shallow_compare_dict
 from utilities.exceptions import AbortTransaction
-from utilities.serialization import deserialize_object
 
 from .strategy import MergeStrategy
 
@@ -138,157 +134,22 @@ class CollapsedChange:
         self.final_action = 'update'
         self.last_change = last_change
 
-    def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None):
+    def generate_object_change(self):
         """
-        Apply this collapsed change to the database.
-        Similar to ObjectChange.apply() but works with collapsed data.
+        Generate a dummy ObjectChange instance from this collapsed change.
+        Used to leverage the standard ObjectChange.apply() and undo() methods.
         """
-        logger = logger or logging.getLogger('netbox_branching.collapse_merge.apply')
-        model = self.model_class
-        object_id = self.key[1]
-
-        # Run data migrators on the last change (to apply any necessary migrations)
-        self.last_change.migrate(branch)
-
-        # Creating a new object
-        if self.final_action == 'create':
-            logger.debug(f'  Creating {model._meta.verbose_name} {object_id}')
-
-            if hasattr(model, 'deserialize_object'):
-                instance = model.deserialize_object(self.postchange_data, pk=object_id)
-            else:
-                instance = deserialize_object(model, self.postchange_data, pk=object_id)
-
-            try:
-                instance.object.full_clean()
-            except (FileNotFoundError) as e:
-                # If a file was deleted later in this branch it will fail here
-                # so we need to ignore it. We can assume the NetBox state is valid.
-                logger.warning(f'  Ignoring missing file: {e}')
-            instance.save(using=using)
-
-        # Modifying an object
-        elif self.final_action == 'update':
-            logger.debug(f'  Updating {model._meta.verbose_name} {object_id}')
-
-            try:
-                instance = model.objects.using(using).get(pk=object_id)
-            except model.DoesNotExist:
-                logger.error(f'  {model._meta.verbose_name} {object_id} not found for update')
-                raise
-
-            # Calculate what fields changed from the collapsed changes
-            # We need to figure out what changed between initial and final state
-            initial_data = self.prechange_data or {}
-            final_data = self.postchange_data or {}
-
-            # Only update fields that actually changed
-            changed_fields = {}
-            for key, final_value in final_data.items():
-                initial_value = initial_data.get(key)
-                if initial_value != final_value:
-                    changed_fields[key] = final_value
-
-            logger.debug(f'    Updating {len(changed_fields)} fields: {list(changed_fields.keys())}')
-            update_object(instance, changed_fields, using=using)
-
-        # Deleting an object
-        elif self.final_action == 'delete':
-            logger.debug(f'  Deleting {model._meta.verbose_name} {object_id}')
-
-            try:
-                instance = model.objects.using(using).get(pk=object_id)
-                instance.delete(using=using)
-            except model.DoesNotExist:
-                logger.debug(f'  {model._meta.verbose_name} {object_id} already deleted; skipping')
-
-    def undo(self, branch, using=DEFAULT_DB_ALIAS, logger=None):
-        """
-        Undo this collapsed change from the database (reverse of apply).
-        Follows the same pattern as ObjectChange.undo().
-        """
-        logger = logger or logging.getLogger('netbox_branching.collapse_merge.undo')
-        model = self.model_class
-        object_id = self.key[1]
-
-        # Run data migrators on the last change (in revert mode)
-        self.last_change.migrate(branch, revert=True)
-
-        # Undoing a CREATE: delete the object
-        if self.final_action == 'create':
-            logger.debug(f'  Undoing creation of {model._meta.verbose_name} {object_id}')
-            try:
-                instance = model.objects.using(using).get(pk=object_id)
-                instance.delete(using=using)
-            except model.DoesNotExist:
-                logger.debug(f'  {model._meta.verbose_name} {object_id} does not exist; skipping')
-
-        # Undoing an UPDATE: revert to the original state
-        elif self.final_action == 'update':
-            logger.debug(f'  Undoing update of {model._meta.verbose_name} {object_id}')
-
-            try:
-                instance = model.objects.using(using).get(pk=object_id)
-                # Compute diff and apply 'pre' values (like ObjectChange.undo() does)
-                diff = _diff_object_change_data(
-                    ObjectChangeActionChoices.ACTION_UPDATE,
-                    self.prechange_data,
-                    self.postchange_data
-                )
-                update_object(instance, diff['pre'], using=using)
-            except model.DoesNotExist:
-                logger.debug(f'  {model._meta.verbose_name} {object_id} does not exist; skipping')
-
-        # Undoing a DELETE: restore the object
-        elif self.final_action == 'delete':
-            logger.debug(f'  Undoing deletion (restoring) {model._meta.verbose_name} {object_id}')
-
-            prechange_data = self.prechange_data or {}
-
-            # Restore from prechange_data (like ObjectChange.undo() does)
-            deserialized = deserialize_object(model, prechange_data, pk=object_id)
-            instance = deserialized.object
-
-            # Restore GenericForeignKey fields
-            for field in instance._meta.private_fields:
-                if isinstance(field, GenericForeignKey):
-                    ct_field = getattr(instance, field.ct_field)
-                    fk_field = getattr(instance, field.fk_field)
-                    if ct_field and fk_field:
-                        setattr(instance, field.name, ct_field.get_object_for_this_type(pk=fk_field))
-
-            instance.full_clean()
-            instance.save(using=using)
-
-
-def _diff_object_change_data(action, prechange_data, postchange_data):
-    """
-    Compute diff between prechange_data and postchange_data for a given action.
-    Mirrors the logic of ObjectChange.diff() method.
-
-    Returns: dict with 'pre' and 'post' keys containing changed attributes
-    """
-    prechange_data = prechange_data or {}
-    postchange_data = postchange_data or {}
-
-    # Determine which attributes have changed
-    if action == ObjectChangeActionChoices.ACTION_CREATE:
-        changed_attrs = sorted(postchange_data.keys())
-    elif action == ObjectChangeActionChoices.ACTION_DELETE:
-        changed_attrs = sorted(prechange_data.keys())
-    else:
-        # TODO: Support deep (recursive) comparison
-        changed_data = shallow_compare_dict(prechange_data, postchange_data)
-        changed_attrs = sorted(changed_data.keys())
-
-    return {
-        'pre': {
-            k: prechange_data.get(k) for k in changed_attrs
-        },
-        'post': {
-            k: postchange_data.get(k) for k in changed_attrs
-        },
-    }
+        from netbox_branching.models import ObjectChange
+        dummy_change = ObjectChange(
+            action=self.final_action,
+            changed_object_type=ContentType.objects.get_for_id(self.key[0]),
+            changed_object_id=self.key[1],
+            prechange_data=self.prechange_data,
+            postchange_data=self.postchange_data,
+        )
+        # Use last_change for migrate() to have the correct metadata
+        dummy_change.pk = self.last_change.pk
+        return dummy_change
 
 
 def _get_fk_references(model_class, data, changed_objects):
@@ -724,8 +585,9 @@ class SquashMergeStrategy(MergeStrategy):
                 request.id = last_change.request_id
                 request.user = user
 
-                # Apply the collapsed change
-                collapsed.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+                # Create a dummy ObjectChange from the collapsed change and apply it
+                dummy_change = collapsed.generate_object_change()
+                dummy_change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
 
         if not commit:
             raise AbortTransaction()
@@ -781,7 +643,10 @@ class SquashMergeStrategy(MergeStrategy):
             with event_tracking(request):
                 request.id = last_change.request_id
                 request.user = user
-                collapsed.undo(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+
+                # Create a dummy ObjectChange from the collapsed change and undo it
+                dummy_change = collapsed.generate_object_change()
+                dummy_change.undo(branch, using=DEFAULT_DB_ALIAS, logger=logger)
 
         if not commit:
             raise AbortTransaction()
