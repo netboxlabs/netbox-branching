@@ -1,12 +1,10 @@
 """
 Squash merge strategy implementation with functions for collapsing and ordering ObjectChanges.
 """
-import logging
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import DEFAULT_DB_ALIAS, models
 
-from core.choices import ObjectChangeActionChoices
 from netbox.context_managers import event_tracking
 from utilities.exceptions import AbortTransaction
 
