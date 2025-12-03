@@ -681,7 +681,7 @@ class SquashMergeStrategy(MergeStrategy):
     Squash merge strategy that collapses multiple changes per object into a single operation.
     """
 
-    def merge(self, branch, changes, request, commit, logger):
+    def merge(self, branch, changes, request, commit, logger, user):
         """
         Apply changes after collapsing them by object and ordering by dependencies.
         """
@@ -722,7 +722,7 @@ class SquashMergeStrategy(MergeStrategy):
 
             with event_tracking(request):
                 request.id = last_change.request_id
-                request.user = last_change.user
+                request.user = user
 
                 # Apply the collapsed change
                 collapsed.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
@@ -733,7 +733,7 @@ class SquashMergeStrategy(MergeStrategy):
         # Perform cleanup tasks
         self._clean(models)
 
-    def revert(self, branch, changes, request, commit, logger):
+    def revert(self, branch, changes, request, commit, logger, user):
         """
         Undo changes after collapsing them by object and ordering by dependencies.
         """
@@ -780,7 +780,7 @@ class SquashMergeStrategy(MergeStrategy):
 
             with event_tracking(request):
                 request.id = last_change.request_id
-                request.user = last_change.user
+                request.user = user
                 collapsed.undo(branch, using=DEFAULT_DB_ALIAS, logger=logger)
 
         if not commit:

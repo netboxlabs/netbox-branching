@@ -19,7 +19,7 @@ class IterativeMergeStrategy(MergeStrategy):
     Iterative merge strategy that applies/reverts changes one at a time in chronological order.
     """
 
-    def merge(self, branch, changes, request, commit, logger):
+    def merge(self, branch, changes, request, commit, logger, user):
         """
         Apply changes iteratively in chronological order.
         """
@@ -37,7 +37,7 @@ class IterativeMergeStrategy(MergeStrategy):
 
         self._clean(models)
 
-    def revert(self, branch, changes, request, commit, logger):
+    def revert(self, branch, changes, request, commit, logger, user):
         """
         Undo changes iteratively (one at a time) in reverse chronological order.
         """

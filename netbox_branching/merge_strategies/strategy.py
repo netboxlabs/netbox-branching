@@ -16,7 +16,7 @@ class MergeStrategy(ABC):
     """
 
     @abstractmethod
-    def merge(self, branch, changes, request, commit, logger):
+    def merge(self, branch, changes, request, commit, logger, user):
         """
         Merge changes from the branch into the main schema.
 
@@ -26,11 +26,12 @@ class MergeStrategy(ABC):
             request: Django request object for event tracking
             commit: Boolean indicating whether to commit changes
             logger: Logger instance for logging
+            user: User who initiated the merge
         """
         pass
 
     @abstractmethod
-    def revert(self, branch, changes, request, commit, logger):
+    def revert(self, branch, changes, request, commit, logger, user):
         """
         Revert changes that were previously merged.
 
@@ -40,6 +41,7 @@ class MergeStrategy(ABC):
             request: Django request object for event tracking
             commit: Boolean indicating whether to commit changes
             logger: Logger instance for logging
+            user: User who initiated the revert
         """
         pass
 
