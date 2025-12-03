@@ -626,11 +626,6 @@ class SquashMergeStrategy(MergeStrategy):
         if not to_process:
             return []
 
-        # Reset dependencies
-        for collapsed in to_process.values():
-            collapsed.depends_on = set()
-            collapsed.depended_by = set()
-
         # Preemptively detect and split bidirectional FK cycles
         # This may add new UPDATE operations to to_process
         SquashMergeStrategy._split_bidirectional_cycles(to_process, logger)
