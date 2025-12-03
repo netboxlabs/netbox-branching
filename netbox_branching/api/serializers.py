@@ -32,7 +32,7 @@ class BranchSerializer(NetBoxModelSerializer):
     )
     status = ChoiceField(
         choices=BranchStatusChoices,
-        required=False
+        read_only=True
     )
 
     class Meta:

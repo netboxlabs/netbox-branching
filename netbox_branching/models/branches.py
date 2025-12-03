@@ -320,8 +320,17 @@ class Branch(JobsMixin, PrimaryModel):
         migrators = defaultdict(list)
         for migration in self.applied_migrations:
             app_label, name = migration.split('.')
+<<<<<<< HEAD
             module_name = f'{app_label}.migrations.{name}'
             module = importlib.import_module(module_name)
+=======
+            try:
+                module = importlib.import_module(f'{app_label}.migrations.{name}')
+            except ModuleNotFoundError:
+                logger = logging.getLogger('netbox_branching.branch')
+                logger.warning(f"Failed to load module for migration {migration}; skipping.")
+                continue
+>>>>>>> main
             for object_type, migrator in getattr(module, 'objectchange_migrators', {}).items():
                 migrators[object_type].append(migrator)
         return migrators

@@ -7,10 +7,10 @@ from django.test import Client, TransactionTestCase
 from django.urls import reverse
 
 from dcim.models import Site
-from users.models import Token
-
+from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME
 from netbox_branching.models import Branch
+from users.models import Token
 
 
 class APITestCase(TransactionTestCase):
@@ -99,3 +99,85 @@ class APITestCase(TransactionTestCase):
         results = self.get_results(response)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['name'], 'Site 2')
+
+
+class BranchArchiveAPITestCase(TransactionTestCase):
+    serialized_rollback = True
+
+    def setUp(self):
+        self.client = Client()
+        self.user = get_user_model().objects.create_user(username='testuser', is_superuser=True)
+        token = Token(user=self.user)
+        token.save()
+        self.header = {
+            'HTTP_AUTHORIZATION': f'Token {token.key}',
+            'HTTP_ACCEPT': 'application/json',
+            'HTTP_CONTENT_TYPE': 'application/json',
+        }
+
+        ContentType.objects.get_for_model(Branch)
+
+    def test_archive_endpoint_success(self):
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.MERGED)
+        branch.save(provision=False)
+        self.assertEqual(branch.status, 'merged')
+
+        url = reverse('plugins-api:netbox_branching-api:branch-archive', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **self.header)
+
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['status']['value'], BranchStatusChoices.ARCHIVED)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.ARCHIVED)
+
+    def test_archive_endpoint_permission_denied(self):
+        user = get_user_model().objects.create_user(username='limited_user')
+        token = Token(user=user)
+        token.save()
+        header = {
+            'HTTP_AUTHORIZATION': f'Token {token.key}',
+            'HTTP_ACCEPT': 'application/json',
+            'HTTP_CONTENT_TYPE': 'application/json',
+        }
+
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.MERGED)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-archive', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **header)
+
+        self.assertEqual(response.status_code, 403)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+    def test_archive_endpoint_not_mergeable(self):
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-archive', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **self.header)
+
+        self.assertEqual(response.status_code, 400)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, 'ready')
+
+    def test_patch_status_archived_blocked(self):
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.MERGED)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-detail', kwargs={'pk': branch.pk})
+        response = self.client.patch(
+            url,
+            data=json.dumps({'status': 'archived'}),
+            content_type='application/json',
+            **self.header
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
