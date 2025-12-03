@@ -1,5 +1,8 @@
 # NetBox Branching Best Practices
 
+!!! note
+    This guidance applies to NetBox Branching version 0.7.3 and previous versions.
+
 This document describes the underlying architecture and best practices for using NetBox Branching effectively.
 
 For primary documentation, see the [NetBox Branching Overview](./index.md).
