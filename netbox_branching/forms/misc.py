@@ -17,7 +17,8 @@ class BaseBranchActionForm(forms.Form):
     """Base form for branch actions (sync, merge, revert)."""
     pk = forms.ModelMultipleChoiceField(
         queryset=ChangeDiff.objects.all(),
-        required=False
+        required=False,
+        widget=forms.MultipleHiddenInput()
     )
     commit = forms.BooleanField(
         required=False,

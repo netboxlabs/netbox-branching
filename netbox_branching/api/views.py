@@ -10,7 +10,7 @@ from rest_framework.viewsets import ModelViewSet
 from core.api.serializers import JobSerializer
 from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
 from netbox_branching import filtersets
-from netbox_branching.jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
+from netbox_branching.jobs import JOB_TIMEOUT, MergeBranchJob, RevertBranchJob, SyncBranchJob
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
 from . import serializers
 
@@ -79,7 +79,7 @@ class BranchViewSet(ModelViewSet):
             instance=branch,
             user=request.user,
             commit=commit,
-            job_timeout=MergeBranchJob.Meta.job_timeout
+            job_timeout=JOB_TIMEOUT
         )
 
         return Response(JobSerializer(job, context={'request': request}).data)

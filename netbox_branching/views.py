@@ -11,7 +11,7 @@ from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
-from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
+from .jobs import JOB_TIMEOUT, MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
 
 
@@ -251,7 +251,7 @@ class BranchMergeView(BaseBranchActionView):
             instance=branch,
             user=request.user,
             commit=form.cleaned_data['commit'],
-            job_timeout=MergeBranchJob.Meta.job_timeout
+            job_timeout=JOB_TIMEOUT
         )
         messages.success(request, _("Merging of branch {branch} in progress").format(branch=branch))
 
