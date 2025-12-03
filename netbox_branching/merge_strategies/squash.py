@@ -152,391 +152,6 @@ class CollapsedChange:
         return dummy_change
 
 
-def _get_fk_references(model_class, data, changed_objects):
-    """
-    Find foreign key references in the given data that point to objects in changed_objects.
-    Returns a set of (content_type_id, object_id) tuples.
-    """
-    if not data:
-        return set()
-
-    references = set()
-    for field in model_class._meta.get_fields():
-        if isinstance(field, models.ForeignKey):
-            fk_value = data.get(field.name)
-
-            if fk_value:
-                # Get the content type of the related model
-                related_model = field.related_model
-                related_ct = ContentType.objects.get_for_model(related_model)
-                ref_key = (related_ct.id, fk_value)
-
-                # Only track if this object is in our changed_objects
-                if ref_key in changed_objects:
-                    references.add(ref_key)
-
-    return references
-
-
-def _build_fk_dependency_graph(deletes, updates, creates, logger):
-    """
-    Build the FK dependency graph between collapsed changes.
-
-    Analyzes foreign key references in the data to determine which changes depend on others:
-    - UPDATEs that remove FK references must happen before DELETEs
-    - UPDATEs that add FK references must happen after CREATEs
-    - CREATEs that reference other created objects must happen after those CREATEs
-    - DELETEs of child objects must happen before DELETEs of parent objects
-
-    Modifies the CollapsedChange objects in place by setting their depends_on and depended_by sets.
-    """
-    # Build lookup maps for efficient dependency checking
-    deletes_map = {c.key: c for c in deletes}
-    creates_map = {c.key: c for c in creates}
-
-    # 1. Check UPDATEs for dependencies
-    for update in updates:
-        # Check if UPDATE references deleted object in prechange_data
-        # This means the UPDATE had a reference that it's removing
-        # The UPDATE must happen BEFORE the DELETE so the FK reference is removed first
-        if update.changes[0].prechange_data:
-            prechange_refs = _get_fk_references(
-                update.model_class,
-                update.changes[0].prechange_data,
-                deletes_map.keys()
-            )
-            for ref_key in prechange_refs:
-                # DELETE depends on UPDATE (UPDATE removes reference, then DELETE can proceed)
-                delete_collapsed = deletes_map[ref_key]
-                delete_collapsed.depends_on.add(update.key)
-                update.depended_by.add(ref_key)
-                logger.debug(
-                    f"    {delete_collapsed} depends on {update} "
-                    f"(UPDATE removes FK reference before DELETE)"
-                )
-
-        # Check if UPDATE references created object in postchange_data
-        # This means the UPDATE needs the CREATE to exist first
-        # The CREATE must happen BEFORE the UPDATE
-        if update.postchange_data:
-            postchange_refs = _get_fk_references(
-                update.model_class,
-                update.postchange_data,
-                creates_map.keys()
-            )
-            for ref_key in postchange_refs:
-                # UPDATE depends on CREATE
-                create_collapsed = creates_map[ref_key]
-                update.depends_on.add(ref_key)
-                create_collapsed.depended_by.add(update.key)
-                logger.debug(
-                    f"    {update} depends on {create_collapsed} "
-                    f"(UPDATE references created object)"
-                )
-
-    # 2. Check CREATEs for dependencies on other CREATEs
-    for create in creates:
-        if create.postchange_data:
-            # Check if this CREATE references other created objects
-            refs = _get_fk_references(
-                create.model_class,
-                create.postchange_data,
-                creates_map.keys()
-            )
-            for ref_key in refs:
-                if ref_key != create.key:  # Don't self-reference
-                    # CREATE depends on another CREATE
-                    ref_create = creates_map[ref_key]
-                    create.depends_on.add(ref_key)
-                    ref_create.depended_by.add(create.key)
-                    logger.debug(
-                        f"    {create} depends on {ref_create} "
-                        f"(CREATE references another created object)"
-                    )
-
-    # 3. Check DELETEs for dependencies on other DELETEs
-    for delete in deletes:
-        if delete.prechange_data:
-            # Check if this DELETE references other deleted objects
-            refs = _get_fk_references(
-                delete.model_class,
-                delete.prechange_data,
-                deletes_map.keys()
-            )
-            for ref_key in refs:
-                if ref_key != delete.key:  # Don't self-reference
-                    # This delete references another deleted object
-                    # The referenced object must be deleted AFTER this one (child before parent)
-                    ref_delete = deletes_map[ref_key]
-                    ref_delete.depends_on.add(delete.key)
-                    delete.depended_by.add(ref_key)
-                    logger.debug(
-                        f"    {ref_delete} depends on {delete} "
-                        f"(child DELETE must happen before parent DELETE)"
-                    )
-
-
-def _has_fk_to(collapsed, target_model_class, target_obj_id):
-    """
-    Check if a CollapsedChange has a foreign key reference to a specific object.
-    Returns True if any FK field in postchange_data points to the target object.
-    """
-    if not collapsed.postchange_data:
-        return False
-
-    for field in collapsed.model_class._meta.get_fields():
-        if isinstance(field, models.ForeignKey):
-            fk_value = collapsed.postchange_data.get(field.name)
-            if fk_value:
-                # Check if this FK points to target model
-                related_model = field.related_model
-                if related_model == target_model_class and fk_value == target_obj_id:
-                    return True
-    return False
-
-
-def _split_bidirectional_cycles(collapsed_changes, logger):
-    """
-    Special case: Preemptively detect and split CREATE operations involved in
-    bidirectional FK cycles.
-
-    For each CREATE A with a nullable FK to CREATE B, check if CREATE B has any FK back to A.
-    If so, split CREATE A by setting the nullable FK to NULL and creating a separate UPDATE.
-
-    This handles the common case of bidirectional FK relationships (e.g., Circuit ↔ CircuitTermination)
-    without needing complex cycle detection.
-    """
-
-    creates = {key: c for key, c in collapsed_changes.items() if c.final_action == 'create'}
-    splits_made = 0
-
-    for key_a, create_a in list(creates.items()):
-        if not create_a.postchange_data:
-            continue
-
-        # Find nullable FK fields in this CREATE
-        for field in create_a.model_class._meta.get_fields():
-            if not (isinstance(field, models.ForeignKey) and field.null):
-                continue
-
-            fk_value = create_a.postchange_data.get(field.name)
-            if not fk_value:
-                continue
-
-            # Get the target's key
-            related_model = field.related_model
-            target_ct = ContentType.objects.get_for_model(related_model)
-            key_b = (target_ct.id, fk_value)
-
-            # Is target also being created?
-            if key_b not in creates:
-                continue
-
-            create_b = creates[key_b]
-
-            # Does target have FK back to us? (bidirectional cycle)
-            if _has_fk_to(create_b, create_a.model_class, key_a[1]):
-                logger.info(
-                    f"  Detected bidirectional cycle: {create_a.model_class.__name__}:{key_a[1]} ↔ "
-                    f"{create_b.model_class.__name__}:{key_b[1]} (via {field.name})"
-                )
-
-                # Split create_a: set nullable FK to NULL, create UPDATE to set it later
-                original_postchange = dict(create_a.postchange_data)
-                create_a.postchange_data[field.name] = None
-
-                # Create UPDATE operation
-                update_key = (key_a[0], key_a[1], f'update_{field.name}')
-                update_collapsed = CollapsedChange(update_key, create_a.model_class)
-                update_collapsed.changes = [create_a.last_change]
-                update_collapsed.final_action = 'update'
-                update_collapsed.prechange_data = dict(create_a.postchange_data)
-                update_collapsed.postchange_data = original_postchange
-                update_collapsed.last_change = create_a.last_change
-
-                # Add UPDATE to collapsed_changes
-                collapsed_changes[update_key] = update_collapsed
-                splits_made += 1
-
-                break
-
-
-def _log_cycle_details(remaining, collapsed_changes, logger, max_to_show=5):
-    """
-    Log details about nodes involved in a dependency cycle.
-    Used for debugging when cycles are detected.
-    """
-    for key, deps in list(remaining.items())[:max_to_show]:
-        collapsed = collapsed_changes[key]
-        model_name = collapsed.model_class.__name__
-        obj_id = collapsed.key[1]
-        action = collapsed.final_action.upper()
-
-        # Try to get identifying info
-        data = collapsed.postchange_data or collapsed.prechange_data or {}
-        identifying_info = []
-        for field in ['name', 'slug', 'label']:
-            if field in data:
-                identifying_info.append(f"{field}={data[field]!r}")
-        info_str = f" ({', '.join(identifying_info)})" if identifying_info else ""
-
-        logger.error(f"    {action} {model_name} (ID: {obj_id}){info_str} depends on: {deps}")
-
-    if len(remaining) > max_to_show:
-        logger.error(f"    ... and {len(remaining) - max_to_show} more nodes in cycle")
-
-
-def _dependency_order_by_references(collapsed_changes, logger):
-    """
-    Orders collapsed changes using topological sort with cycle detection.
-
-    Uses Kahn's algorithm to order nodes respecting their dependency graph.
-    Reference: https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm
-
-    The algorithm processes nodes in "layers" - first all nodes with no dependencies,
-    then all nodes whose dependencies have been satisfied, and so on.
-
-    When multiple nodes have no dependencies (equal priority in the dependency graph),
-    they are ordered by action type priority: DELETE (0) -> UPDATE (1) -> CREATE (2).
-
-    If cycles are detected, raises an exception.
-
-    Returns: ordered list of keys
-    """
-    logger.info("Adjusting ordering by references...")
-
-    # Define action priority (lower number = higher priority = processed first)
-    action_priority = {
-        'delete': 0,  # DELETEs should happen first
-        'update': 1,  # UPDATEs in the middle
-        'create': 2,  # CREATEs should happen last
-        'skip': 3,    # SKIPs should never be in the sort, but just in case
-    }
-
-    # Create a copy of dependencies to modify
-    remaining = {key: set(collapsed.depends_on) for key, collapsed in collapsed_changes.items()}
-    ordered = []
-
-    iteration = 0
-    max_iterations = len(remaining) * 2  # Safety limit
-
-    while remaining and iteration < max_iterations:
-        iteration += 1
-
-        # Find all nodes with no dependencies
-        ready = [key for key, deps in remaining.items() if not deps]
-
-        if not ready:
-            # No nodes without dependencies - we have a cycle
-            logger.error("  Cycle detected in dependency graph.")
-
-            # Log details about the nodes involved in the cycle (for debugging)
-            _log_cycle_details(remaining, collapsed_changes, logger)
-
-            raise Exception(
-                f"Cycle detected in dependency graph. {len(remaining)} changes are involved in "
-                f"circular dependencies and cannot be ordered. This may indicate a complex cycle "
-                f"that could not be automatically resolved. Check the logs above for details."
-            )
-        else:
-            # Sort ready nodes by action priority (primary) and time (secondary)
-            # This maintains DELETE -> UPDATE -> CREATE ordering, with time ordering within each group
-            ready.sort(key=lambda k: (
-                action_priority.get(collapsed_changes[k].final_action, 99),
-                collapsed_changes[k].last_change.time
-            ))
-
-        # Process ready nodes
-        for key in ready:
-            ordered.append(key)
-            del remaining[key]
-
-            # Remove this key from other nodes' dependencies
-            for deps in remaining.values():
-                deps.discard(key)
-
-    if iteration >= max_iterations:
-        logger.error("  Ordering by references exceeded maximum iterations. Possible complex cycle.")
-
-        # Log details about the remaining unprocessed nodes (for debugging)
-        _log_cycle_details(remaining, collapsed_changes, logger)
-
-        raise Exception(
-            f"Ordering by references exceeded maximum iterations ({max_iterations}). "
-            f"{len(remaining)} changes could not be ordered, possibly due to a complex cycle. "
-            f"Check the logs above for details."
-        )
-
-    logger.info(f"  Ordering by references completed: {len(ordered)} changes ordered")
-    return ordered
-
-
-def _order_collapsed_changes(collapsed_changes, logger):
-    """
-    Order collapsed changes respecting dependencies and time.
-
-    Algorithm:
-    1. Initial ordering by time: DELETEs, UPDATEs, CREATEs (each group sorted by time)
-    2. Build dependency graph:
-       - If UPDATE references deleted object in prechange_data → UPDATE must come before DELETE
-         (UPDATE removes the FK reference, allowing the DELETE to proceed)
-       - If UPDATE references created object in postchange_data → CREATE must come before UPDATE
-         (CREATE must exist before UPDATE can reference it)
-       - If CREATE references another created object in postchange_data → referenced CREATE must come first
-         (Referenced object must exist before referencing object is created)
-    3. Topological sort respecting dependencies
-
-    This ensures:
-    - DELETEs generally happen first to free unique constraints
-    - UPDATEs that remove FK references happen before their associated DELETEs
-    - CREATEs happen before UPDATEs/CREATEs that reference them
-
-    Returns: ordered list of CollapsedChange objects
-    """
-    logger.info(f"Ordering {len(collapsed_changes)} collapsed changes...")
-
-    # Remove skipped objects
-    to_process = {k: v for k, v in collapsed_changes.items() if v.final_action != 'skip'}
-    skipped = [v for v in collapsed_changes.values() if v.final_action == 'skip']
-
-    logger.info(f"  {len(skipped)} changes will be skipped (created and deleted in branch)")
-    logger.info(f"  {len(to_process)} changes to process")
-
-    if not to_process:
-        return []
-
-    # Reset dependencies
-    for collapsed in to_process.values():
-        collapsed.depends_on = set()
-        collapsed.depended_by = set()
-
-    # Preemptively detect and split bidirectional FK cycles
-    # This may add new UPDATE operations to to_process
-    _split_bidirectional_cycles(to_process, logger)
-
-    # Group by action and sort each group by time - need this to build the
-    # dependency graph correctly
-    deletes = sorted(
-        [v for v in to_process.values() if v.final_action == 'delete'],
-        key=lambda c: c.last_change.time
-    )
-    updates = sorted(
-        [v for v in to_process.values() if v.final_action == 'update'],
-        key=lambda c: c.last_change.time
-    )
-    creates = sorted(
-        [v for v in to_process.values() if v.final_action == 'create'],
-        key=lambda c: c.last_change.time
-    )
-
-    _build_fk_dependency_graph(deletes, updates, creates, logger)
-    ordered_keys = _dependency_order_by_references(to_process, logger)
-
-    # Convert keys back to collapsed changes
-    result = [to_process[key] for key in ordered_keys]
-    return result
-
-
 class SquashMergeStrategy(MergeStrategy):
     """
     Squash merge strategy that collapses multiple changes per object into a single operation.
@@ -567,7 +182,7 @@ class SquashMergeStrategy(MergeStrategy):
             collapsed.collapse(logger)
 
         # Order collapsed changes based on dependencies
-        ordered_changes = _order_collapsed_changes(collapsed_changes, logger)
+        ordered_changes = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger)
 
         # Apply collapsed changes in order
         logger.info(f"Applying {len(ordered_changes)} collapsed changes...")
@@ -624,7 +239,7 @@ class SquashMergeStrategy(MergeStrategy):
             collapsed.collapse(logger)
 
         # Order collapsed changes for revert (reverse of merge order)
-        merge_order = _order_collapsed_changes(collapsed_changes, logger)
+        merge_order = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger)
         ordered_changes = list(reversed(merge_order))
 
         # Undo collapsed changes in dependency order
@@ -653,3 +268,393 @@ class SquashMergeStrategy(MergeStrategy):
 
         # Perform cleanup tasks
         self._clean(models)
+
+    @staticmethod
+    def _get_fk_references(model_class, data, changed_objects):
+        """
+        Find foreign key references in the given data that point to objects in changed_objects.
+        Returns a set of (content_type_id, object_id) tuples.
+        """
+        if not data:
+            return set()
+
+        references = set()
+        for field in model_class._meta.get_fields():
+            if isinstance(field, models.ForeignKey):
+                fk_value = data.get(field.name)
+
+                if fk_value:
+                    # Get the content type of the related model
+                    related_model = field.related_model
+                    related_ct = ContentType.objects.get_for_model(related_model)
+                    ref_key = (related_ct.id, fk_value)
+
+                    # Only track if this object is in our changed_objects
+                    if ref_key in changed_objects:
+                        references.add(ref_key)
+
+        return references
+
+    @staticmethod
+    def _build_fk_dependency_graph(deletes, updates, creates, logger):
+        """
+        Build the FK dependency graph between collapsed changes.
+
+        Analyzes foreign key references in the data to determine which changes depend on others:
+        - UPDATEs that remove FK references must happen before DELETEs
+        - UPDATEs that add FK references must happen after CREATEs
+        - CREATEs that reference other created objects must happen after those CREATEs
+        - DELETEs of child objects must happen before DELETEs of parent objects
+
+        Modifies the CollapsedChange objects in place by setting their depends_on and depended_by sets.
+        """
+        # Build lookup maps for efficient dependency checking
+        deletes_map = {c.key: c for c in deletes}
+        creates_map = {c.key: c for c in creates}
+
+        # 1. Check UPDATEs for dependencies
+        for update in updates:
+            # Check if UPDATE references deleted object in prechange_data
+            # This means the UPDATE had a reference that it's removing
+            # The UPDATE must happen BEFORE the DELETE so the FK reference is removed first
+            if update.changes[0].prechange_data:
+                prechange_refs = SquashMergeStrategy._get_fk_references(
+                    update.model_class,
+                    update.changes[0].prechange_data,
+                    deletes_map.keys()
+                )
+                for ref_key in prechange_refs:
+                    # DELETE depends on UPDATE (UPDATE removes reference, then DELETE can proceed)
+                    delete_collapsed = deletes_map[ref_key]
+                    delete_collapsed.depends_on.add(update.key)
+                    update.depended_by.add(ref_key)
+                    logger.debug(
+                        f"    {delete_collapsed} depends on {update} "
+                        f"(UPDATE removes FK reference before DELETE)"
+                    )
+
+            # Check if UPDATE references created object in postchange_data
+            # This means the UPDATE needs the CREATE to exist first
+            # The CREATE must happen BEFORE the UPDATE
+            if update.postchange_data:
+                postchange_refs = SquashMergeStrategy._get_fk_references(
+                    update.model_class,
+                    update.postchange_data,
+                    creates_map.keys()
+                )
+                for ref_key in postchange_refs:
+                    # UPDATE depends on CREATE
+                    create_collapsed = creates_map[ref_key]
+                    update.depends_on.add(ref_key)
+                    create_collapsed.depended_by.add(update.key)
+                    logger.debug(
+                        f"    {update} depends on {create_collapsed} "
+                        f"(UPDATE references created object)"
+                    )
+
+        # 2. Check CREATEs for dependencies on other CREATEs
+        for create in creates:
+            if create.postchange_data:
+                # Check if this CREATE references other created objects
+                refs = SquashMergeStrategy._get_fk_references(
+                    create.model_class,
+                    create.postchange_data,
+                    creates_map.keys()
+                )
+                for ref_key in refs:
+                    if ref_key != create.key:  # Don't self-reference
+                        # CREATE depends on another CREATE
+                        ref_create = creates_map[ref_key]
+                        create.depends_on.add(ref_key)
+                        ref_create.depended_by.add(create.key)
+                        logger.debug(
+                            f"    {create} depends on {ref_create} "
+                            f"(CREATE references another created object)"
+                        )
+
+        # 3. Check DELETEs for dependencies on other DELETEs
+        for delete in deletes:
+            if delete.prechange_data:
+                # Check if this DELETE references other deleted objects
+                refs = SquashMergeStrategy._get_fk_references(
+                    delete.model_class,
+                    delete.prechange_data,
+                    deletes_map.keys()
+                )
+                for ref_key in refs:
+                    if ref_key != delete.key:  # Don't self-reference
+                        # This delete references another deleted object
+                        # The referenced object must be deleted AFTER this one (child before parent)
+                        ref_delete = deletes_map[ref_key]
+                        ref_delete.depends_on.add(delete.key)
+                        delete.depended_by.add(ref_key)
+                        logger.debug(
+                            f"    {ref_delete} depends on {delete} "
+                            f"(child DELETE must happen before parent DELETE)"
+                        )
+
+    @staticmethod
+    def _has_fk_to(collapsed, target_model_class, target_obj_id):
+        """
+        Check if a CollapsedChange has a foreign key reference to a specific object.
+        Returns True if any FK field in postchange_data points to the target object.
+        """
+        if not collapsed.postchange_data:
+            return False
+
+        for field in collapsed.model_class._meta.get_fields():
+            if isinstance(field, models.ForeignKey):
+                fk_value = collapsed.postchange_data.get(field.name)
+                if fk_value:
+                    # Check if this FK points to target model
+                    related_model = field.related_model
+                    if related_model == target_model_class and fk_value == target_obj_id:
+                        return True
+        return False
+
+    @staticmethod
+    def _split_bidirectional_cycles(collapsed_changes, logger):
+        """
+        Special case: Preemptively detect and split CREATE operations involved in
+        bidirectional FK cycles.
+
+        For each CREATE A with a nullable FK to CREATE B, check if CREATE B has any FK back to A.
+        If so, split CREATE A by setting the nullable FK to NULL and creating a separate UPDATE.
+
+        This handles the common case of bidirectional FK relationships (e.g., Circuit ↔ CircuitTermination)
+        without needing complex cycle detection.
+        """
+
+        creates = {key: c for key, c in collapsed_changes.items() if c.final_action == 'create'}
+        splits_made = 0
+
+        for key_a, create_a in list(creates.items()):
+            if not create_a.postchange_data:
+                continue
+
+            # Find nullable FK fields in this CREATE
+            for field in create_a.model_class._meta.get_fields():
+                if not (isinstance(field, models.ForeignKey) and field.null):
+                    continue
+
+                fk_value = create_a.postchange_data.get(field.name)
+                if not fk_value:
+                    continue
+
+                # Get the target's key
+                related_model = field.related_model
+                target_ct = ContentType.objects.get_for_model(related_model)
+                key_b = (target_ct.id, fk_value)
+
+                # Is target also being created?
+                if key_b not in creates:
+                    continue
+
+                create_b = creates[key_b]
+
+                # Does target have FK back to us? (bidirectional cycle)
+                if SquashMergeStrategy._has_fk_to(create_b, create_a.model_class, key_a[1]):
+                    logger.info(
+                        f"  Detected bidirectional cycle: {create_a.model_class.__name__}:{key_a[1]} ↔ "
+                        f"{create_b.model_class.__name__}:{key_b[1]} (via {field.name})"
+                    )
+
+                    # Split create_a: set nullable FK to NULL, create UPDATE to set it later
+                    original_postchange = dict(create_a.postchange_data)
+                    create_a.postchange_data[field.name] = None
+
+                    # Create UPDATE operation
+                    update_key = (key_a[0], key_a[1], f'update_{field.name}')
+                    update_collapsed = CollapsedChange(update_key, create_a.model_class)
+                    update_collapsed.changes = [create_a.last_change]
+                    update_collapsed.final_action = 'update'
+                    update_collapsed.prechange_data = dict(create_a.postchange_data)
+                    update_collapsed.postchange_data = original_postchange
+                    update_collapsed.last_change = create_a.last_change
+
+                    # Add UPDATE to collapsed_changes
+                    collapsed_changes[update_key] = update_collapsed
+                    splits_made += 1
+
+                    break
+
+    @staticmethod
+    def _log_cycle_details(remaining, collapsed_changes, logger, max_to_show=5):
+        """
+        Log details about nodes involved in a dependency cycle.
+        Used for debugging when cycles are detected.
+        """
+        for key, deps in list(remaining.items())[:max_to_show]:
+            collapsed = collapsed_changes[key]
+            model_name = collapsed.model_class.__name__
+            obj_id = collapsed.key[1]
+            action = collapsed.final_action.upper()
+
+            # Try to get identifying info
+            data = collapsed.postchange_data or collapsed.prechange_data or {}
+            identifying_info = []
+            for field in ['name', 'slug', 'label']:
+                if field in data:
+                    identifying_info.append(f"{field}={data[field]!r}")
+            info_str = f" ({', '.join(identifying_info)})" if identifying_info else ""
+
+            logger.error(f"    {action} {model_name} (ID: {obj_id}){info_str} depends on: {deps}")
+
+        if len(remaining) > max_to_show:
+            logger.error(f"    ... and {len(remaining) - max_to_show} more nodes in cycle")
+
+    @staticmethod
+    def _dependency_order_by_references(collapsed_changes, logger):
+        """
+        Orders collapsed changes using topological sort with cycle detection.
+
+        Uses Kahn's algorithm to order nodes respecting their dependency graph.
+        Reference: https://en.wikipedia.org/wiki/Topological_sorting#Kahn's_algorithm
+
+        The algorithm processes nodes in "layers" - first all nodes with no dependencies,
+        then all nodes whose dependencies have been satisfied, and so on.
+
+        When multiple nodes have no dependencies (equal priority in the dependency graph),
+        they are ordered by action type priority: DELETE (0) -> UPDATE (1) -> CREATE (2).
+
+        If cycles are detected, raises an exception.
+
+        Returns: ordered list of keys
+        """
+        logger.info("Adjusting ordering by references...")
+
+        # Define action priority (lower number = higher priority = processed first)
+        action_priority = {
+            'delete': 0,  # DELETEs should happen first
+            'update': 1,  # UPDATEs in the middle
+            'create': 2,  # CREATEs should happen last
+            'skip': 3,    # SKIPs should never be in the sort, but just in case
+        }
+
+        # Create a copy of dependencies to modify
+        remaining = {key: set(collapsed.depends_on) for key, collapsed in collapsed_changes.items()}
+        ordered = []
+
+        iteration = 0
+        max_iterations = len(remaining) * 2  # Safety limit
+
+        while remaining and iteration < max_iterations:
+            iteration += 1
+
+            # Find all nodes with no dependencies
+            ready = [key for key, deps in remaining.items() if not deps]
+
+            if not ready:
+                # No nodes without dependencies - we have a cycle
+                logger.error("  Cycle detected in dependency graph.")
+
+                # Log details about the nodes involved in the cycle (for debugging)
+                SquashMergeStrategy._log_cycle_details(remaining, collapsed_changes, logger)
+
+                raise Exception(
+                    f"Cycle detected in dependency graph. {len(remaining)} changes are involved in "
+                    f"circular dependencies and cannot be ordered. This may indicate a complex cycle "
+                    f"that could not be automatically resolved. Check the logs above for details."
+                )
+            else:
+                # Sort ready nodes by action priority (primary) and time (secondary)
+                # This maintains DELETE -> UPDATE -> CREATE ordering, with time ordering within each group
+                ready.sort(key=lambda k: (
+                    action_priority.get(collapsed_changes[k].final_action, 99),
+                    collapsed_changes[k].last_change.time
+                ))
+
+            # Process ready nodes
+            for key in ready:
+                ordered.append(key)
+                del remaining[key]
+
+                # Remove this key from other nodes' dependencies
+                for deps in remaining.values():
+                    deps.discard(key)
+
+        if iteration >= max_iterations:
+            logger.error("  Ordering by references exceeded maximum iterations. Possible complex cycle.")
+
+            # Log details about the remaining unprocessed nodes (for debugging)
+            SquashMergeStrategy._log_cycle_details(remaining, collapsed_changes, logger)
+
+            raise Exception(
+                f"Ordering by references exceeded maximum iterations ({max_iterations}). "
+                f"{len(remaining)} changes could not be ordered, possibly due to a complex cycle. "
+                f"Check the logs above for details."
+            )
+
+        logger.info(f"  Ordering by references completed: {len(ordered)} changes ordered")
+        return ordered
+
+    @staticmethod
+    def _order_collapsed_changes(collapsed_changes, logger):
+        """
+        Order collapsed changes respecting dependencies and time.
+
+        Algorithm:
+        1. Initial ordering by time: DELETEs, UPDATEs, CREATEs (each group sorted by time)
+        2. Build dependency graph:
+           - If UPDATE references deleted object in prechange_data → UPDATE must come before DELETE
+             (UPDATE removes the FK reference, allowing the DELETE to proceed)
+           - If UPDATE references created object in postchange_data → CREATE must come before UPDATE
+             (CREATE must exist before UPDATE can reference it)
+           - If CREATE references another created object in postchange_data → referenced CREATE must come first
+             (Referenced object must exist before referencing object is created)
+        3. Topological sort respecting dependencies
+
+        This ensures:
+        - DELETEs generally happen first to free unique constraints
+        - UPDATEs that remove FK references happen before their associated DELETEs
+        - CREATEs happen before UPDATEs/CREATEs that reference them
+
+        Returns: ordered list of CollapsedChange objects
+        """
+        logger.info(f"Ordering {len(collapsed_changes)} collapsed changes...")
+
+        # Remove skipped objects
+        to_process = {}
+        skipped = []
+        for k, v in collapsed_changes.items():
+            if v.final_action == 'skip':
+                skipped.append(v)
+            else:
+                to_process[k] = v
+
+        logger.info(f"  {len(skipped)} changes will be skipped (created and deleted in branch)")
+        logger.info(f"  {len(to_process)} changes to process")
+
+        if not to_process:
+            return []
+
+        # Reset dependencies
+        for collapsed in to_process.values():
+            collapsed.depends_on = set()
+            collapsed.depended_by = set()
+
+        # Preemptively detect and split bidirectional FK cycles
+        # This may add new UPDATE operations to to_process
+        SquashMergeStrategy._split_bidirectional_cycles(to_process, logger)
+
+        # Group by action and sort each group by time - need this to build the
+        # dependency graph correctly
+        deletes = sorted(
+            [v for v in to_process.values() if v.final_action == 'delete'],
+            key=lambda c: c.last_change.time
+        )
+        updates = sorted(
+            [v for v in to_process.values() if v.final_action == 'update'],
+            key=lambda c: c.last_change.time
+        )
+        creates = sorted(
+            [v for v in to_process.values() if v.final_action == 'create'],
+            key=lambda c: c.last_change.time
+        )
+
+        SquashMergeStrategy._build_fk_dependency_graph(deletes, updates, creates, logger)
+        ordered_keys = SquashMergeStrategy._dependency_order_by_references(to_process, logger)
+
+        # Convert keys back to collapsed changes
+        result = [to_process[key] for key in ordered_keys]
+        return result
