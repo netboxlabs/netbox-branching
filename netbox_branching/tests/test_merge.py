@@ -9,7 +9,7 @@ from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
 
 from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
-from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Region, Site
 from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
@@ -818,3 +818,95 @@ class MergeTestCase(TransactionTestCase):
         # Verify revert deleted both objects
         self.assertFalse(Circuit.objects.filter(id=circuit_id).exists())
         self.assertFalse(CircuitTermination.objects.filter(id=termination_id).exists())
+
+    def test_merge_squash_multiple_field_changes(self):
+        """
+        Test that multiple changes to the same object are correctly squashed.
+        Create a Site and make multiple modifications to various fields, then verify
+        the final merged state reflects only the last change for each field.
+        """
+        # Create regions in main for testing
+        region1 = Region.objects.create(name='Region 1', slug='region-1')
+        region2 = Region.objects.create(name='Region 2', slug='region-2')
+        region3 = Region.objects.create(name='Region 3', slug='region-3')
+
+        # Create branch with squash strategy
+        branch = self._create_and_provision_branch(name='Squash Test Branch')
+
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In branch: create site and make multiple changes
+        with activate_branch(branch), event_tracking(request):
+            # Create the site
+            site = Site.objects.create(
+                name='Initial Site',
+                slug='test-site',
+                description='Initial description',
+                physical_address='123 Initial St',
+                latitude=10.0,
+                longitude=20.0,
+                region=region1
+            )
+            site_id = site.id
+
+            # First set of updates
+            site.snapshot()
+            site.name = 'Updated Site 1'
+            site.latitude = 11.0
+            site.save()
+
+            # Second set of updates
+            site.snapshot()
+            site.name = 'Updated Site 2'
+            site.longitude = 21.0
+            site.region = region2
+            site.save()
+
+            # Third set of updates
+            site.snapshot()
+            site.description = 'Updated description'
+            site.latitude = 12.5
+            site.save()
+
+            # Fourth set of updates
+            site.snapshot()
+            site.name = 'Final Site Name'
+            site.physical_address = '789 Final Ave'
+            site.longitude = 22.5
+            site.region = region3
+            site.save()
+
+        # Verify multiple ObjectChanges were created
+        from django.contrib.contenttypes.models import ContentType
+        site_ct = ContentType.objects.get_for_model(Site)
+        changes = branch.get_unmerged_changes().filter(
+            changed_object_type=site_ct,
+            changed_object_id=site_id
+        )
+        # Should have 1 create + 4 updates = 5 changes
+        self.assertEqual(changes.count(), 5)
+        actions = [c.action for c in changes.order_by('time')]
+        self.assertEqual(actions, ['create', 'update', 'update', 'update', 'update'])
+
+        # Merge branch using squash strategy
+        branch.merge(user=self.user, commit=True)
+
+        # Verify site exists in main with final values from all changes
+        self.assertTrue(Site.objects.filter(id=site_id).exists())
+        merged_site = Site.objects.get(id=site_id)
+
+        # Check that final values are correct
+        self.assertEqual(merged_site.name, 'Final Site Name')  # Changed 3 times
+        self.assertEqual(merged_site.slug, 'test-site')  # Never changed
+        self.assertEqual(merged_site.description, 'Updated description')  # Changed once in 3rd update
+        self.assertEqual(merged_site.physical_address, '789 Final Ave')  # Changed in 4th update
+        self.assertEqual(merged_site.latitude, 12.5)  # Changed twice: 10.0 -> 11.0 -> 12.5
+        self.assertEqual(merged_site.longitude, 22.5)  # Changed twice: 20.0 -> 21.0 -> 22.5
+        self.assertEqual(merged_site.region_id, region3.id)  # Changed twice: region1 -> region2 -> region3
+
+        # Verify branch status
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
