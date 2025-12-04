@@ -52,7 +52,6 @@ class ObjectChange(ObjectChange_):
                 instance = model.deserialize_object(self.postchange_data, pk=self.changed_object_id)
             else:
                 instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
-
             try:
                 instance.object.full_clean()
             except (FileNotFoundError) as e:

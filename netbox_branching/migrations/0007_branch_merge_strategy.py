@@ -1,0 +1,16 @@
+from django.db import migrations, models
+
+
+class Migration(migrations.Migration):
+
+    dependencies = [
+        ("netbox_branching", "0006_tag_object_types"),
+    ]
+
+    operations = [
+        migrations.AddField(
+            model_name="branch",
+            name="merge_strategy",
+            field=models.CharField(default="iterative", max_length=50),
+        ),
+    ]
