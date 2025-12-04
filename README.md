@@ -7,6 +7,9 @@ This [NetBox](http://netboxlabs.com/oss/netbox/) plugin introduces branching fun
 * NetBox v4.3 or later
 * PostgreSQL 12 or later
 
+> [!TIP]
+> To use NetBox Branching with NetBox Docker, click [here](./docs/netbox-docker.md)  
+
 ## Installation
 
 Brief installation instructions are provided below. For a complete installation guide, please refer to the included documentation.
