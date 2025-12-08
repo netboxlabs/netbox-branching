@@ -99,7 +99,9 @@ class Branch(JobsMixin, PrimaryModel):
         verbose_name=_('merge strategy'),
         max_length=50,
         choices=BranchMergeStrategyChoices,
-        default=BranchMergeStrategyChoices.ITERATIVE,
+        blank=True,
+        null=True,
+        default=None,
         help_text=_('Strategy used to merge this branch')
     )
 
@@ -639,7 +641,7 @@ class Branch(JobsMixin, PrimaryModel):
         self.status = BranchStatusChoices.READY
         self.merged_time = None
         self.merged_by = None
-        self.merge_strategy = BranchMergeStrategyChoices.ITERATIVE
+        self.merge_strategy = None
         self.save()
 
         # Record a branch event for the merge

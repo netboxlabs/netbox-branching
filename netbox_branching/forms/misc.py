@@ -58,6 +58,7 @@ class BranchMergeForm(BaseBranchActionForm):
     merge_strategy = forms.ChoiceField(
         choices=BranchMergeStrategyChoices,
         initial=BranchMergeStrategyChoices.ITERATIVE,
+        required=True,
         label=_('Merge Strategy'),
         help_text=_('Strategy to use when merging changes.')
     )

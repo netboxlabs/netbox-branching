@@ -11,6 +11,6 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name="branch",
             name="merge_strategy",
-            field=models.CharField(default="iterative", max_length=50),
+            field=models.CharField(blank=True, null=True, default=None, max_length=50),
         ),
     ]

@@ -64,7 +64,7 @@ def get_merge_strategy(strategy_name):
     Get the appropriate merge strategy class based on the strategy name.
 
     Args:
-        strategy_name: String name of the strategy from BranchMergeStrategyChoices
+        strategy_name: String name of the strategy from BranchMergeStrategyChoices, or None
 
     Returns:
         MergeStrategy class (caller should instantiate)
@@ -75,6 +75,10 @@ def get_merge_strategy(strategy_name):
     from netbox_branching.choices import BranchMergeStrategyChoices
     from .iterative import IterativeMergeStrategy
     from .squash import SquashMergeStrategy
+
+    # Default to ITERATIVE if strategy_name is None
+    if strategy_name is None:
+        strategy_name = BranchMergeStrategyChoices.ITERATIVE
 
     strategies = {
         BranchMergeStrategyChoices.SQUASH: SquashMergeStrategy,
