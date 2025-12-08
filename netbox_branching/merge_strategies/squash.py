@@ -33,7 +33,7 @@ class CollapsedChange:
     def __init__(self, key, model_class):
         self.key = key  # (content_type_id, object_id)
         self.model_class = model_class
-        self.changes = []  # List of ObjectChange instances, ordered by time
+        self.change_count = 0  # Number of changes processed
         self.final_action = None  # ActionType enum value or None
         self.prechange_data = {}
         self.postchange_data = {}
@@ -48,91 +48,72 @@ class CollapsedChange:
         suffix = f" ({self.key[2]})" if len(self.key) > 2 else ""
         return (
             f"<CollapsedChange {self.model_class.__name__}:{obj_id}{suffix} "
-            f"action={self.final_action} changes={len(self.changes)}>"
+            f"action={self.final_action} changes={self.change_count}>"
         )
 
-    def collapse(self, logger):
+    def add_change(self, change, logger):
         """
-        Collapse the list of ObjectChanges for this object into a single action.
+        Incrementally process a single ObjectChange and update the collapsed state.
+        This processes changes one-by-one to avoid storing all ObjectChanges in memory.
 
-        A key point is that we only care about the final state of the object. Also
-        each ChangeObject needs to be correct so the final state is correct, i.e.
-        if we delete an object, there aren't going to be other objects still referencing it.
-
-        ChangeObject can have CREATE, UPDATE, and DELETE actions.
-        We need to collapse these changes into a single action.
-        We can have the following cases:
-           - CREATE + (any updates) + DELETE = skip entirely
-           - (anything other than CREATE) + DELETE = DELETE
-           - CREATE + UPDATEs = CREATE
-           - multiple UPDATEs = UPDATE
+        Assumes changes are added in chronological order.
         """
-        if not self.changes:
-            self.final_action = None
-            self.last_change = None
-            return
+        self.change_count += 1
+        self.last_change = change
 
-        # Sort by time (oldest first)
-        self.changes = sorted(self.changes, key=lambda c: c.time)
+        # Dispatch to specific handler based on action type
+        if change.action == 'create':
+            self._add_change_create(change, logger)
+        elif change.action == 'update':
+            self._add_change_update(change, logger)
+        elif change.action == 'delete':
+            self._add_change_delete(change, logger)
 
-        has_delete = any(c.action == 'delete' for c in self.changes)
-        has_create = any(c.action == 'create' for c in self.changes)
-
-        logger.debug(f"  Collapsing {len(self.changes)} changes...")
-
-        if has_create and has_delete:
-            # CREATE + DELETE = skip entirely
-            logger.debug("  -> Action: SKIP (created and deleted in branch)")
-            self.final_action = ActionType.SKIP
-            self.last_change = self.changes[-1]
-            return
-        elif has_delete:
-            # Just DELETE (ignore all other changes like updates)
-            # prechange_data: original state from first change
-            # postchange_data: postchange_data from DELETE ObjectChange
-            logger.debug(
-                f"  -> Action: DELETE (keeping only DELETE, ignoring {len(self.changes) - 1} other changes)"
-            )
-            delete_change = next(c for c in self.changes if c.action == 'delete')
-            self.final_action = ActionType.DELETE
-            self.prechange_data = self.changes[0].prechange_data
-            self.postchange_data = delete_change.postchange_data  # Should be None for DELETE, but use actual value
-            self.last_change = delete_change
-            return
-
-        # No DELETE - handle CREATE or UPDATEs
-        first_change = self.changes[0]
-        last_change = self.changes[-1]
-
-        # Created (with possible updates) -> single create
-        if has_create:
-            # prechange_data: from first ObjectChange (should be None for CREATE)
-            # postchange_data: merged from all changes
-            self.prechange_data = first_change.prechange_data
-            for change in self.changes:
-                # Merge postchange_data, later changes overwrite earlier ones
-                if change.postchange_data:
-                    self.postchange_data.update(change.postchange_data)
-            logger.debug(f"  -> Action: CREATE (collapsed {len(self.changes)} changes)")
+    def _add_change_create(self, change, logger):
+        """Handle CREATE action."""
+        if self.final_action is None:
+            logger.debug(f"  [{self.change_count}] CREATE")
             self.final_action = ActionType.CREATE
-            self.last_change = last_change
-            return
+            self._set_initial_data(change)
+        else:
+            logger.warning(f"  [{self.change_count}] Unexpected CREATE after {self.final_action} for {self}")
 
-        # Only updates -> single update
-        # prechange_data: original state from first change
-        # postchange_data: final state after all updates
-        self.prechange_data = first_change.prechange_data
-
-        if self.prechange_data:
-            self.postchange_data.update(self.prechange_data)
-
-        for change in self.changes:
+    def _add_change_update(self, change, logger):
+        """Handle UPDATE action."""
+        if self.final_action is None:
+            self.final_action = ActionType.UPDATE
+            self._set_initial_data(change)
+        elif self.final_action in (ActionType.CREATE, ActionType.UPDATE):
+            logger.debug(f"  [{self.change_count}] UPDATE after {self.final_action} (still {self.final_action})")
             if change.postchange_data:
                 self.postchange_data.update(change.postchange_data)
+        else:
+            logger.warning(f"  [{self.change_count}] Unexpected UPDATE after {self.final_action} for {self}")
 
-        logger.debug(f"  -> Action: UPDATE (collapsed {len(self.changes)} changes)")
-        self.final_action = ActionType.UPDATE
-        self.last_change = last_change
+    def _add_change_delete(self, change, logger):
+        """Handle DELETE action."""
+        if self.final_action is None:
+            self.final_action = ActionType.DELETE
+            self._set_initial_data(change)
+        elif self.final_action == ActionType.CREATE:
+            # CREATE + DELETE = SKIP
+            logger.debug(f"  [{self.change_count}] DELETE after CREATE -> SKIP")
+            self.final_action = ActionType.SKIP
+            self.prechange_data = {}
+            self.postchange_data = {}
+        elif self.final_action == ActionType.UPDATE:
+            # UPDATE + DELETE = DELETE
+            self.final_action = ActionType.DELETE
+            self.postchange_data = change.postchange_data
+        else:
+            # DELETE after DELETE or SKIP is unexpected
+            logger.warning(f"  [{self.change_count}] Unexpected DELETE after {self.final_action} for {self}")
+
+    def _set_initial_data(self, change):
+        """Helper to set initial pre/postchange data for first CREATE or UPDATE."""
+        self.prechange_data = change.prechange_data or {}
+        if change.postchange_data:
+            self.postchange_data.update(change.postchange_data)
 
     def generate_object_change(self):
         """
@@ -157,6 +138,9 @@ class SquashMergeStrategy(MergeStrategy):
     """
     Squash merge strategy that collapses multiple changes per object into a single operation.
     """
+    # Override: squash strategy needs chronological order for both merge and revert
+    # because the collapse logic expects CREATE -> UPDATE -> DELETE order
+    revert_changes_ordering = 'time'
 
     def merge(self, branch, changes, request, logger, user):
         """
@@ -164,7 +148,7 @@ class SquashMergeStrategy(MergeStrategy):
         """
         models = set()
 
-        logger.info("Collapsing ObjectChanges by object...")
+        logger.info("Collapsing ObjectChanges by object (incremental)...")
         collapsed_changes = {}
 
         for change in changes:
@@ -178,11 +162,8 @@ class SquashMergeStrategy(MergeStrategy):
                 collapsed_changes[key] = collapsed
                 logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
 
-            collapsed_changes[key].changes.append(change)
-
-        # Collapse each object's changes
-        for key, collapsed in collapsed_changes.items():
-            collapsed.collapse(logger)
+            # Incrementally process each change to avoid storing all in memory
+            collapsed_changes[key].add_change(change, logger)
 
         # Order collapsed changes based on dependencies
         ordered_changes = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger)
@@ -197,7 +178,7 @@ class SquashMergeStrategy(MergeStrategy):
 
             logger.info(f"  [{i}/{len(ordered_changes)}] {collapsed.final_action.upper()} "
                        f"{model_class.__name__}:{collapsed.key[1]} "
-                       f"(from {len(collapsed.changes)} original changes)")
+                       f"(from {collapsed.change_count} original changes)")
 
             with event_tracking(request):
                 request.id = last_change.request_id
@@ -217,10 +198,12 @@ class SquashMergeStrategy(MergeStrategy):
         models = set()
 
         # Group changes by object and create CollapsedChange objects
-        logger.info("Collapsing ObjectChanges by object...")
+        logger.info("Collapsing ObjectChanges by object (incremental)...")
         collapsed_changes = {}
+        change_count = 0
 
         for change in changes:
+            change_count += 1
             app_label, model = change.changed_object_type.natural_key()
             model_label = f"{app_label}.{model}"
             key = (model_label, change.changed_object_id)
@@ -231,14 +214,10 @@ class SquashMergeStrategy(MergeStrategy):
                 collapsed_changes[key] = collapsed
                 logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
 
-            collapsed_changes[key].changes.append(change)
+            # Incrementally process each change to avoid storing all in memory
+            collapsed_changes[key].add_change(change, logger)
 
-        logger.info(f"  {len(changes)} changes collapsed into {len(collapsed_changes)} objects")
-
-        # Collapse each object's changes
-        logger.info("Determining final action for each object...")
-        for key, collapsed in collapsed_changes.items():
-            collapsed.collapse(logger)
+        logger.info(f"  {change_count} changes collapsed into {len(collapsed_changes)} objects")
 
         # Order collapsed changes for revert (reverse of merge order)
         merge_order = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger)
@@ -318,10 +297,10 @@ class SquashMergeStrategy(MergeStrategy):
             # Check if UPDATE references deleted object in prechange_data
             # This means the UPDATE had a reference that it's removing
             # The UPDATE must happen BEFORE the DELETE so the FK reference is removed first
-            if update.changes[0].prechange_data:
+            if update.prechange_data:
                 prechange_refs = SquashMergeStrategy._get_fk_references(
                     update.model_class,
-                    update.changes[0].prechange_data,
+                    update.prechange_data,
                     deletes_map.keys()
                 )
                 for ref_key in prechange_refs:
@@ -469,7 +448,7 @@ class SquashMergeStrategy(MergeStrategy):
                     # Create UPDATE operation
                     update_key = (key_a[0], key_a[1], f'update_{field.name}')
                     update_collapsed = CollapsedChange(update_key, create_a.model_class)
-                    update_collapsed.changes = [create_a.last_change]
+                    update_collapsed.change_count = 1  # Synthetic update from split
                     update_collapsed.final_action = ActionType.UPDATE
                     update_collapsed.prechange_data = dict(create_a.postchange_data)
                     update_collapsed.postchange_data = original_postchange

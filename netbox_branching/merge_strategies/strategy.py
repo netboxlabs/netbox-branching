@@ -14,6 +14,9 @@ class MergeStrategy(ABC):
     """
     Abstract base class for merge strategies.
     """
+    # Ordering for changes queryset in merge() and revert() operations
+    merge_changes_ordering = 'time'  # Chronological order (oldest first)
+    revert_changes_ordering = '-time'  # Reverse chronological order (newest first)
 
     @abstractmethod
     def merge(self, branch, changes, request, logger, user):
