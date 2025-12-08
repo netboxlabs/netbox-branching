@@ -137,9 +137,10 @@ class CollapsedChange:
         Used to leverage the standard ObjectChange.apply() and undo() methods.
         """
         from netbox_branching.models import ObjectChange
+        app_label, model = self.key[0].split('.')
         dummy_change = ObjectChange(
             action=self.final_action,
-            changed_object_type=ContentType.objects.get_for_id(self.key[0]),
+            changed_object_type=ContentType.objects.get_by_natural_key(app_label, model),
             changed_object_id=self.key[1],
             prechange_data=self.prechange_data,
             postchange_data=self.postchange_data,
@@ -164,7 +165,9 @@ class SquashMergeStrategy(MergeStrategy):
         collapsed_changes = {}
 
         for change in changes:
-            key = (change.changed_object_type.id, change.changed_object_id)
+            app_label, model = change.changed_object_type.natural_key()
+            model_label = f"{app_label}.{model}"
+            key = (model_label, change.changed_object_id)
 
             if key not in collapsed_changes:
                 model_class = change.changed_object_type.model_class()
@@ -215,7 +218,9 @@ class SquashMergeStrategy(MergeStrategy):
         collapsed_changes = {}
 
         for change in changes:
-            key = (change.changed_object_type.id, change.changed_object_id)
+            app_label, model = change.changed_object_type.natural_key()
+            model_label = f"{app_label}.{model}"
+            key = (model_label, change.changed_object_id)
 
             if key not in collapsed_changes:
                 model_class = change.changed_object_type.model_class()
@@ -264,7 +269,7 @@ class SquashMergeStrategy(MergeStrategy):
     def _get_fk_references(model_class, data, changed_objects):
         """
         Find foreign key references in the given data that point to objects in changed_objects.
-        Returns a set of (content_type_id, object_id) tuples.
+        Returns a set of (model_label, object_id) tuples where model_label is "app.model".
         """
         if not data:
             return set()
@@ -278,7 +283,9 @@ class SquashMergeStrategy(MergeStrategy):
                     # Get the content type of the related model
                     related_model = field.related_model
                     related_ct = ContentType.objects.get_for_model(related_model)
-                    ref_key = (related_ct.id, fk_value)
+                    app_label, model = related_ct.natural_key()
+                    model_label = f"{app_label}.{model}"
+                    ref_key = (model_label, fk_value)
 
                     # Only track if this object is in our changed_objects
                     if ref_key in changed_objects:
@@ -435,7 +442,9 @@ class SquashMergeStrategy(MergeStrategy):
                 # Get the target's key
                 related_model = field.related_model
                 target_ct = ContentType.objects.get_for_model(related_model)
-                key_b = (target_ct.id, fk_value)
+                app_label, model = target_ct.natural_key()
+                model_label = f"{app_label}.{model}"
+                key_b = (model_label, fk_value)
 
                 # Is target also being created?
                 if key_b not in creates:
