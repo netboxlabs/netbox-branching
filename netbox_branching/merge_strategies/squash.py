@@ -1,6 +1,7 @@
 """
 Squash merge strategy implementation with functions for collapsing and ordering ObjectChanges.
 """
+from enum import Enum
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import DEFAULT_DB_ALIAS, models
@@ -15,6 +16,16 @@ __all__ = (
 )
 
 
+class ActionType(str, Enum):
+    """
+    Enum for collapsed change action types.
+    """
+    CREATE = 'create'
+    UPDATE = 'update'
+    DELETE = 'delete'
+    SKIP = 'skip'
+
+
 class CollapsedChange:
     """
     Represents a collapsed set of ObjectChanges for a single object.
@@ -23,7 +34,7 @@ class CollapsedChange:
         self.key = key  # (content_type_id, object_id)
         self.model_class = model_class
         self.changes = []  # List of ObjectChange instances, ordered by time
-        self.final_action = None  # 'create', 'update', 'delete', or 'skip'
+        self.final_action = None  # ActionType enum value or None
         self.prechange_data = None
         self.postchange_data = None
         self.last_change = None  # The most recent ObjectChange (for metadata)
@@ -75,7 +86,7 @@ class CollapsedChange:
             if has_create:
                 # CREATE + DELETE = skip entirely
                 logger.debug("  -> Action: SKIP (created and deleted in branch)")
-                self.final_action = 'skip'
+                self.final_action = ActionType.SKIP
                 self.prechange_data = None
                 self.postchange_data = None
                 self.last_change = self.changes[-1]
@@ -88,7 +99,7 @@ class CollapsedChange:
                     f"  -> Action: DELETE (keeping only DELETE, ignoring {len(self.changes) - 1} other changes)"
                 )
                 delete_change = next(c for c in self.changes if c.action == 'delete')
-                self.final_action = 'delete'
+                self.final_action = ActionType.DELETE
                 self.prechange_data = self.changes[0].prechange_data
                 self.postchange_data = delete_change.postchange_data  # Should be None for DELETE, but use actual value
                 self.last_change = delete_change
@@ -110,7 +121,7 @@ class CollapsedChange:
                 if change.postchange_data:
                     self.postchange_data.update(change.postchange_data)
             logger.debug(f"  -> Action: CREATE (collapsed {len(self.changes)} changes)")
-            self.final_action = 'create'
+            self.final_action = ActionType.CREATE
             self.last_change = last_change
             return
 
@@ -128,7 +139,7 @@ class CollapsedChange:
                 self.postchange_data.update(change.postchange_data)
 
         logger.debug(f"  -> Action: UPDATE (collapsed {len(self.changes)} changes)")
-        self.final_action = 'update'
+        self.final_action = ActionType.UPDATE
         self.last_change = last_change
 
     def generate_object_change(self):
@@ -139,7 +150,7 @@ class CollapsedChange:
         from netbox_branching.models import ObjectChange
         app_label, model = self.key[0].split('.')
         dummy_change = ObjectChange(
-            action=self.final_action,
+            action=self.final_action.value if self.final_action else None,
             changed_object_type=ContentType.objects.get_by_natural_key(app_label, model),
             changed_object_id=self.key[1],
             prechange_data=self.prechange_data,
@@ -423,7 +434,7 @@ class SquashMergeStrategy(MergeStrategy):
         without needing complex cycle detection.
         """
 
-        creates = {key: c for key, c in collapsed_changes.items() if c.final_action == 'create'}
+        creates = {key: c for key, c in collapsed_changes.items() if c.final_action == ActionType.CREATE}
         splits_made = 0
 
         for key_a, create_a in list(creates.items()):
@@ -467,7 +478,7 @@ class SquashMergeStrategy(MergeStrategy):
                     update_key = (key_a[0], key_a[1], f'update_{field.name}')
                     update_collapsed = CollapsedChange(update_key, create_a.model_class)
                     update_collapsed.changes = [create_a.last_change]
-                    update_collapsed.final_action = 'update'
+                    update_collapsed.final_action = ActionType.UPDATE
                     update_collapsed.prechange_data = dict(create_a.postchange_data)
                     update_collapsed.postchange_data = original_postchange
                     update_collapsed.last_change = create_a.last_change
@@ -525,10 +536,10 @@ class SquashMergeStrategy(MergeStrategy):
 
         # Define action priority (lower number = higher priority = processed first)
         action_priority = {
-            'delete': 0,  # DELETEs should happen first
-            'update': 1,  # UPDATEs in the middle
-            'create': 2,  # CREATEs should happen last
-            'skip': 3,    # SKIPs should never be in the sort, but just in case
+            ActionType.DELETE: 0,  # DELETEs should happen first
+            ActionType.UPDATE: 1,  # UPDATEs in the middle
+            ActionType.CREATE: 2,  # CREATEs should happen last
+            ActionType.SKIP: 3,    # SKIPs should never be in the sort, but just in case
         }
 
         # Create a copy of dependencies to modify
@@ -617,7 +628,7 @@ class SquashMergeStrategy(MergeStrategy):
         to_process = {}
         skipped = []
         for k, v in collapsed_changes.items():
-            if v.final_action == 'skip':
+            if v.final_action == ActionType.SKIP:
                 skipped.append(v)
             else:
                 to_process[k] = v
@@ -635,15 +646,15 @@ class SquashMergeStrategy(MergeStrategy):
         # Group by action and sort each group by time - need this to build the
         # dependency graph correctly
         deletes = sorted(
-            [v for v in to_process.values() if v.final_action == 'delete'],
+            [v for v in to_process.values() if v.final_action == ActionType.DELETE],
             key=lambda c: c.last_change.time
         )
         updates = sorted(
-            [v for v in to_process.values() if v.final_action == 'update'],
+            [v for v in to_process.values() if v.final_action == ActionType.UPDATE],
             key=lambda c: c.last_change.time
         )
         creates = sorted(
-            [v for v in to_process.values() if v.final_action == 'create'],
+            [v for v in to_process.values() if v.final_action == ActionType.CREATE],
             key=lambda c: c.last_change.time
         )
 
