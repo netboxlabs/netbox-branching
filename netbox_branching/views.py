@@ -11,7 +11,7 @@ from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
-from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
+from .jobs import JOB_TIMEOUT, MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
 
 
@@ -164,7 +164,7 @@ class BaseBranchActionView(generic.ObjectView):
     Base view for syncing or merging a Branch.
     """
     queryset = Branch.objects.all()
-    form = forms.BranchActionForm
+    form = None  # Must be set by derived classes
     template_name = 'netbox_branching/branch_action.html'
     action = None
     valid_states = (
@@ -222,6 +222,7 @@ class BaseBranchActionView(generic.ObjectView):
 @register_model_view(Branch, 'sync')
 class BranchSyncView(BaseBranchActionView):
     action = 'sync'
+    form = forms.BranchSyncForm
 
     def do_action(self, branch, request, form):
         # Enqueue a background job to sync the Branch
@@ -238,13 +239,19 @@ class BranchSyncView(BaseBranchActionView):
 @register_model_view(Branch, 'merge')
 class BranchMergeView(BaseBranchActionView):
     action = 'merge'
+    form = forms.BranchMergeForm
 
     def do_action(self, branch, request, form):
+        # Save the merge_strategy setting to the branch
+        branch.merge_strategy = form.cleaned_data.get('merge_strategy')
+        branch.save()
+
         # Enqueue a background job to merge the Branch
         MergeBranchJob.enqueue(
             instance=branch,
             user=request.user,
-            commit=form.cleaned_data['commit']
+            commit=form.cleaned_data['commit'],
+            job_timeout=JOB_TIMEOUT
         )
         messages.success(request, _("Merging of branch {branch} in progress").format(branch=branch))
 
@@ -254,6 +261,7 @@ class BranchMergeView(BaseBranchActionView):
 @register_model_view(Branch, 'revert')
 class BranchRevertView(BaseBranchActionView):
     action = 'revert'
+    form = forms.BranchRevertForm
     valid_states = (
         BranchStatusChoices.MERGED,
     )
