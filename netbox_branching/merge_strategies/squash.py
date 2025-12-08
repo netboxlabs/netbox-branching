@@ -82,28 +82,27 @@ class CollapsedChange:
 
         logger.debug(f"  Collapsing {len(self.changes)} changes...")
 
-        if has_delete:
-            if has_create:
-                # CREATE + DELETE = skip entirely
-                logger.debug("  -> Action: SKIP (created and deleted in branch)")
-                self.final_action = ActionType.SKIP
-                self.prechange_data = None
-                self.postchange_data = None
-                self.last_change = self.changes[-1]
-                return
-            else:
-                # Just DELETE (ignore all other changes like updates)
-                # prechange_data: original state from first change
-                # postchange_data: postchange_data from DELETE ObjectChange
-                logger.debug(
-                    f"  -> Action: DELETE (keeping only DELETE, ignoring {len(self.changes) - 1} other changes)"
-                )
-                delete_change = next(c for c in self.changes if c.action == 'delete')
-                self.final_action = ActionType.DELETE
-                self.prechange_data = self.changes[0].prechange_data
-                self.postchange_data = delete_change.postchange_data  # Should be None for DELETE, but use actual value
-                self.last_change = delete_change
-                return
+        if has_create and has_delete:
+            # CREATE + DELETE = skip entirely
+            logger.debug("  -> Action: SKIP (created and deleted in branch)")
+            self.final_action = ActionType.SKIP
+            self.prechange_data = None
+            self.postchange_data = None
+            self.last_change = self.changes[-1]
+            return
+        elif has_delete:
+            # Just DELETE (ignore all other changes like updates)
+            # prechange_data: original state from first change
+            # postchange_data: postchange_data from DELETE ObjectChange
+            logger.debug(
+                f"  -> Action: DELETE (keeping only DELETE, ignoring {len(self.changes) - 1} other changes)"
+            )
+            delete_change = next(c for c in self.changes if c.action == 'delete')
+            self.final_action = ActionType.DELETE
+            self.prechange_data = self.changes[0].prechange_data
+            self.postchange_data = delete_change.postchange_data  # Should be None for DELETE, but use actual value
+            self.last_change = delete_change
+            return
 
         # No DELETE - handle CREATE or UPDATEs
         first_action = self.changes[0].action
