@@ -35,8 +35,8 @@ class CollapsedChange:
         self.model_class = model_class
         self.changes = []  # List of ObjectChange instances, ordered by time
         self.final_action = None  # ActionType enum value or None
-        self.prechange_data = None
-        self.postchange_data = None
+        self.prechange_data = {}
+        self.postchange_data = {}
         self.last_change = None  # The most recent ObjectChange (for metadata)
 
         # Dependencies for ordering
@@ -69,8 +69,6 @@ class CollapsedChange:
         """
         if not self.changes:
             self.final_action = None
-            self.prechange_data = None
-            self.postchange_data = None
             self.last_change = None
             return
 
@@ -86,8 +84,6 @@ class CollapsedChange:
             # CREATE + DELETE = skip entirely
             logger.debug("  -> Action: SKIP (created and deleted in branch)")
             self.final_action = ActionType.SKIP
-            self.prechange_data = None
-            self.postchange_data = None
             self.last_change = self.changes[-1]
             return
         elif has_delete:
@@ -105,16 +101,14 @@ class CollapsedChange:
             return
 
         # No DELETE - handle CREATE or UPDATEs
-        first_action = self.changes[0].action
         first_change = self.changes[0]
         last_change = self.changes[-1]
 
         # Created (with possible updates) -> single create
-        if first_action == 'create':
+        if has_create:
             # prechange_data: from first ObjectChange (should be None for CREATE)
             # postchange_data: merged from all changes
             self.prechange_data = first_change.prechange_data
-            self.postchange_data = {}
             for change in self.changes:
                 # Merge postchange_data, later changes overwrite earlier ones
                 if change.postchange_data:
@@ -128,7 +122,6 @@ class CollapsedChange:
         # prechange_data: original state from first change
         # postchange_data: final state after all updates
         self.prechange_data = first_change.prechange_data
-        self.postchange_data = {}
 
         if self.prechange_data:
             self.postchange_data.update(self.prechange_data)
