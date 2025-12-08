@@ -243,7 +243,7 @@ class BranchMergeView(BaseBranchActionView):
 
     def do_action(self, branch, request, form):
         # Save the merge_strategy setting to the branch
-        branch.merge_strategy = form.cleaned_data.get('merge_strategy', 'iterative')
+        branch.merge_strategy = form.cleaned_data.get('merge_strategy')
         branch.save()
 
         # Enqueue a background job to merge the Branch
