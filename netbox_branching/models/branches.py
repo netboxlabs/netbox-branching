@@ -533,12 +533,8 @@ class Branch(JobsMixin, PrimaryModel):
         # Emit pre-merge signal
         pre_merge.send(sender=self.__class__, branch=self, user=user)
 
-        # Get the merge strategy to determine the correct ordering for changes
-        strategy_class = get_merge_strategy(self.merge_strategy)
-        changes_ordering = strategy_class.merge_changes_ordering
-
         # Retrieve staged changes before we update the Branch's status
-        if changes := self.get_unmerged_changes().order_by(changes_ordering):
+        if changes := self.get_unmerged_changes().order_by('time'):
             logger.info(f"Found {len(changes)} changes to merge")
         else:
             logger.info("No changes found; aborting.")
@@ -557,7 +553,8 @@ class Branch(JobsMixin, PrimaryModel):
 
         try:
             with transaction.atomic():
-                # Execute the merge strategy
+                # Get and execute the appropriate merge strategy
+                strategy_class = get_merge_strategy(self.merge_strategy)
                 logger.debug(f"Merging using {self.merge_strategy} strategy")
                 strategy_class().merge(self, changes, request, logger, user)
 
