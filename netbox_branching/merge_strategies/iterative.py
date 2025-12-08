@@ -4,7 +4,6 @@ Iterative merge strategy implementation.
 from django.db import DEFAULT_DB_ALIAS
 
 from netbox.context_managers import event_tracking
-from utilities.exceptions import AbortTransaction
 
 from .strategy import MergeStrategy
 
@@ -19,7 +18,7 @@ class IterativeMergeStrategy(MergeStrategy):
     Iterative merge strategy that applies/reverts changes one at a time in chronological order.
     """
 
-    def merge(self, branch, changes, request, commit, logger, user):
+    def merge(self, branch, changes, request, logger, user):
         """
         Apply changes iteratively in chronological order.
         """
@@ -32,12 +31,9 @@ class IterativeMergeStrategy(MergeStrategy):
                 request.user = change.user
                 change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
 
-        if not commit:
-            raise AbortTransaction()
-
         self._clean(models)
 
-    def revert(self, branch, changes, request, commit, logger, user):
+    def revert(self, branch, changes, request, logger, user):
         """
         Undo changes iteratively (one at a time) in reverse chronological order.
         """
@@ -50,9 +46,6 @@ class IterativeMergeStrategy(MergeStrategy):
                 request.id = change.request_id
                 request.user = change.user
                 change.undo(branch, logger=logger)
-
-        if not commit:
-            raise AbortTransaction()
 
         # Perform cleanup tasks
         self._clean(models)

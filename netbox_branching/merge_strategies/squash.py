@@ -6,7 +6,6 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import DEFAULT_DB_ALIAS, models
 
 from netbox.context_managers import event_tracking
-from utilities.exceptions import AbortTransaction
 
 from .strategy import MergeStrategy
 
@@ -155,7 +154,7 @@ class SquashMergeStrategy(MergeStrategy):
     Squash merge strategy that collapses multiple changes per object into a single operation.
     """
 
-    def merge(self, branch, changes, request, commit, logger, user):
+    def merge(self, branch, changes, request, logger, user):
         """
         Apply changes after collapsing them by object and ordering by dependencies.
         """
@@ -202,13 +201,10 @@ class SquashMergeStrategy(MergeStrategy):
                 dummy_change = collapsed.generate_object_change()
                 dummy_change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
 
-        if not commit:
-            raise AbortTransaction()
-
         # Perform cleanup tasks
         self._clean(models)
 
-    def revert(self, branch, changes, request, commit, logger, user):
+    def revert(self, branch, changes, request, logger, user):
         """
         Undo changes after collapsing them by object and ordering by dependencies.
         """
@@ -260,9 +256,6 @@ class SquashMergeStrategy(MergeStrategy):
                 # Create a dummy ObjectChange from the collapsed change and undo it
                 dummy_change = collapsed.generate_object_change()
                 dummy_change.undo(branch, using=DEFAULT_DB_ALIAS, logger=logger)
-
-        if not commit:
-            raise AbortTransaction()
 
         # Perform cleanup tasks
         self._clean(models)

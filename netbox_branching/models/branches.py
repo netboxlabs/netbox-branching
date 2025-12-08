@@ -556,7 +556,10 @@ class Branch(JobsMixin, PrimaryModel):
                 # Get and execute the appropriate merge strategy
                 strategy_class = get_merge_strategy(self.merge_strategy)
                 logger.debug(f"Merging using {self.merge_strategy} strategy")
-                strategy_class().merge(self, changes, request, commit, logger, user)
+                strategy_class().merge(self, changes, request, logger, user)
+
+                if not commit:
+                    raise AbortTransaction()
 
         except Exception as e:
             if err_message := str(e):
@@ -626,7 +629,10 @@ class Branch(JobsMixin, PrimaryModel):
                 # Get and execute the appropriate revert strategy
                 strategy_class = get_merge_strategy(self.merge_strategy)
                 logger.debug(f"Reverting using {self.merge_strategy} strategy")
-                strategy_class().revert(self, changes, request, commit, logger, user)
+                strategy_class().revert(self, changes, request, logger, user)
+
+                if not commit:
+                    raise AbortTransaction()
 
         except Exception as e:
             if err_message := str(e):
