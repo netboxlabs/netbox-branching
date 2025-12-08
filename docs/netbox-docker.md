@@ -1,27 +1,30 @@
-# NetBox Branching with NetBox Docker
+# Using Branching with NetBox Docker
 
 NetBox Docker is _not_ officially supported by NetBox Labs. This page is intended as a _minimal_ guide to getting branching working on NetBox Docker. For additional configuration options, please consult the [NetBox Docker documentation.](https://github.com/netbox-community/netbox-docker)
 
-## Clone NetBox Docker and step into the repo
+## Building a Docker Image with Branching
+
+### 1. Clone the `netbox-docker` repository
 
 ```
 git clone --branch 3.4.1 https://github.com/netbox-community/netbox-docker.git
 pushd netbox-docker
 ```
 
-## Create a Dockerfile to install NetBox Branching
+### 2. Create a Dockerfile
 
-```
-cat <<EOF > Dockerfile-Plugins
+Create a Dockerfile in the root of the repository to include the `netbox-branching` plugin:
+
+```text title="Dockerfile-Plugins"
 FROM netboxcommunity/netbox:v4.4.6
 RUN uv pip install netboxlabs-netbox-branching==0.7.2
-EOF
 ```
  
-## Create a docker-compose.override.yaml to include the custom image
+### 3. Include the custom image
 
-```
-cat <<EOF > docker-compose.override.yml
+Create a `docker-compose.override.yml` file to include the custom image:
+
+```yaml title="docker-compose.override.yml"
 services:
   netbox:
     image: netbox:v4.4.6-plugins
@@ -47,17 +50,18 @@ services:
   netbox-worker:
     image: netbox:v4.4.6-plugins
     pull_policy: never
-EOF
 ```
 
-## Create plugins.py to configure branching
+### 4. Configure the plugin
 
-> [!TIP]
-> Remember to insert your postgres password, the default for which can be found in `env/postgres.env`  
+Create `plugins.py` to store the plugin's configuration.
 
-```
-cat <<EOF > configuration/plugins.py
-PLUGINS = ["netbox_branching"] # If you have multiple plugins, netbox-branching _must_ come last
+!!! tip
+    Remember to insert your postgres password, the default for which can be found in `env/postgres.env`  
+
+```python title="configuration/plugins.py"
+# If you have multiple plugins, netbox-branching _must_ come last
+PLUGINS = ["netbox_branching"]
 
 from netbox_branching.utilities import DynamicSchemaDict
 
@@ -76,16 +80,15 @@ DATABASES = DynamicSchemaDict({
 DATABASE_ROUTERS = [
     'netbox_branching.database.BranchAwareRouter',
 ]
-EOF
 ```
 
-## Build the NetBox image
+### 5. Build the NetBox image
 
 ```
 docker compose build --no-cache
 ```
 
-## Start NetBox Docker
+### 6. Start NetBox Docker
 
 ```
 docker compose up -d
