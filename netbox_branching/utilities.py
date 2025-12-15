@@ -71,11 +71,15 @@ class DynamicSchemaDict(dict):
                 track_branch_connection(item)
 
                 default_config = super().__getitem__('default')
+                options = {
+                    k: v
+                    for k, v in default_config.get("OPTIONS", {}).items()
+                    if k != "options"
+                }
+                options["options"] = f"-c search_path={schema},{self.main_schema}"
                 return {
                     **default_config,
-                    'OPTIONS': {
-                        'options': f'-c search_path={schema},{self.main_schema}'
-                    }
+                    "OPTIONS": options,
                 }
         return super().__getitem__(item)
 
