@@ -13,16 +13,30 @@ from netbox_branching.models import Branch
 from users.models import Token
 
 
+# TODO: Remove when dropping support for NetBox v4.4
+def create_token(user):
+    try:
+        # NetBox >= 4.5
+        from users.choices import TokenVersionChoices
+        token = Token(version=TokenVersionChoices.V1, user=user)
+        token.save()
+        return token.token
+    except ImportError:
+        # NetBox < 4.5
+        token = Token(user=user)
+        token.save()
+        return token.key
+
+
 class APITestCase(TransactionTestCase):
     serialized_rollback = True
 
     def setUp(self):
         self.client = Client()
         user = get_user_model().objects.create_user(username='testuser', is_superuser=True)
-        token = Token(user=user)
-        token.save()
+        token = create_token(user)
         self.header = {
-            'HTTP_AUTHORIZATION': f'Token {token.key}',
+            'HTTP_AUTHORIZATION': f'Token {token}',
             'HTTP_ACCEPT': 'application/json',
             'HTTP_CONTENT_TYPE': 'application/json',
         }
@@ -107,10 +121,9 @@ class BranchArchiveAPITestCase(TransactionTestCase):
     def setUp(self):
         self.client = Client()
         self.user = get_user_model().objects.create_user(username='testuser', is_superuser=True)
-        token = Token(user=self.user)
-        token.save()
+        token = create_token(self.user)
         self.header = {
-            'HTTP_AUTHORIZATION': f'Token {token.key}',
+            'HTTP_AUTHORIZATION': f'Token {token}',
             'HTTP_ACCEPT': 'application/json',
             'HTTP_CONTENT_TYPE': 'application/json',
         }
@@ -134,10 +147,9 @@ class BranchArchiveAPITestCase(TransactionTestCase):
 
     def test_archive_endpoint_permission_denied(self):
         user = get_user_model().objects.create_user(username='limited_user')
-        token = Token(user=user)
-        token.save()
+        token = create_token(user)
         header = {
-            'HTTP_AUTHORIZATION': f'Token {token.key}',
+            'HTTP_AUTHORIZATION': f'Token {token}',
             'HTTP_ACCEPT': 'application/json',
             'HTTP_CONTENT_TYPE': 'application/json',
         }
