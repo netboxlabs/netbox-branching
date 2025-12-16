@@ -10,6 +10,7 @@ from dcim.models import Site
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME
 from netbox_branching.models import Branch
+from users.choices import TokenVersionChoices
 from users.models import Token
 
 
@@ -19,10 +20,10 @@ class APITestCase(TransactionTestCase):
     def setUp(self):
         self.client = Client()
         user = get_user_model().objects.create_user(username='testuser', is_superuser=True)
-        token = Token(user=user)
+        token = Token(version=TokenVersionChoices.V1, user=user)
         token.save()
         self.header = {
-            'HTTP_AUTHORIZATION': f'Token {token.key}',
+            'HTTP_AUTHORIZATION': f'Token {token.plaintext}',
             'HTTP_ACCEPT': 'application/json',
             'HTTP_CONTENT_TYPE': 'application/json',
         }
@@ -107,10 +108,10 @@ class BranchArchiveAPITestCase(TransactionTestCase):
     def setUp(self):
         self.client = Client()
         self.user = get_user_model().objects.create_user(username='testuser', is_superuser=True)
-        token = Token(user=self.user)
+        token = Token(version=TokenVersionChoices.V1, user=self.user)
         token.save()
         self.header = {
-            'HTTP_AUTHORIZATION': f'Token {token.key}',
+            'HTTP_AUTHORIZATION': f'Token {token.plaintext}',
             'HTTP_ACCEPT': 'application/json',
             'HTTP_CONTENT_TYPE': 'application/json',
         }
@@ -134,10 +135,10 @@ class BranchArchiveAPITestCase(TransactionTestCase):
 
     def test_archive_endpoint_permission_denied(self):
         user = get_user_model().objects.create_user(username='limited_user')
-        token = Token(user=user)
+        token = Token(version=TokenVersionChoices.V1, user=user)
         token.save()
         header = {
-            'HTTP_AUTHORIZATION': f'Token {token.key}',
+            'HTTP_AUTHORIZATION': f'Token {token.plaintext}',
             'HTTP_ACCEPT': 'application/json',
             'HTTP_CONTENT_TYPE': 'application/json',
         }

@@ -15,7 +15,7 @@ class AppConfig(PluginConfig):
     version = '0.7.3'
     base_url = 'branching'
     min_version = '4.4.1'
-    max_version = '4.4.99'
+    max_version = '4.5.99'
     middleware = [
         'netbox_branching.middleware.BranchMiddleware'
     ]
