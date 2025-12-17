@@ -1,5 +1,17 @@
 # Change Log
 
+## v0.7.4
+
+### Enhancements
+
+* [#386](https://github.com/netboxlabs/netbox-branching/issues/386) - Add support for NetBox v4.5
+
+### Bug Fixes
+
+* [#384](https://github.com/netboxlabs/netbox-branching/issues/384) - Preserve existing DATABASE["OPTIONS"] settings for branch database connections
+
+---
+
 ## v0.7.3
 
 ### Bug Fixes
