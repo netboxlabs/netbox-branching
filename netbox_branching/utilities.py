@@ -73,9 +73,9 @@ class DynamicSchemaDict(dict):
                 default_config = super().__getitem__('default')
                 return {
                     **default_config,
-                    "OPTIONS": {
-                        **default_config.get("OPTIONS", {}),
-                        "options": f"-c search_path={schema},{self.main_schema}"
+                    'OPTIONS': {
+                        **default_config.get('OPTIONS', {}),
+                        'options': f'-c search_path={schema},{self.main_schema}'
                     },
                 }
         return super().__getitem__(item)
