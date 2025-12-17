@@ -112,6 +112,30 @@ class BranchViewSet(ModelViewSet):
 
         return Response(JobSerializer(job, context={'request': request}).data)
 
+    @extend_schema(
+        methods=['post'],
+        responses={200: serializers.BranchSerializer()},
+    )
+    @action(detail=True, methods=['post'])
+    def archive(self, request, pk):
+        """
+        Archive a merged branch, deprovisioning its schema.
+        """
+        if not request.user.has_perm('netbox_branching.archive_branch'):
+            raise PermissionDenied("This user does not have permission to archive branches.")
+
+        branch = self.get_object()
+        if not branch.merged:
+            return HttpResponseBadRequest("Only merged branches can be archived.")
+        if not branch.can_archive:
+            return HttpResponseBadRequest("Archiving this branch is not permitted.")
+
+        branch.archive(user=request.user)
+        branch.refresh_from_db()
+
+        serializer = self.get_serializer(branch)
+        return Response(serializer.data)
+
 
 class BranchEventViewSet(ListModelMixin, RetrieveModelMixin, BaseViewSet):
     queryset = BranchEvent.objects.all()

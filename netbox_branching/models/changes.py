@@ -41,21 +41,30 @@ class ObjectChange(ObjectChange_):
         """
         logger = logger or logging.getLogger('netbox_branching.models.ObjectChange.apply')
         model = self.changed_object_type.model_class()
-        logger.info(f'Applying change {self} using {using}')
+        logger.info(f'Applying change {self.pk} using {using} ({self})')
 
         # Run data migrators
         self.migrate(branch)
 
         # Creating a new object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
-            instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
-            logger.debug(f'Creating {model._meta.verbose_name} {instance}')
-            instance.object.full_clean()
+            if hasattr(model, 'deserialize_object'):
+                instance = model.deserialize_object(self.postchange_data, pk=self.changed_object_id)
+            else:
+                instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
+
+            try:
+                instance.object.full_clean()
+            except (FileNotFoundError) as e:
+                # If a file was deleted later in this branch it will fail here
+                # so we need to ignore it. We can assume the NetBox state is valid.
+                logger.warning(f'Ignoring missing file: {e}')
             instance.save(using=using)
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             instance = model.objects.using(using).get(pk=self.changed_object_id)
+            logger.debug(f'Updating {model._meta.verbose_name} {instance}')
             update_object(instance, self.diff()['post'], using=using)
 
         # Deleting an object
@@ -75,7 +84,7 @@ class ObjectChange(ObjectChange_):
         """
         logger = logger or logging.getLogger('netbox_branching.models.ObjectChange.undo')
         model = self.changed_object_type.model_class()
-        logger.info(f'Undoing change {self} using {using}')
+        logger.info(f'Undoing change {self.pk} using {using} ({self})')
 
         # Run data migrators
         self.migrate(branch, revert=True)
@@ -187,6 +196,9 @@ class ChangeDiff(models.Model):
         """
         Record any conflicting changes between the modified and current object data.
         """
+        if self.original is None or self.current is None:
+            # Both the original and current states must be available to compare
+            return
         conflicts = None
         if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             conflicts = [

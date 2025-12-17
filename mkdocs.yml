@@ -42,6 +42,8 @@ nav:
         - Creating a Branch: 'using-branches/creating-a-branch.md'
         - Syncing & Merging: 'using-branches/syncing-merging.md'
         - Reverting a Branch: 'using-branches/reverting-a-branch.md'
+    - Best Practices: 'best-practices.md'
+    - NetBox Docker: 'netbox-docker.md'
     - REST API: 'rest-api.md'
     - Configuration: 'configuration.md'
     - Data Model:
