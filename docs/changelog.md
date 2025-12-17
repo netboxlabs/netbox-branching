@@ -1,5 +1,75 @@
 # Change Log
 
+## v0.7.4
+
+### Enhancements
+
+* [#386](https://github.com/netboxlabs/netbox-branching/issues/386) - Add support for NetBox v4.5
+
+### Bug Fixes
+
+* [#384](https://github.com/netboxlabs/netbox-branching/issues/384) - Preserve existing DATABASE["OPTIONS"] settings for branch database connections
+
+---
+
+## v0.7.3
+
+### Bug Fixes
+
+* [#353](https://github.com/netboxlabs/netbox-branching/issues/353) - Prohibit altering branch status via REST API (establishes a dedicated endpoint for archiving)
+* [#354](https://github.com/netboxlabs/netbox-branching/issues/354) - Ensure that queries for assigned tags utilize the active branch
+* [#358](https://github.com/netboxlabs/netbox-branching/issues/358) - Enforce `CONN_MAX_AGE` timeout for branch database connections
+* [#365](https://github.com/netboxlabs/netbox-branching/issues/365) - Temporarily disable object deletion check when syncing a branch from main to avoid validation failure
+* [#371](https://github.com/netboxlabs/netbox-branching/issues/371) - Ignore module import errors when discovering object migrators (fixes `ModuleNotFoundError` exception raised when attempting to merge a branch)
+
+---
+
+## v0.7.2
+
+### Enhancements
+
+* [#342](https://github.com/netboxlabs/netbox-branching/issues/342) - Display warning when attempting to modify an object that has been deleted in main
+* [#347](https://github.com/netboxlabs/netbox-branching/issues/347) - Include ObjectChange ID in log messages when applying/undoing changes
+
+### Bug Fixes
+
+* [#311](https://github.com/netboxlabs/netbox-branching/issues/311) - Fix merge failure when image attachments are created and subsequently deleted
+* [#317](https://github.com/netboxlabs/netbox-branching/issues/317) - Fix event rules not triggering for branch events
+* [#349](https://github.com/netboxlabs/netbox-branching/issues/349) - Fix exception when removing a device from a virtual chassis with a branch active
+
+---
+
+## v0.7.1
+
+### Bug Fixes
+
+* [#150](https://github.com/netboxlabs/netbox-branching/issues/150) - Fix recalculation of cable paths when merging a branch with cable changes
+
+---
+
+## v0.7.0
+
+### Enhancements
+
+* [#314](https://github.com/netboxlabs/netbox-branching/issues/314) - Include active branch in webhook payload data
+
+### Bug Fixes
+
+* [#308](https://github.com/netboxlabs/netbox-branching/issues/308) - Prevent branch change records from appearing in main changelog (NetBox v4.4)
+* [#309](https://github.com/netboxlabs/netbox-branching/issues/309) - Fix `ProgrammingError` exception when merging branch (NetBox v4.4)
+
+---
+
+## v0.6.2
+
+### Bug Fixes
+
+* [#298](https://github.com/netboxlabs/netbox-branching/issues/298) - Fix change diff creation for many-to-many fields
+* [#321](https://github.com/netboxlabs/netbox-branching/issues/321) - Prevent tag object type reassignments from leaking outside a branch
+* [#325](https://github.com/netboxlabs/netbox-branching/issues/325) - Enforce a maximum NetBox version of 4.3
+
+---
+
 ## v0.6.1
 
 ### Bug Fixes
