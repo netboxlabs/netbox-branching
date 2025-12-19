@@ -1,4 +1,4 @@
-from django.utils.translation import gettext_lazy as _
+from django.utils.translation import gettext_lazy as _, pgettext_lazy
 
 from utilities.choices import ChoiceSet
 
@@ -43,6 +43,16 @@ class BranchStatusChoices(ChoiceSet):
         READY,
         PENDING_MIGRATIONS,
         *TRANSITIONAL,
+    )
+
+
+class BranchMergeStrategyChoices(ChoiceSet):
+    ITERATIVE = 'iterative'
+    SQUASH = 'squash'
+
+    CHOICES = (
+        (ITERATIVE, _('Iterative')),
+        (SQUASH, pgettext_lazy('The act of compressing multiple records into one', 'Squash')),
     )
 
 
