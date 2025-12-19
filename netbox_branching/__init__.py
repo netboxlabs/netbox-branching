@@ -12,7 +12,7 @@ class AppConfig(PluginConfig):
     name = 'netbox_branching'
     verbose_name = 'NetBox Branching'
     description = 'A git-like branching implementation for NetBox'
-    version = '0.7.4'
+    version = '0.8.0'
     base_url = 'branching'
     min_version = '4.4.1'
     max_version = '4.5.99'

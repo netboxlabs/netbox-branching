@@ -1,5 +1,13 @@
 # Change Log
 
+## v0.8.0
+
+### Enhancements
+
+* [#198](https://github.com/netboxlabs/netbox-branching/issues/198) - Add ability to squash changes when merging a branch to resolve conflicts
+
+---
+
 ## v0.7.4
 
 ### Enhancements
