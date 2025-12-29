@@ -2,10 +2,7 @@
 
 This [NetBox](http://netboxlabs.com/oss/netbox/) plugin introduces branching functionality. A branch is a discrete, static snapshot of the NetBox database which can be modified independently and later merged back into the main database. This enables users to make "offline" changes to objects within NetBox and avoid interfering with its integrity as the network source of truth. It also provides the opportunity to review changes in bulk prior to their application.
 
-## Requirements
-
-* NetBox v4.3 or later
-* PostgreSQL 12 or later
+See the [compatibility matrix](COMPATIBILITY.md) for supported NetBox versions.
 
 > [!TIP]
 > To use NetBox Branching with NetBox Docker, click [here](./docs/netbox-docker.md)  
