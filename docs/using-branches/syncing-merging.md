@@ -16,12 +16,22 @@ While a branch is being synchronized, its status will show "synchronizing."
 
 ## Merging a Branch
 
-Merging a branch replicates all its changes into main, and updates the branch's status to "merged." These changes can be reviewed under the "Changes Ahead" tab under the branch view. Typically, once a branch has been merged, it is no longer used.
+Merging a branch replicates its changes into main, and updates the branch's status to "merged." These changes can be reviewed under the "Changes Ahead" tab under the branch view. Typically, once a branch has been merged, it is no longer used.
 
 To merge a branch, click the "Merge" button. (If this button is not visible, verify that the branch status shows "ready" and that you have permission to merge the branch.)
 
 !!! tip
     To grant non-superusers the ability to merge branches add `merge` under `Additional actions` in `Admin` -> `Authentication` -> `Permissions`
+
+You will be presented with two **merge strategies**:
+
+- **Iterative** - The iterative merge strategy is how branching has always worked. Each change you've made in your branch will be applied to the main branch, maintaining a full changelog record. This is the default and recommended approach.
+
+- **Squash** - Introduced in Branching 0.8.0, the squash merge strategy will combine all changes applied to the same object in your branch into a single change, resulting in smaller changelogs. It is also useful for navigating around merge failures when using the iterative merge strategy.
+
+Scenarios that will fail to merge with the iterative strategy but will merge successfully using the squash strategy include:
+- When objects with the same identifiers, for example sites with the slug `site_a`, are created in main and in the branch.
+- When objects with the same identifiers, for example sites with the slug `site_a`, are created in two branches, resulting in a merge failure when attempting to merge the second branch.
 
 While a branch is being merged, its status will show "merging."
 
