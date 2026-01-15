@@ -27,11 +27,7 @@ You will be presented with two **merge strategies**:
 
 - **Iterative** - The iterative merge strategy is how branching has always worked. Each change you've made in your branch will be applied to the main branch, maintaining a full changelog record. This is the default and recommended approach.
 
-- **Squash** - Introduced in Branching 0.8.0, the squash merge strategy will combine all changes applied to the same object in your branch into a single change, resulting in smaller changelogs. It is also useful for navigating around merge failures when using the iterative merge strategy.
-
-Scenarios that will fail to merge with the iterative strategy but will merge successfully using the squash strategy include:
-- When objects with the same identifiers, for example sites with the slug `site_a`, are created in main and in the branch.
-- When objects with the same identifiers, for example sites with the slug `site_a`, are created in two branches, resulting in a merge failure when attempting to merge the second branch.
+- **Squash** - Introduced in Branching 0.8.0, the squash merge strategy will combine all changes applied to the same object in your branch into a single change, resulting in smaller changelogs. It can also help recover from certain merge failures (see below).
 
 While a branch is being merged, its status will show "merging."
 
@@ -39,6 +35,15 @@ While a branch is being merged, its status will show "merging."
     You can check on the status of the merging job under the "Jobs" tab of the branch view.
 
 Once a branch has been merged, it can be [reverted](./reverting-a-branch.md), archived, or deleted. Archiving a branch removes its associated schema from the PostgreSQL database to deallocate space. An archived branch cannot be restored, however the branch record is retained for future reference.
+
+### Recovering from Duplicate Object Conflicts
+
+If you find yourself in a situation where identical objects (e.g. sites with the same slug) were created in both main and your branch, the merge will fail due to unique constraint violations. The squash strategy can help you recover:
+
+1. Edit the duplicate object in your branch to use different identifiers (e.g. change the slug from `site_a` to `site_b`)
+2. Merge using the squash strategy
+
+Squash will collapse the CREATE and UPDATE into a single CREATE with the new identifiers, allowing the merge to succeed.
 
 ## Dealing with Conflicts
 
