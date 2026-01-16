@@ -16,12 +16,18 @@ While a branch is being synchronized, its status will show "synchronizing."
 
 ## Merging a Branch
 
-Merging a branch replicates all its changes into main, and updates the branch's status to "merged." These changes can be reviewed under the "Changes Ahead" tab under the branch view. Typically, once a branch has been merged, it is no longer used.
+Merging a branch replicates its changes into main, and updates the branch's status to "merged." These changes can be reviewed under the "Changes Ahead" tab under the branch view. Typically, once a branch has been merged, it is no longer used.
 
 To merge a branch, click the "Merge" button. (If this button is not visible, verify that the branch status shows "ready" and that you have permission to merge the branch.)
 
 !!! tip
     To grant non-superusers the ability to merge branches add `merge` under `Additional actions` in `Admin` -> `Authentication` -> `Permissions`
+
+You will be presented with two **merge strategies**:
+
+- **Iterative** - The iterative merge strategy is how branching has always worked. Each change you've made in your branch will be applied to the main branch, maintaining a full changelog record. This is the default and recommended approach.
+
+- **Squash** - Introduced in Branching 0.8.0, the squash merge strategy will combine all changes applied to the same object in your branch into a single change, resulting in smaller changelogs. It can also help recover from certain merge failures (see below).
 
 While a branch is being merged, its status will show "merging."
 
@@ -29,6 +35,15 @@ While a branch is being merged, its status will show "merging."
     You can check on the status of the merging job under the "Jobs" tab of the branch view.
 
 Once a branch has been merged, it can be [reverted](./reverting-a-branch.md), archived, or deleted. Archiving a branch removes its associated schema from the PostgreSQL database to deallocate space. An archived branch cannot be restored, however the branch record is retained for future reference.
+
+### Recovering from Duplicate Object Conflicts
+
+If you find yourself in a situation where identical objects (e.g. sites with the same slug) were created in both main and your branch, the merge will fail due to unique constraint violations. The squash strategy can help you recover:
+
+1. Edit the duplicate object in your branch to use different identifiers (e.g. change the slug from `site_a` to `site_b`)
+2. Merge using the squash strategy
+
+Squash will collapse the CREATE and UPDATE into a single CREATE with the new identifiers, allowing the merge to succeed.
 
 ## Dealing with Conflicts
 

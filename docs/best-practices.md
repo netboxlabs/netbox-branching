@@ -1,7 +1,7 @@
 # NetBox Branching Best Practices
 
 !!! note
-    This guidance applies to NetBox Branching version 0.7.3 and previous versions.
+    This document was last updated for NetBox Branching version 0.8.0.
 
 This document describes the underlying architecture and best practices for using NetBox Branching effectively.
 
@@ -28,14 +28,11 @@ With this architecture in mind, it is important to decide whether to work in bra
 
 Branching includes conflict resolution, which helps identify objects that have been changed in both the main branch and other branches. This information is presented to the user during sync and merge actions, and users are asked to explicitly accept that they will overwrite the state of some objects. This action is analogous to forcing a merge in Git.
 
-There are scenarios in which conflicts can arise, leading to branches being unmerge-able and un-syncable. These instances should be avoided to prevent issues. They include:
+There are scenarios in which conflicts can arise. Some can be recovered from, while others will leave branches unmerge-able.
 
-1. When an object is deleted in the main branch and then edited in a branch
-2. When two identical objects are created in both the main branch and a branch
+## Unrecoverable Scenarios
 
-## Workflows to Avoid
-
-### Example 1: Editing After Deletion
+### Editing After Deletion
 
 Consider the following scenario (using Site as an example object, though it applies to any object):
 
@@ -51,7 +48,9 @@ Consider the following scenario (using Site as an example object, though it appl
 
 This sequence will lead to a merge failure. When the changelog is replayed during the merge process, the system will attempt to apply the update from the branch to a Site that has already been deleted in `main`. Since updating a non-existent (deleted) object is not possible, the merge operation will fail.
 
-### Example 2: Creating Duplicate Objects
+## Recoverable Scenarios
+
+### Creating Duplicate Objects
 
 Consider the following scenario, using Site as an example object:
 
@@ -63,27 +62,11 @@ Consider the following scenario, using Site as an example object:
 
 **Result:**
 
-This process will inevitably lead to a merge failure. When the changelog is replayed sequentially during the merge, the system will detect a duplicated name and slug combination.
+This will lead to a merge failure due to duplicate name and slug. The same problem can occur when identical objects are created across multiple concurrent branches.
 
-While this example describes a conflict between a single branch and `main`, the same duplicate creation problem can occur across multiple concurrent branches.
+**Recovery:**
 
-### Example 3: Concurrent Creation on Separate Branches
-
-Consider the following scenario involving concurrent site creation on separate branches (this applies to any object type):
-
-1. Branch 1 is created.
-
-2. Branch 2 is created.
-
-3. On Branch 1, a site is created with the name "Site A" and slug "sitea".
-
-4. On Branch 2, a site is also created with the name "Site A" and slug "sitea".
-
-5. Branch 1 is merged successfully.
-
-**Result:**
-
-The outcome of this sequence is a merge failure when attempting to merge Branch 2. This is because the changelog replay process will detect a duplicate site name and slug, as "Site A" and "sitea" already exist in the target due to the successful merge of Branch 1.
+You can recover by editing the duplicate object in your branch to use different identifiers, then merging with the **squash** strategy. See [Recovering from Duplicate Object Conflicts](./using-branches/syncing-merging.md#recovering-from-duplicate-object-conflicts).
 
 ## General Recommendations
 
