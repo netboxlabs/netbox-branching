@@ -145,6 +145,7 @@ def record_change_diff(instance, **kwargs):
         # Updating the existing ChangeDiff
         if diff := ChangeDiff.objects.filter(object_type=content_type, object_id=object_id, branch=branch).first():
             logger.debug(f"Updating branch change diff for change to {instance.changed_object}")
+            diff.object = instance.changed_object
             diff.last_updated = timezone.now()
             if diff.action != ObjectChangeActionChoices.ACTION_CREATE:
                 diff.action = instance.action
