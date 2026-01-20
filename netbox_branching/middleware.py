@@ -20,17 +20,17 @@ class BranchMiddleware:
 
     def __call__(self, request):
 
-        response = self.get_response(request)
-
         # Skip branch activation for exempt paths
         if request.path in self.EXEMPT_PATHS:
-            return response
+            return self.get_response(request)
 
         # Set/clear the active Branch on the request
         try:
             branch = get_active_branch(request)
         except ObjectDoesNotExist:
             return HttpResponseBadRequest("Invalid branch identifier")
+
+        response = self.get_response(request)
 
         # Set/clear the branch cookie (for non-API requests)
         if not is_api_request(request):
