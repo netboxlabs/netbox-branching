@@ -18,6 +18,7 @@ from netbox_branching import signals
 from utilities.exceptions import AbortRequest
 from utilities.serialization import serialize_object
 from .choices import BranchStatusChoices
+from .constants import INCLUDE_MODELS
 from .contextvars import active_branch
 from .events import *
 from .models import Branch, ChangeDiff
@@ -48,6 +49,12 @@ def check_object_accessible_in_branch(branch, model, object_id):
     Returns:
         True if the object is accessible (exists in main or was created in branch), False otherwise
     """
+    # Exempt models listed in INCLUDE_MODELS. These are replicated when a new branch is provisioned but are not
+    # managed directly.
+    if f'{model._meta.app_label}.{model._meta.model_name}' in INCLUDE_MODELS:
+        return True
+
+    # Check whether the object exists in main
     with deactivate_branch():
         try:
             model.objects.get(pk=object_id)
@@ -138,6 +145,7 @@ def record_change_diff(instance, **kwargs):
         # Updating the existing ChangeDiff
         if diff := ChangeDiff.objects.filter(object_type=content_type, object_id=object_id, branch=branch).first():
             logger.debug(f"Updating branch change diff for change to {instance.changed_object}")
+            diff.object = instance.changed_object
             diff.last_updated = timezone.now()
             if diff.action != ObjectChangeActionChoices.ACTION_CREATE:
                 diff.action = instance.action

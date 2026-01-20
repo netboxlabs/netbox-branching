@@ -1,5 +1,23 @@
 # Change Log
 
+## v0.8.1
+
+### Bug Fixes
+
+* [#380](https://github.com/netboxlabs/netbox-branching/issues/380) - Fix branch sync failure when object in main branch was updated then deleted
+* [#388](https://github.com/netboxlabs/netbox-branching/issues/388) - Fix deletion of M2M assignments (tags, interfaces) created within a branch
+* [#408](https://github.com/netboxlabs/netbox-branching/issues/408) - Ensure ChangeDiff references the most recent changed object
+
+---
+
+## v0.8.0
+
+### Enhancements
+
+* [#198](https://github.com/netboxlabs/netbox-branching/issues/198) - Add ability to squash changes when merging a branch to resolve conflicts
+
+---
+
 ## v0.7.4
 
 ### Enhancements
