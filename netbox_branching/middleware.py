@@ -1,5 +1,6 @@
+from django.contrib import messages
 from django.core.exceptions import ObjectDoesNotExist
-from django.http import HttpResponseBadRequest
+from django.http import HttpResponseBadRequest, HttpResponseRedirect
 
 from .constants import COOKIE_NAME, QUERY_PARAM
 from .utilities import is_api_request, get_active_branch
@@ -10,11 +11,22 @@ __all__ = (
 
 
 class BranchMiddleware:
+    # Paths that should bypass branch activation
+    EXEMPT_PATHS = (
+        '/api/status/',
+    )
 
     def __init__(self, get_response):
         self.get_response = get_response
 
     def __call__(self, request):
+
+        # Skip branch activation for exempt paths
+        if request.path in self.EXEMPT_PATHS:
+            return self.get_response(request)
+
+        # Check if a branch is being activated/deactivated
+        branch_change = QUERY_PARAM in request.GET
 
         # Set/clear the active Branch on the request
         try:
@@ -28,7 +40,12 @@ class BranchMiddleware:
         if not is_api_request(request):
             if branch:
                 response.set_cookie(COOKIE_NAME, branch.schema_id)
-            elif QUERY_PARAM in request.GET:
+            elif branch_change:
                 response.delete_cookie(COOKIE_NAME)
+
+            # Redirect to dashboard if branch activation/deactivation results in 404
+            if branch_change and response.status_code == 404:
+                messages.warning(request, "The requested object does not exist in the current branch.")
+                return HttpResponseRedirect('/')
 
         return response
