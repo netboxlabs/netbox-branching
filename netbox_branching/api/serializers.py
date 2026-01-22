@@ -34,14 +34,36 @@ class BranchSerializer(NetBoxModelSerializer):
         choices=BranchStatusChoices,
         read_only=True
     )
+    conflicts = serializers.SerializerMethodField(
+        read_only=True
+    )
 
     class Meta:
         model = Branch
         fields = [
             'id', 'url', 'display', 'name', 'status', 'owner', 'description', 'schema_id', 'last_sync', 'merged_time',
-            'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated',
+            'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated', 'conflicts',
         ]
         brief_fields = ('id', 'url', 'display', 'name', 'status', 'description')
+
+    @extend_schema_field(serializers.JSONField(allow_null=True))
+    def get_conflicts(self, obj):
+        conflicted_diffs = ChangeDiff.objects.filter(
+            branch=obj,
+            conflicts__isnull=False
+        )
+
+        if not conflicted_diffs.exists():
+            return None
+
+        return [
+            {
+                'details': f"{diff.get_action_display()} {diff.object_type.name} {diff.object_repr}",
+                'object_id': diff.object_id,
+                'object_type': f"{diff.object_type.app_label}.{diff.object_type.model}"
+            }
+            for diff in conflicted_diffs
+        ]
 
     def create(self, validated_data):
         """

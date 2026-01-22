@@ -9,7 +9,7 @@ from django.urls import reverse
 from dcim.models import Site
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME
-from netbox_branching.models import Branch
+from netbox_branching.models import Branch, ChangeDiff
 from users.models import Token
 
 
@@ -193,3 +193,75 @@ class BranchArchiveAPITestCase(TransactionTestCase):
 
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+
+class BranchConflictAPITestCase(TransactionTestCase):
+    serialized_rollback = True
+
+    def setUp(self):
+        self.client = Client()
+        self.user = get_user_model().objects.create_user(username='testuser', is_superuser=True)
+        token = create_token(self.user)
+        self.header = {
+            'HTTP_AUTHORIZATION': f'Token {token}',
+            'HTTP_ACCEPT': 'application/json',
+            'HTTP_CONTENT_TYPE': 'application/json',
+        }
+        ContentType.objects.get_for_model(Branch)
+
+    def test_branch_serializer_includes_conflicts(self):
+        branch = Branch(name='Test Branch')
+        branch.save(provision=False)
+        branch.provision(self.user)
+
+        site_ct = ContentType.objects.get_for_model(Site)
+        ChangeDiff.objects.create(
+            branch=branch,
+            object_type=site_ct,
+            object_id=1,
+            object_repr='Test Site',
+            action='update',
+            conflicts=['name', 'slug'],
+        )
+        ChangeDiff.objects.create(
+            branch=branch,
+            object_type=site_ct,
+            object_id=2,
+            object_repr='Another Site',
+            action='update',
+            conflicts=['description'],
+        )
+
+        url = reverse('plugins-api:netbox_branching-api:branch-detail', kwargs={'pk': branch.pk})
+        response = self.client.get(url, **self.header)
+        data = json.loads(response.content)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNotNone(data['conflicts'])
+        self.assertEqual(len(data['conflicts']), 2)
+
+        conflict_details = [c['details'] for c in data['conflicts']]
+        self.assertIn('Updated site Test Site', conflict_details)
+        self.assertIn('Updated site Another Site', conflict_details)
+
+        for conflict in data['conflicts']:
+            self.assertIn(conflict['object_id'], [1, 2])
+            self.assertEqual(conflict['object_type'], 'dcim.site')
+
+    def test_branch_serializer_no_conflicts(self):
+        branch = Branch(name='Test Branch')
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-detail', kwargs={'pk': branch.pk})
+        response = self.client.get(url, **self.header)
+        data = json.loads(response.content)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(data['conflicts'])
+        self.assertIn('conflicts', data)
+
+    def tearDown(self):
+        # Clean up any dynamic connections
+        for branch in Branch.objects.all():
+            if hasattr(branch, 'connection_name') and branch.connection_name in connections:
+                connections[branch.connection_name].close()
