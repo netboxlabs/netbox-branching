@@ -1,5 +1,6 @@
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import HttpResponseBadRequest
+from django.urls import reverse
 
 from .constants import COOKIE_NAME, QUERY_PARAM
 from .utilities import is_api_request, get_active_branch
@@ -10,18 +11,21 @@ __all__ = (
 
 
 class BranchMiddleware:
-    # Paths that should bypass branch activation
-    EXEMPT_PATHS = (
-        '/api/status/',
+    # View names that should bypass branch activation
+    EXEMPT_VIEW_NAMES = (
+        'api-status',
     )
 
     def __init__(self, get_response):
         self.get_response = get_response
 
+        # Convert view names to paths during initialization
+        self.exempt_paths = tuple(reverse(name) for name in self.EXEMPT_VIEW_NAMES)
+
     def __call__(self, request):
 
         # Skip branch activation for exempt paths
-        if request.path in self.EXEMPT_PATHS:
+        if request.path in self.exempt_paths:
             return self.get_response(request)
 
         # Set/clear the active Branch on the request
