@@ -28,8 +28,6 @@ class BranchMiddleware:
         # Set/clear the active Branch on the request
         try:
             branch = get_active_branch(request)
-            # Track if the user explicitly activated/deactivated a branch via query parameter
-            branch_change = QUERY_PARAM in request.GET
         except ObjectDoesNotExist:
             return HttpResponseBadRequest("Invalid branch identifier")
 
@@ -37,6 +35,9 @@ class BranchMiddleware:
 
         # Set/clear the branch cookie (for non-API requests)
         if not is_api_request(request):
+            # Check if a branch is being activated/deactivated
+            branch_change = QUERY_PARAM in request.GET
+
             if branch:
                 response.set_cookie(COOKIE_NAME, branch.schema_id)
             elif branch_change:
