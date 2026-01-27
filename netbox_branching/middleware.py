@@ -1,7 +1,7 @@
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import HttpResponseBadRequest
 
-from .constants import COOKIE_NAME, QUERY_PARAM
+from .constants import COOKIE_NAME, EXEMPT_PATHS, QUERY_PARAM
 from .utilities import is_api_request, get_active_branch
 
 __all__ = (
@@ -15,6 +15,10 @@ class BranchMiddleware:
         self.get_response = get_response
 
     def __call__(self, request):
+
+        # Skip branch activation for exempt paths
+        if request.path in EXEMPT_PATHS:
+            return self.get_response(request)
 
         # Set/clear the active Branch on the request
         try:
