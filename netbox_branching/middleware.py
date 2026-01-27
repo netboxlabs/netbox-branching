@@ -1,8 +1,7 @@
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import HttpResponseBadRequest
-from django.urls import reverse
 
-from .constants import COOKIE_NAME, QUERY_PARAM
+from .constants import COOKIE_NAME, EXEMPT_PATHS, QUERY_PARAM
 from .utilities import is_api_request, get_active_branch
 
 __all__ = (
@@ -15,15 +14,10 @@ class BranchMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
 
-        # Paths that should bypass branch activation
-        self.exempt_paths = (
-            reverse('api-status'),
-        )
-
     def __call__(self, request):
 
         # Skip branch activation for exempt paths
-        if request.path in self.exempt_paths:
+        if request.path in EXEMPT_PATHS:
             return self.get_response(request)
 
         # Set/clear the active Branch on the request
