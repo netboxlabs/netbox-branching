@@ -11,16 +11,14 @@ __all__ = (
 
 
 class BranchMiddleware:
-    # View names that should bypass branch activation
-    EXEMPT_VIEW_NAMES = (
-        'api-status',
-    )
 
     def __init__(self, get_response):
         self.get_response = get_response
 
-        # Convert view names to paths during initialization
-        self.exempt_paths = tuple(reverse(name) for name in self.EXEMPT_VIEW_NAMES)
+        # Paths that should bypass branch activation
+        self.exempt_paths = (
+            reverse('api-status'),
+        )
 
     def __call__(self, request):
 
