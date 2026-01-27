@@ -11,10 +11,6 @@ __all__ = (
 
 
 class BranchMiddleware:
-    # Paths that should bypass branch activation
-    EXEMPT_PATHS = (
-        '/api/status/',
-    )
 
     def __init__(self, get_response):
         self.get_response = get_response
