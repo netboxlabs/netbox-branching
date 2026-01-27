@@ -63,6 +63,13 @@ class BranchTestCase(ViewTestCases.PrimaryObjectViewTestCase):
 class BranchMiddlewareTestCase(TransactionTestCase):
     serialized_rollback = True
 
+    def setUp(self):
+        # Create a test user
+        from django.contrib.auth import get_user_model
+        User = get_user_model()
+        self.user = User.objects.create_user(username='testuser', is_superuser=True)
+        self.client.force_login(self.user)
+
     def tearDown(self):
         # Manually tear down any dynamic connections created for branches
         for branch in Branch.objects.all():

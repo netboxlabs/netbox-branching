@@ -36,12 +36,12 @@ class BranchMiddleware:
 
             if branch:
                 response.set_cookie(COOKIE_NAME, branch.schema_id)
-            elif QUERY_PARAM in request.GET:
+            elif branch_change:
                 response.delete_cookie(COOKIE_NAME)
 
-                # Redirect to dashboard if branch activation/deactivation results in 404
-                if response.status_code == 404:
-                    messages.warning(request, "The requested object does not exist in the current branch.")
-                    return HttpResponseRedirect('/')
+            # Redirect to dashboard if branch activation/deactivation results in 404
+            if branch_change and response.status_code == 404:
+                messages.warning(request, "The requested object does not exist in the current branch.")
+                return HttpResponseRedirect('/')
 
         return response
