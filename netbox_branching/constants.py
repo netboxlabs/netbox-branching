@@ -1,3 +1,17 @@
+from django.urls import reverse_lazy
+
+__all__ = (
+    'BRANCH_ACTIONS',
+    'BRANCH_HEADER',
+    'COOKIE_NAME',
+    'EXEMPT_MODELS',
+    'EXEMPT_PATHS',
+    'INCLUDE_MODELS',
+    'QUERY_PARAM',
+    'SKIP_INDEXES',
+)
+
+
 # HTTP cookie
 COOKIE_NAME = 'active_branch'
 
@@ -11,6 +25,11 @@ BRANCH_ACTIONS = (
     'migrate',
     'revert',
     'archive',
+)
+
+# Paths exempt from branch activation
+EXEMPT_PATHS = (
+    reverse_lazy('api-status'),
 )
 
 # URL query parameter name

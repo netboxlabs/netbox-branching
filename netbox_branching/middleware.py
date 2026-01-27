@@ -2,7 +2,7 @@ from django.contrib import messages
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import HttpResponseBadRequest, HttpResponseRedirect
 
-from .constants import COOKIE_NAME, QUERY_PARAM
+from .constants import COOKIE_NAME, EXEMPT_PATHS, QUERY_PARAM
 from .utilities import is_api_request, get_active_branch
 
 __all__ = (
@@ -22,11 +22,8 @@ class BranchMiddleware:
     def __call__(self, request):
 
         # Skip branch activation for exempt paths
-        if request.path in self.EXEMPT_PATHS:
+        if request.path in EXEMPT_PATHS:
             return self.get_response(request)
-
-        # Check if a branch is being activated/deactivated
-        branch_change = QUERY_PARAM in request.GET
 
         # Set/clear the active Branch on the request
         try:

@@ -15,7 +15,7 @@ from django.urls import reverse
 
 from netbox.plugins import get_plugin_config
 from netbox.utils import register_request_processor
-from .constants import BRANCH_HEADER, COOKIE_NAME, EXEMPT_MODELS, INCLUDE_MODELS, QUERY_PARAM
+from .constants import BRANCH_HEADER, COOKIE_NAME, EXEMPT_MODELS, EXEMPT_PATHS, INCLUDE_MODELS, QUERY_PARAM
 from .contextvars import active_branch
 
 # Thread-local storage for tracking branch connection aliases (matches Django's approach)
@@ -332,10 +332,11 @@ def get_sql_results(cursor):
 @register_request_processor
 def ActiveBranchContextManager(request):
     """
-    Activate a branch if indicated by the request.
+    Activate a branch if indicated by the request (except for exempt paths).
     """
-    if request and (branch := get_active_branch(request)):
-        return activate_branch(branch)
+    if request and request.path not in EXEMPT_PATHS:
+        if branch := get_active_branch(request):
+            return activate_branch(branch)
     return nullcontext()
 
 
