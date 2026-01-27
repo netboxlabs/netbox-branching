@@ -28,6 +28,8 @@ class BranchMiddleware:
         # Set/clear the active Branch on the request
         try:
             branch = get_active_branch(request)
+            # Track if the user explicitly activated/deactivated a branch via query parameter
+            branch_change = QUERY_PARAM in request.GET
         except ObjectDoesNotExist:
             return HttpResponseBadRequest("Invalid branch identifier")
 
