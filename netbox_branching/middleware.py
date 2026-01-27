@@ -31,12 +31,9 @@ class BranchMiddleware:
 
         # Set/clear the branch cookie (for non-API requests)
         if not is_api_request(request):
-            # Check if a branch is being activated/deactivated
-            branch_change = QUERY_PARAM in request.GET
-
             if branch:
                 response.set_cookie(COOKIE_NAME, branch.schema_id)
-            elif branch_change:
+            elif QUERY_PARAM in request.GET:
                 response.delete_cookie(COOKIE_NAME)
 
             # Redirect to dashboard if branch activation/deactivation results in 404
