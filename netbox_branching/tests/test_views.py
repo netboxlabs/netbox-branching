@@ -111,7 +111,49 @@ class BranchMiddlewareTestCase(TransactionTestCase):
         response = self.client.get(f'{site_url}?{QUERY_PARAM}=', follow=True)
         messages = list(get_messages(response.wsgi_request))
         self.assertEqual(len(messages), 1)
-        self.assertEqual(str(messages[0]), "The requested object does not exist in the current branch.")
+        self.assertIn("does not exist in main", str(messages[0]))
+
+        # Clean up
+        branch.deprovision()
+
+    @override_settings(LOGIN_REQUIRED=False)
+    def test_redirect_on_404_during_branch_activation(self):
+        """
+        Test that activating a branch while viewing an object that only exists
+        in the main branch redirects to the dashboard with a warning message.
+        """
+        # Create and provision a branch
+        branch = Branch(name='Test Branch')
+        branch.status = BranchStatusChoices.READY
+        branch.save(provision=False)
+        branch.provision(user=None)
+
+        # Create a site in the main branch (not in the test branch)
+        site = Site.objects.create(name='Main Site', slug='main-site')
+        site_pk = site.pk
+
+        # Get the URL for the site detail page
+        site_url = reverse('dcim:site', kwargs={'pk': site_pk})
+
+        # First, verify the site is accessible in the main branch
+        response = self.client.get(site_url)
+        self.assertEqual(response.status_code, 200)
+
+        # Now activate the branch while viewing the site (which doesn't exist in the branch)
+        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.schema_id}', follow=False)
+
+        # Should redirect to the dashboard
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.url, '/')
+
+        # Follow the redirect and check for the warning message
+        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.schema_id}', follow=True)
+        messages = list(get_messages(response.wsgi_request))
+        self.assertEqual(len(messages), 2)  # One success message for activation, one warning
+        # Check that the warning message mentions the branch name
+        warning_messages = [m for m in messages if 'does not exist' in str(m)]
+        self.assertEqual(len(warning_messages), 1)
+        self.assertIn(f"branch '{branch.name}'", str(warning_messages[0]))
 
         # Clean up
         branch.deprovision()

@@ -15,6 +15,15 @@ class BranchMiddleware:
     def __init__(self, get_response):
         self.get_response = get_response
 
+    def _apply_branch_cookie(self, response, branch, branch_change):
+        """
+        Apply or remove the branch cookie on the given response.
+        """
+        if branch:
+            response.set_cookie(COOKIE_NAME, branch.schema_id)
+        elif branch_change:
+            response.delete_cookie(COOKIE_NAME)
+
     def __call__(self, request):
 
         # Skip branch activation for exempt paths
@@ -34,14 +43,22 @@ class BranchMiddleware:
             # Check if a branch is being activated/deactivated
             branch_change = QUERY_PARAM in request.GET
 
-            if branch:
-                response.set_cookie(COOKIE_NAME, branch.schema_id)
-            elif branch_change:
-                response.delete_cookie(COOKIE_NAME)
-
             # Redirect to dashboard if branch activation/deactivation results in 404
             if branch_change and response.status_code == 404:
-                messages.warning(request, "The requested object does not exist in the current branch.")
-                return HttpResponseRedirect('/')
+                # Construct a more informative error message
+                branch_name = f"branch '{branch.name}'" if branch else "main"
+                requested_url = request.path
+                messages.warning(
+                    request,
+                    f"The requested object at {requested_url} does not exist in {branch_name}."
+                )
+
+                # Create redirect response and apply cookie operations to it
+                redirect_response = HttpResponseRedirect('/')
+                self._apply_branch_cookie(redirect_response, branch, branch_change)
+                return redirect_response
+
+            # Set/clear cookie on the normal response
+            self._apply_branch_cookie(response, branch, branch_change)
 
         return response
