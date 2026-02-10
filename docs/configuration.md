@@ -52,6 +52,24 @@ The maximum total number of branches that can exist simultaneously, including me
 
 ---
 
+## `job_timeout`
+
+Default: `3600` (1 hour)
+
+The maximum time in seconds that long-running branch operations (sync, merge, revert) are allowed to execute before timing out. This timeout applies to background jobs that process large branches.
+
+For installations with very large branches that may take longer than one hour to sync or merge, this value should be increased accordingly.
+
+```python
+PLUGINS_CONFIG = {
+    'netbox_branching': {
+        'job_timeout': 7200,  # 2 hours
+    }
+}
+```
+
+---
+
 ## `schema_prefix`
 
 Default: `"branch_"`
