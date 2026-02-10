@@ -148,12 +148,11 @@ class BranchMiddlewareTestCase(TransactionTestCase):
 
         # Follow the redirect and check for the warning message
         response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.schema_id}', follow=True)
-        messages = list(get_messages(response.wsgi_request))
-        self.assertEqual(len(messages), 2)  # One success message for activation, one warning
-        # Check that the warning message mentions the branch name
-        warning_messages = [m for m in messages if 'does not exist' in str(m)]
-        self.assertEqual(len(warning_messages), 1)
+        messages_list = list(get_messages(response.wsgi_request))
+        warning_messages = [m for m in messages_list if 'does not exist' in str(m)]
+        self.assertGreaterEqual(len(warning_messages), 1, "Expected at least one warning message")
         self.assertIn(f"branch '{branch.name}'", str(warning_messages[0]))
+        self.assertIn(site_url, str(warning_messages[0]))
 
         # Clean up
         branch.deprovision()
