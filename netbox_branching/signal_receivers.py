@@ -267,10 +267,6 @@ def validate_object_deletion_in_branch(sender, instance, **kwargs):
     except ObjectType.DoesNotExist:
         return
 
-    # Allow deletions of objects that have been deleted in main - the merge logic
-    # will handle this case by skipping the delete if the object doesn't exist.
-    # This allows squash merge to work correctly and doesn't break iterative merge.
-
 
 @receiver(pre_delete, sender=Branch)
 def validate_branch_deletion(sender, instance, **kwargs):
