@@ -240,6 +240,10 @@ signals.post_revert.connect(partial(handle_branch_event, event_type=BRANCH_REVER
 def validate_object_deletion_in_branch(sender, instance, **kwargs):
     """
     Validate that objects being deleted in a branch still exist in main.
+
+    Note: We allow deletion of objects that have been deleted in main because the merge
+    logic handles this gracefully (it will skip the delete if the object is already gone).
+    This is important for squash merge to properly track all changes.
     """
     # Skip Branch objects - they have their own validation
     if sender == Branch:
@@ -258,20 +262,9 @@ def validate_object_deletion_in_branch(sender, instance, **kwargs):
     except ObjectType.DoesNotExist:
         return
 
-    # For deletions, check if the object exists in main or was created in the branch
-    if hasattr(instance, 'pk') and instance.pk is not None:
-        model = instance.__class__
-        if not check_object_accessible_in_branch(branch, model, instance.pk):
-            # Object was deleted in main, not created in branch
-            raise AbortRequest(
-                _(
-                    "Cannot delete {model_name} '{object_name}' because it has been deleted in the main branch. "
-                    "Sync with the main branch to update."
-                ).format(
-                    model_name=model._meta.verbose_name,
-                    object_name=str(instance)
-                )
-            )
+    # Allow deletions of objects that have been deleted in main - the merge logic
+    # will handle this case by skipping the delete if the object doesn't exist.
+    # This allows squash merge to work correctly and doesn't break iterative merge.
 
 
 @receiver(pre_delete, sender=Branch)
