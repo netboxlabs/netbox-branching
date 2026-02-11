@@ -4,6 +4,7 @@ Tests for Branch merge functionality with ObjectChange collapsing.
 import uuid
 
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
@@ -90,7 +91,6 @@ class MergeTestCase(TransactionTestCase):
             site_id = site.id
 
         # Verify ObjectChange was created in branch
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         changes = branch.get_unmerged_changes().filter(
             changed_object_type=site_ct,
@@ -145,7 +145,6 @@ class MergeTestCase(TransactionTestCase):
             site.save()
 
         # Verify ObjectChange was created in branch
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         changes = branch.get_unmerged_changes().filter(
             changed_object_type=site_ct,
@@ -194,7 +193,6 @@ class MergeTestCase(TransactionTestCase):
             Site.objects.get(id=site_id).delete()
 
         # Verify ObjectChange was created in branch
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         changes = branch.get_unmerged_changes().filter(
             changed_object_type=site_ct,
@@ -245,7 +243,6 @@ class MergeTestCase(TransactionTestCase):
             site.delete()
 
         # Verify 3 ObjectChanges were created in branch
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         changes = branch.get_unmerged_changes().filter(
             changed_object_type=site_ct,
@@ -880,7 +877,6 @@ class MergeTestCase(TransactionTestCase):
             site.save()
 
         # Verify multiple ObjectChanges were created
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         changes = branch.get_unmerged_changes().filter(
             changed_object_type=site_ct,
@@ -906,6 +902,64 @@ class MergeTestCase(TransactionTestCase):
         self.assertEqual(merged_site.latitude, 12.5)  # Changed twice: 10.0 -> 11.0 -> 12.5
         self.assertEqual(merged_site.longitude, 22.5)  # Changed twice: 20.0 -> 21.0 -> 22.5
         self.assertEqual(merged_site.region_id, region3.id)  # Changed twice: region1 -> region2 -> region3
+
+        # Verify branch status
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+    def test_merge_edit_then_delete_after_main_delete(self):
+        """
+        This tests that deleting an object in a branch that was deleted in main
+        works correctly even when there are prior edits to that object in the branch.
+        """
+        # Create site in main
+        site = Site.objects.create(name='Site 1', slug='site-1', description='Original description')
+        site_id = site.id
+
+        # Create and activate branch
+        branch = self._create_and_provision_branch()
+
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # Edit site in branch
+        with activate_branch(branch), event_tracking(request):
+            site_in_branch = Site.objects.get(id=site_id)
+            site_in_branch.snapshot()
+            site_in_branch.description = 'Updated in branch'
+            site_in_branch.save()
+
+        # Verify the update was recorded
+        site_ct = ContentType.objects.get_for_model(Site)
+        changes = branch.get_unmerged_changes().filter(
+            changed_object_type=site_ct,
+            changed_object_id=site_id
+        )
+        self.assertEqual(changes.count(), 1)
+        self.assertEqual(changes.first().action, 'update')
+
+        # Go back to main and delete site
+        site.delete()
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+        # Activate branch and delete site
+        with activate_branch(branch), event_tracking(request):
+            site_in_branch = Site.objects.get(id=site_id)
+            site_in_branch.delete()
+
+        # Verify both update and delete were recorded
+        changes = branch.get_unmerged_changes().filter(
+            changed_object_type=site_ct,
+            changed_object_id=site_id
+        ).order_by('time')
+        self.assertEqual(changes.count(), 2)
+        self.assertEqual(changes[0].action, 'update')
+        self.assertEqual(changes[1].action, 'delete')
+
+        # Merge using squash - should succeed
+        branch.merge(user=self.user, commit=True)
 
         # Verify branch status
         branch.refresh_from_db()
