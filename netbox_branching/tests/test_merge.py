@@ -71,6 +71,33 @@ class MergeTestCase(TransactionTestCase):
 
         return branch
 
+    def _assert_object_changes(self, branch, model, object_id, expected_count, expected_actions=None):
+        """
+        Helper to verify ObjectChanges for an object in a branch.
+
+        Args:
+            branch: The Branch to check
+            model: The model class (e.g., Site)
+            object_id: The object's primary key
+            expected_count: Expected number of changes
+            expected_actions: Optional list of expected actions in order (e.g., ['create'], ['update', 'delete'])
+
+        Returns:
+            QuerySet of changes
+        """
+        content_type = ContentType.objects.get_for_model(model)
+        changes = branch.get_unmerged_changes().filter(
+            changed_object_type=content_type,
+            changed_object_id=object_id
+        ).order_by('time')
+        self.assertEqual(changes.count(), expected_count)
+
+        if expected_actions:
+            actual_actions = [c.action for c in changes]
+            self.assertEqual(actual_actions, expected_actions)
+
+        return changes
+
     def test_merge_basic_create(self):
         """
         Test basic create operation with merge and revert.
@@ -91,13 +118,7 @@ class MergeTestCase(TransactionTestCase):
             site_id = site.id
 
         # Verify ObjectChange was created in branch
-        site_ct = ContentType.objects.get_for_model(Site)
-        changes = branch.get_unmerged_changes().filter(
-            changed_object_type=site_ct,
-            changed_object_id=site_id
-        )
-        self.assertEqual(changes.count(), 1)
-        self.assertEqual(changes.first().action, 'create')
+        self._assert_object_changes(branch, Site, site_id, 1, ['create'])
 
         # Merge branch
         branch.merge(user=self.user, commit=True)
@@ -145,14 +166,7 @@ class MergeTestCase(TransactionTestCase):
             site.save()
 
         # Verify ObjectChange was created in branch
-        site_ct = ContentType.objects.get_for_model(Site)
-        changes = branch.get_unmerged_changes().filter(
-            changed_object_type=site_ct,
-            changed_object_id=site_id
-        )
-
-        self.assertEqual(changes.count(), 1)
-        self.assertEqual(changes.first().action, 'update')
+        self._assert_object_changes(branch, Site, site_id, 1, ['update'])
 
         # Merge branch
         branch.merge(user=self.user, commit=True)
@@ -193,13 +207,7 @@ class MergeTestCase(TransactionTestCase):
             Site.objects.get(id=site_id).delete()
 
         # Verify ObjectChange was created in branch
-        site_ct = ContentType.objects.get_for_model(Site)
-        changes = branch.get_unmerged_changes().filter(
-            changed_object_type=site_ct,
-            changed_object_id=site_id
-        )
-        self.assertEqual(changes.count(), 1)
-        self.assertEqual(changes.first().action, 'delete')
+        self._assert_object_changes(branch, Site, site_id, 1, ['delete'])
 
         # Merge branch
         branch.merge(user=self.user, commit=True)
@@ -243,14 +251,7 @@ class MergeTestCase(TransactionTestCase):
             site.delete()
 
         # Verify 3 ObjectChanges were created in branch
-        site_ct = ContentType.objects.get_for_model(Site)
-        changes = branch.get_unmerged_changes().filter(
-            changed_object_type=site_ct,
-            changed_object_id=site_id
-        )
-        self.assertEqual(changes.count(), 3)
-        actions = [c.action for c in changes.order_by('time')]
-        self.assertEqual(actions, ['create', 'update', 'delete'])
+        self._assert_object_changes(branch, Site, site_id, 3, ['create', 'update', 'delete'])
 
         # Merge branch
         branch.merge(user=self.user, commit=True)
@@ -877,15 +878,8 @@ class MergeTestCase(TransactionTestCase):
             site.save()
 
         # Verify multiple ObjectChanges were created
-        site_ct = ContentType.objects.get_for_model(Site)
-        changes = branch.get_unmerged_changes().filter(
-            changed_object_type=site_ct,
-            changed_object_id=site_id
-        )
         # Should have 1 create + 4 updates = 5 changes
-        self.assertEqual(changes.count(), 5)
-        actions = [c.action for c in changes.order_by('time')]
-        self.assertEqual(actions, ['create', 'update', 'update', 'update', 'update'])
+        self._assert_object_changes(branch, Site, site_id, 5, ['create', 'update', 'update', 'update', 'update'])
 
         # Merge branch using squash strategy
         branch.merge(user=self.user, commit=True)
@@ -932,13 +926,7 @@ class MergeTestCase(TransactionTestCase):
             site_in_branch.save()
 
         # Verify the update was recorded
-        site_ct = ContentType.objects.get_for_model(Site)
-        changes = branch.get_unmerged_changes().filter(
-            changed_object_type=site_ct,
-            changed_object_id=site_id
-        )
-        self.assertEqual(changes.count(), 1)
-        self.assertEqual(changes.first().action, 'update')
+        self._assert_object_changes(branch, Site, site_id, 1, ['update'])
 
         # Go back to main and delete site
         site.delete()
@@ -950,13 +938,7 @@ class MergeTestCase(TransactionTestCase):
             site_in_branch.delete()
 
         # Verify both update and delete were recorded
-        changes = branch.get_unmerged_changes().filter(
-            changed_object_type=site_ct,
-            changed_object_id=site_id
-        ).order_by('time')
-        self.assertEqual(changes.count(), 2)
-        self.assertEqual(changes[0].action, 'update')
-        self.assertEqual(changes[1].action, 'delete')
+        self._assert_object_changes(branch, Site, site_id, 2, ['update', 'delete'])
 
         # Merge using squash - should succeed
         branch.merge(user=self.user, commit=True)
