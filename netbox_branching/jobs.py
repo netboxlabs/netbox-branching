@@ -6,7 +6,7 @@ from core.signals import handle_changed_object, handle_deleted_object
 from netbox.jobs import JobRunner
 from netbox.signals import post_clean
 from utilities.exceptions import AbortTransaction
-from .signal_receivers import validate_branching_operations, validate_object_deletion_in_branch
+from .signal_receivers import validate_branching_operations
 from .utilities import ListHandler
 
 JOB_TIMEOUT = 3600  # 1 hour - increased for large operations
@@ -69,7 +69,6 @@ class SyncBranchJob(JobRunner):
         m2m_changed.disconnect(handle_changed_object)
         pre_delete.disconnect(handle_deleted_object)
         post_clean.disconnect(validate_branching_operations)
-        pre_delete.disconnect(validate_object_deletion_in_branch)
 
     def _reconnect_signal_receivers(self):
         """
@@ -79,7 +78,6 @@ class SyncBranchJob(JobRunner):
         m2m_changed.connect(handle_changed_object)
         pre_delete.connect(handle_deleted_object)
         post_clean.connect(validate_branching_operations)
-        pre_delete.connect(validate_object_deletion_in_branch)
 
     def run(self, commit=True, *args, **kwargs):
         # Initialize logging

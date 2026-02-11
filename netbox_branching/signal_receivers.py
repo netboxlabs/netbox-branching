@@ -30,7 +30,6 @@ __all__ = (
     'record_change_diff',
     'validate_branch_deletion',
     'validate_branching_operations',
-    'validate_object_deletion_in_branch',
 )
 
 
@@ -159,8 +158,7 @@ def record_change_diff(instance, **kwargs):
                 current_data = None
             else:
                 model = instance.changed_object_type.model_class()
-                # For update operations, validate that object is accessible. Allow delete operations
-                # even if object was deleted in main (merge logic handles this gracefully).
+                # For update operations, validate that object is accessible. 
                 if (
                     instance.action != ObjectChangeActionChoices.ACTION_DELETE and
                     not check_object_accessible_in_branch(branch, model, instance.changed_object_id)
@@ -239,33 +237,6 @@ signals.post_deprovision.connect(partial(handle_branch_event, event_type=BRANCH_
 signals.post_sync.connect(partial(handle_branch_event, event_type=BRANCH_SYNCED), weak=False)
 signals.post_merge.connect(partial(handle_branch_event, event_type=BRANCH_MERGED), weak=False)
 signals.post_revert.connect(partial(handle_branch_event, event_type=BRANCH_REVERTED), weak=False)
-
-
-@receiver(pre_delete)
-def validate_object_deletion_in_branch(sender, instance, **kwargs):
-    """
-    Validate that objects being deleted in a branch still exist in main.
-
-    Note: We allow deletion of objects that have been deleted in main because the merge
-    logic handles this gracefully (it will skip the delete if the object is already gone).
-    This is important for squash merge to properly track all changes.
-    """
-    # Skip Branch objects - they have their own validation
-    if sender == Branch:
-        return
-
-    # Only validate if we're in a branch
-    branch = active_branch.get()
-    if branch is None:
-        return
-
-    # Check if this model supports branching
-    try:
-        object_type = ObjectType.objects.get_for_model(instance.__class__)
-        if 'branching' not in object_type.features:
-            return
-    except ObjectType.DoesNotExist:
-        return
 
 
 @receiver(pre_delete, sender=Branch)
