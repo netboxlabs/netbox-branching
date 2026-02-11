@@ -8,7 +8,6 @@ from dcim.models import Site
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch
-from utilities.exceptions import AbortRequest
 from utilities.testing import ViewTestCases, create_tags
 
 
