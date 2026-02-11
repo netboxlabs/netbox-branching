@@ -158,7 +158,7 @@ def record_change_diff(instance, **kwargs):
                 current_data = None
             else:
                 model = instance.changed_object_type.model_class()
-                # For update operations, validate that object is accessible. 
+                # For update operations, validate that object is accessible.
                 if (
                     instance.action != ObjectChangeActionChoices.ACTION_DELETE and
                     not check_object_accessible_in_branch(branch, model, instance.changed_object_id)
