@@ -159,7 +159,12 @@ def record_change_diff(instance, **kwargs):
                 current_data = None
             else:
                 model = instance.changed_object_type.model_class()
-                if not check_object_accessible_in_branch(branch, model, instance.changed_object_id):
+                # For update operations, validate that object is accessible. Allow delete operations
+                # even if object was deleted in main (merge logic handles this gracefully).
+                if (
+                    instance.action != ObjectChangeActionChoices.ACTION_DELETE and
+                    not check_object_accessible_in_branch(branch, model, instance.changed_object_id)
+                ):
                     # Object was deleted in main, not created in branch
                     raise AbortRequest(
                         _(
