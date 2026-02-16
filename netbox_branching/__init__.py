@@ -36,6 +36,9 @@ class AppConfig(PluginConfig):
         # This string is prefixed to the name of each new branch schema during provisioning
         'schema_prefix': 'branch_',
 
+        # Job timeout in seconds for long-running operations (sync, merge, revert)
+        'job_timeout': 3600,
+
         # Branch action validators
         'sync_validators': [],
         'merge_validators': [],
