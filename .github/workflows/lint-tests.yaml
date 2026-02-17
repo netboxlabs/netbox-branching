@@ -112,4 +112,4 @@ jobs:
       - name: Run tests
         working-directory: netbox
         run: |
-          python netbox/manage.py test netbox_branching.tests --parallel
+          python netbox/manage.py test netbox_branching.tests --keepdb
