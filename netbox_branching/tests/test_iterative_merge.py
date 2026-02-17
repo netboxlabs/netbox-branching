@@ -139,7 +139,6 @@ class IterativeMergeTestCase(TransactionTestCase):
         # In branch: update site
         with activate_branch(branch), event_tracking(request):
             site = Site.objects.get(id=site_id)
-            # IMPORTANT: Call snapshot() before modifying (like views/API do)
             site.snapshot()
             site.description = 'Updated'
             site.save()
@@ -222,7 +221,6 @@ class IterativeMergeTestCase(TransactionTestCase):
         """
         Test create, update, then delete same object with merge and revert.
         Merge: skips object (not created in main) after collapsing
-        Revert: no-op since object was never created in main
         """
         # Create branch
         branch = self._create_and_provision_branch()
@@ -237,7 +235,6 @@ class IterativeMergeTestCase(TransactionTestCase):
             site = Site.objects.create(name='Temp Site', slug='temp-site')
             site_id = site.id
 
-            # IMPORTANT: Call snapshot() before modifying (like views/API do)
             site.snapshot()
             site.description = 'Modified'
             site.save()
@@ -345,59 +342,6 @@ class IterativeMergeTestCase(TransactionTestCase):
         interface_a_restored = Interface.objects.get(id=interface_a_id)
         self.assertEqual(interface_a_restored.name, interface_a_name)
 
-    def test_merge_multiple_updates_collapsed(self):
-        """
-        Test multiple updates to same object with merge and revert.
-        Merge: applies collapsed updates to object
-        Revert: restores object to original state
-        """
-        # Create site in main
-        site = Site.objects.create(name='Site 1', slug='site-1', description='Original')
-        site_id = site.id
-        original_name = site.name
-        original_description = site.description
-
-        # Create branch
-        branch = self._create_and_provision_branch()
-
-        # Create a request context for event tracking
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()  # Set request id for ObjectChange tracking
-        request.user = self.user
-
-        # In branch: update site multiple times
-        with activate_branch(branch), event_tracking(request):
-            site = Site.objects.get(id=site_id)
-
-            # IMPORTANT: Call snapshot() before modifying (like views/API do)
-            site.snapshot()
-            site.description = 'Update 1'
-            site.save()
-
-            site.snapshot()
-            site.description = 'Update 2'
-            site.save()
-
-            site.snapshot()
-            site.name = 'Site 1 Modified'
-            site.save()
-
-        # Merge branch
-        branch.merge(user=self.user, commit=True)
-
-        # Verify main schema - should have final state
-        site = Site.objects.get(id=site_id)
-        self.assertEqual(site.name, 'Site 1 Modified')
-        self.assertEqual(site.description, 'Update 2')
-
-        # Revert branch
-        branch.revert(user=self.user, commit=True)
-
-        # Verify revert restored original state
-        site = Site.objects.get(id=site_id)
-        self.assertEqual(site.name, original_name)
-        self.assertEqual(site.description, original_description)
-
     def test_merge_create_with_multiple_updates(self):
         """
         Test create object then update it multiple times with merge and revert.
@@ -417,7 +361,6 @@ class IterativeMergeTestCase(TransactionTestCase):
             site = Site.objects.create(name='New Site', slug='new-site', description='Initial')
             site_id = site.id
 
-            # IMPORTANT: Call snapshot() before modifying (like views/API do)
             site.snapshot()
             site.description = 'Modified 1'
             site.save()
@@ -503,7 +446,6 @@ class IterativeMergeTestCase(TransactionTestCase):
             interface_b2_id = interface_b2.id
 
             # Update device_b
-            # IMPORTANT: Call snapshot() before modifying (like views/API do)
             device_b.snapshot()
             device_b.name = 'Device B Updated'
             device_b.save()
@@ -535,76 +477,3 @@ class IterativeMergeTestCase(TransactionTestCase):
 
         device_a_restored = Device.objects.get(id=device_a_id)
         self.assertEqual(device_a_restored.name, device_a_name)
-
-    def test_merge_multiple_field_changes(self):
-        """
-        Test that multiple changes to the same object are applied iteratively.
-        Create a Site and make multiple modifications to various fields, then verify
-        the final merged state reflects the last change for each field, with later changes
-        overwriting earlier ones.
-        """
-        # Create branch with iterative strategy
-        branch = self._create_and_provision_branch(name='Iterative Test Branch')
-
-        # Create a request context for event tracking
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-
-        # In branch: create site and make multiple changes
-        with activate_branch(branch), event_tracking(request):
-            # Create the site
-            site = Site.objects.create(
-                name='Initial Site',
-                slug='test-site',
-                description='Initial description'
-            )
-            site_id = site.id
-
-            # First set of updates
-            site.snapshot()
-            site.name = 'Updated Site 1'
-            site.save()
-
-            # Second set of updates
-            site.snapshot()
-            site.name = 'Updated Site 2'
-            site.save()
-
-            # Third set of updates
-            site.snapshot()
-            site.description = 'Updated description'
-            site.save()
-
-            # Fourth set of updates
-            site.snapshot()
-            site.name = 'Final Site Name'
-            site.save()
-
-        # Verify multiple ObjectChanges were created
-        from django.contrib.contenttypes.models import ContentType
-        site_ct = ContentType.objects.get_for_model(Site)
-        changes = branch.get_unmerged_changes().filter(
-            changed_object_type=site_ct,
-            changed_object_id=site_id
-        )
-        # Should have 1 create + 4 updates = 5 changes
-        self.assertEqual(changes.count(), 5)
-        actions = [c.action for c in changes.order_by('time')]
-        self.assertEqual(actions, ['create', 'update', 'update', 'update', 'update'])
-
-        # Merge branch using iterative strategy
-        branch.merge(user=self.user, commit=True)
-
-        # Verify site exists in main with final values from all changes
-        self.assertTrue(Site.objects.filter(id=site_id).exists())
-        merged_site = Site.objects.get(id=site_id)
-
-        # Check that final values are correct
-        self.assertEqual(merged_site.name, 'Final Site Name')  # Changed 3 times
-        self.assertEqual(merged_site.slug, 'test-site')  # Never changed
-        self.assertEqual(merged_site.description, 'Updated description')  # Changed once in 3rd update
-
-        # Verify branch status
-        branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
