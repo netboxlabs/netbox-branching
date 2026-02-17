@@ -37,6 +37,8 @@ class BaseMergeTests:
                 ...
     """
 
+    serialized_rollback = True
+
     def setUp(self):
         """Set up common test data."""
         self.user = User.objects.create_user(username='testuser')
