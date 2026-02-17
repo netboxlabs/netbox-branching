@@ -216,20 +216,24 @@ class ChangeDiff(models.Model):
         """
         Return the set of attributes altered in the branch schema.
         """
-        return {
-            k for k, v in self.modified.items()
-            if k in self.original and v != self.original[k]
-        }
+        if self.modified and self.original:
+            return {
+                k for k, v in self.modified.items()
+                if k in self.original and v != self.original[k]
+            }
+        return set()
 
     @cached_property
     def altered_in_current(self):
         """
         Return the set of attributes altered in the main schema.
         """
-        return {
-            k for k, v in self.current.items()
-            if k in self.original and v != self.original[k]
-        }
+        if self.current and self.original:
+            return {
+                k for k, v in self.current.items()
+                if k in self.original and v != self.original[k]
+            }
+        return set()
 
     @cached_property
     def altered_fields(self):
@@ -254,10 +258,12 @@ class ChangeDiff(models.Model):
         """
         Return a key-value mapping of all attributes in the original state which have been modified.
         """
-        return {
-            k: v for k, v in self.original.items()
-            if k in self.altered_fields
-        }
+        if self.original:
+            return {
+                k: v for k, v in self.original.items()
+                if k in self.altered_fields
+            }
+        return {}
 
     @cached_property
     def modified_diff(self):
@@ -274,10 +280,12 @@ class ChangeDiff(models.Model):
         """
         Return a key-value mapping of all attributes which have been modified outside the branch.
         """
-        return {
-            k: v for k, v in self.current.items()
-            if k in self.altered_fields
-        }
+        if self.current:
+            return {
+                k: v for k, v in self.current.items()
+                if k in self.altered_fields
+            }
+        return {}
 
 
 class AppliedChange(models.Model):
