@@ -575,14 +575,23 @@ class BaseMergeTestCase(TransactionTestCase):
 
     def test_merge_hierarchical_mptt_structure(self):
         """
-        Test updating MPTT hierarchical structures with parent/child relationships.
-        Verifies that merge correctly handles:
-        - Moving nodes between parents
-        - Creating new nodes in hierarchy
-        - Ancestor and descendant relationships
-        - MPTT tree levels
+        Test updating MPTT hierarchical structures with multi-level parent/child relationships.
+        Creates a deep hierarchy (4 levels) and verifies that merge correctly handles:
+        - Moving subtrees (node with descendants) between parents
+        - Creating new nodes at multiple levels
+        - Ancestor and descendant relationships across levels
+        - MPTT tree levels and structure integrity
         """
         # Create a multi-level hierarchy in main
+        # Root (0)
+        # ├── Parent A (1)
+        # │   ├── Child A1 (2)
+        # │   │   └── Grandchild A1-1 (3)
+        # │   └── Child A2 (2)
+        # └── Parent B (1)
+        #     └── Child B1 (2)
+        #         └── Grandchild B1-1 (3)
+
         root_region = Region.objects.create(name='Root', slug='root')
 
         parent_a = Region.objects.create(name='Parent A', slug='parent-a', parent=root_region)
@@ -591,18 +600,38 @@ class BaseMergeTestCase(TransactionTestCase):
         child_a1 = Region.objects.create(name='Child A1', slug='child-a1', parent=parent_a)
         child_a1_id = child_a1.id
 
+        grandchild_a1_1 = Region.objects.create(
+            name='Grandchild A1-1',
+            slug='grandchild-a1-1',
+            parent=child_a1
+        )
+        grandchild_a1_1_id = grandchild_a1_1.id
+
         child_a2 = Region.objects.create(name='Child A2', slug='child-a2', parent=parent_a)
         child_a2_id = child_a2.id
 
         parent_b = Region.objects.create(name='Parent B', slug='parent-b', parent=root_region)
         parent_b_id = parent_b.id
 
-        Region.objects.create(name='Child B1', slug='child-b1', parent=parent_b)
+        child_b1 = Region.objects.create(name='Child B1', slug='child-b1', parent=parent_b)
+        child_b1_id = child_b1.id
 
-        # Verify initial hierarchy
+        grandchild_b1_1 = Region.objects.create(
+            name='Grandchild B1-1',
+            slug='grandchild-b1-1',
+            parent=child_b1
+        )
+
+        # Verify initial hierarchy levels
         self.assertEqual(root_region.level, 0)
         self.assertEqual(parent_a.level, 1)
         self.assertEqual(child_a1.level, 2)
+        self.assertEqual(grandchild_a1_1.level, 3)
+        self.assertEqual(grandchild_b1_1.level, 3)
+
+        # Verify initial ancestor/descendant relationships
+        self.assertEqual(list(grandchild_a1_1.get_ancestors()), [root_region, parent_a, child_a1])
+        self.assertEqual(list(child_a1.get_descendants()), [grandchild_a1_1])
 
         # Create branch
         branch = self._create_and_provision_branch()
@@ -613,38 +642,89 @@ class BaseMergeTestCase(TransactionTestCase):
 
         # In branch: restructure the hierarchy
         with activate_branch(branch), event_tracking(request):
-            # Move Child A1 from Parent A to Parent B
+            # Move Child A1 (with its grandchild) from Parent A to Parent B
             child_a1 = Region.objects.get(id=child_a1_id)
             child_a1.snapshot()
             child_a1.parent = Region.objects.get(id=parent_b_id)
             child_a1.save()
 
-            # Create new Child B2 under Parent B
-            child_b2 = Region.objects.create(
-                name='Child B2',
-                slug='child-b2',
-                parent=Region.objects.get(id=parent_b_id)
-            )
-            child_b2_id = child_b2.id
-
-            # Create a grandchild under Child A2
-            grandchild = Region.objects.create(
+            # Create a deep nested structure under Child A2 (3 new levels)
+            grandchild_a2_1 = Region.objects.create(
                 name='Grandchild A2-1',
                 slug='grandchild-a2-1',
                 parent=Region.objects.get(id=child_a2_id)
             )
-            grandchild_id = grandchild.id
+            grandchild_a2_1_id = grandchild_a2_1.id
+
+            great_grandchild = Region.objects.create(
+                name='Great-Grandchild A2-1-1',
+                slug='great-grandchild-a2-1-1',
+                parent=grandchild_a2_1
+            )
+            great_grandchild_id = great_grandchild.id
 
         # Merge branch
         branch.merge(user=self.user, commit=True)
 
-        # Verify Child A1 moved to Parent B
+        # Expected hierarchy after merge:
+        # Root (0)
+        # ├── Parent A (1)
+        # │   └── Child A2 (2)
+        # │       └── Grandchild A2-1 (3)
+        # │           └── Great-Grandchild A2-1-1 (4)
+        # └── Parent B (1)
+        #     ├── Child A1 (2) ← moved with its descendant
+        #     │   └── Grandchild A1-1 (3)
+        #     └── Child B1 (2)
+        #         └── Grandchild B1-1 (3)
+
+        # Verify Child A1 moved to Parent B (and brought its grandchild)
         child_a1 = Region.objects.get(id=child_a1_id)
         self.assertEqual(child_a1.parent_id, parent_b_id)
+        self.assertEqual(child_a1.level, 2)
 
-        # Verify Parent B has three children
+        # Verify Grandchild A1-1 moved with its parent and has correct ancestor chain
+        grandchild_a1_1 = Region.objects.get(id=grandchild_a1_1_id)
+        self.assertEqual(grandchild_a1_1.parent_id, child_a1_id)
+        self.assertEqual(grandchild_a1_1.level, 3)
+        self.assertEqual(list(grandchild_a1_1.get_ancestors()), [
+            Region.objects.get(name='Root'),
+            Region.objects.get(id=parent_b_id),
+            child_a1
+        ])
+
+        # Verify Parent B now has two children
         parent_b = Region.objects.get(id=parent_b_id)
-        self.assertEqual(len(list(parent_b.get_children())), 3)
+        parent_b_children = list(parent_b.get_children())
+        self.assertEqual(len(parent_b_children), 2)
+        self.assertIn(child_a1, parent_b_children)
+        self.assertIn(Region.objects.get(id=child_b1_id), parent_b_children)
+
+        # Verify Parent A now has only Child A2
+        parent_a = Region.objects.get(id=parent_a_id)
+        self.assertEqual(list(parent_a.get_children()), [Region.objects.get(id=child_a2_id)])
+
+        # Verify new deep hierarchy under Child A2
+        grandchild_a2_1 = Region.objects.get(id=grandchild_a2_1_id)
+        self.assertEqual(grandchild_a2_1.level, 3)
+        self.assertEqual(grandchild_a2_1.parent_id, child_a2_id)
+
+        great_grandchild = Region.objects.get(id=great_grandchild_id)
+        self.assertEqual(great_grandchild.level, 4)
+        self.assertEqual(great_grandchild.parent_id, grandchild_a2_1_id)
+        self.assertEqual(list(great_grandchild.get_ancestors()), [
+            Region.objects.get(name='Root'),
+            Region.objects.get(id=parent_a_id),
+            Region.objects.get(id=child_a2_id),
+            grandchild_a2_1
+        ])
+
+        # Verify Child A2's descendants
+        child_a2 = Region.objects.get(id=child_a2_id)
+        child_a2_descendants = list(child_a2.get_descendants())
+        self.assertEqual(len(child_a2_descendants), 2)
+        self.assertIn(grandchild_a2_1, child_a2_descendants)
+        self.assertIn(great_grandchild, child_a2_descendants)
 
         # Revert branch
         branch.revert(user=self.user, commit=True)
@@ -652,9 +732,23 @@ class BaseMergeTestCase(TransactionTestCase):
         # Verify original hierarchy is restored
         child_a1 = Region.objects.get(id=child_a1_id)
         self.assertEqual(child_a1.parent_id, parent_a_id)
+        self.assertEqual(child_a1.level, 2)
 
-        self.assertFalse(Region.objects.filter(id=child_b2_id).exists())
-        self.assertFalse(Region.objects.filter(id=grandchild_id).exists())
+        # Verify Child A1's grandchild is back under original hierarchy
+        grandchild_a1_1 = Region.objects.get(id=grandchild_a1_1_id)
+        self.assertEqual(list(grandchild_a1_1.get_ancestors()), [
+            Region.objects.get(name='Root'),
+            Region.objects.get(id=parent_a_id),
+            child_a1
+        ])
+
+        # Verify Parent A has both children again
+        parent_a = Region.objects.get(id=parent_a_id)
+        self.assertEqual(len(list(parent_a.get_children())), 2)
+
+        # Verify new nodes are deleted
+        self.assertFalse(Region.objects.filter(id=grandchild_a2_1_id).exists())
+        self.assertFalse(Region.objects.filter(id=great_grandchild_id).exists())
 
     def test_merge_error_with_duplicate_slug(self):
         """
