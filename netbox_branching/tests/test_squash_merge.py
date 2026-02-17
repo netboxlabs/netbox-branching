@@ -8,8 +8,7 @@ from django.test import RequestFactory
 from django.urls import reverse
 
 from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
-from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Region, Site
-from extras.models import Tag
+from dcim.models import Region, Site
 from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
@@ -422,4 +421,3 @@ class SquashMergeTestCase(BaseMergeTestCase):
         # Verify branch status
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
-

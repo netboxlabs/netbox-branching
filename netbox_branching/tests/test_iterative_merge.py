@@ -8,7 +8,6 @@ from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
 
-from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
 from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Region, Site
 from extras.models import Tag
 from netbox.context_managers import event_tracking
@@ -585,7 +584,6 @@ class BaseMergeTestCase(TransactionTestCase):
         """
         # Create a multi-level hierarchy in main
         root_region = Region.objects.create(name='Root', slug='root')
-        root_id = root_region.id
 
         parent_a = Region.objects.create(name='Parent A', slug='parent-a', parent=root_region)
         parent_a_id = parent_a.id
@@ -599,8 +597,7 @@ class BaseMergeTestCase(TransactionTestCase):
         parent_b = Region.objects.create(name='Parent B', slug='parent-b', parent=root_region)
         parent_b_id = parent_b.id
 
-        child_b1 = Region.objects.create(name='Child B1', slug='child-b1', parent=parent_b)
-        child_b1_id = child_b1.id
+        Region.objects.create(name='Child B1', slug='child-b1', parent=parent_b)
 
         # Verify initial hierarchy
         self.assertEqual(root_region.level, 0)
@@ -779,4 +776,3 @@ class IterativeMergeTestCase(BaseMergeTestCase):
             )
 
         return branch
-
