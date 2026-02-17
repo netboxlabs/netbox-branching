@@ -851,6 +851,10 @@ class BaseMergeTests:
         site = Site.objects.get(id=site_id)
         self.assertEqual(set(site.tags.all()), {tag1, tag2})
 
+    def test_merge_error_with_duplicate_slug2(self):
+        tag1 = Tag.objects.create(name='Tag 1', slug='tag-1')
+
+
 
 class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
     """Test cases for Branch merge using iterative merge strategy."""
