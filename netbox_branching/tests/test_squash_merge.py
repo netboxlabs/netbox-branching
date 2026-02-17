@@ -1,10 +1,12 @@
 """
 Tests for Branch merge functionality with ObjectChange collapsing using squash merge strategy.
 """
+import time
 import uuid
 
 from django.contrib.auth import get_user_model
-from django.test import RequestFactory
+from django.contrib.contenttypes.models import ContentType
+from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
 
 from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
@@ -14,19 +16,17 @@ from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch
 
-from .test_iterative_merge import BaseMergeTestCase
+from .test_iterative_merge import BaseMergeTests
 
 
 User = get_user_model()
 
 
-class SquashMergeTestCase(BaseMergeTestCase):
+class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
     """Test cases for Branch merge with ObjectChange collapsing and ordering using squash strategy."""
 
     def _create_and_provision_branch(self, name='Test Branch'):
         """Helper to create and provision a branch with squash merge strategy."""
-        import time
-
         branch = Branch(name=name, merge_strategy='squash')
         branch.save(provision=False)
         branch.provision(user=self.user)
@@ -391,7 +391,6 @@ class SquashMergeTestCase(BaseMergeTestCase):
             site.save()
 
         # Verify multiple ObjectChanges were created
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         changes = branch.get_unmerged_changes().filter(
             changed_object_type=site_ct,

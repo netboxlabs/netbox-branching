@@ -1,9 +1,12 @@
 """
 Tests for Branch merge functionality with common base class and iterative merge strategy.
 """
+import time
 import uuid
 
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
@@ -19,12 +22,19 @@ from netbox_branching.utilities import activate_branch
 User = get_user_model()
 
 
-class BaseMergeTestCase(TransactionTestCase):
+class BaseMergeTests:
     """
-    Base test class for Branch merge functionality tests.
+    Mixin with common merge tests for all merge strategies.
 
-    This class contains all common tests that should work for any merge strategy.
-    Subclasses must implement _create_and_provision_branch() with their specific merge strategy.
+    This is a mixin class (not inheriting from TestCase) that provides common test methods.
+    Subclasses should inherit from both this mixin and TransactionTestCase, and must
+    implement _create_and_provision_branch() with their specific merge strategy.
+
+    Example:
+        class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
+            def _create_and_provision_branch(self, name='Test Branch'):
+                # Implementation for iterative strategy
+                ...
     """
 
     serialized_rollback = True
@@ -33,14 +43,20 @@ class BaseMergeTestCase(TransactionTestCase):
         """Set up common test data."""
         self.user = User.objects.create_user(username='testuser')
 
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
         # Create some base objects in main
-        self.manufacturer = Manufacturer.objects.create(name='Manufacturer 1', slug='manufacturer-1')
-        self.device_type = DeviceType.objects.create(
-            manufacturer=self.manufacturer,
-            model='Device Type 1',
-            slug='device-type-1'
-        )
-        self.device_role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1')
+        with event_tracking(request):
+            self.manufacturer = Manufacturer.objects.create(name='Manufacturer 1', slug='manufacturer-1')
+            self.device_type = DeviceType.objects.create(
+                manufacturer=self.manufacturer,
+                model='Device Type 1',
+                slug='device-type-1'
+            )
+            self.device_role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1')
 
     def tearDown(self):
         """Clean up branch connections."""
@@ -76,7 +92,6 @@ class BaseMergeTestCase(TransactionTestCase):
             site_id = site.id
 
         # Verify ObjectChange was created in branch
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         changes = branch.get_unmerged_changes().filter(
             changed_object_type=site_ct,
@@ -130,7 +145,6 @@ class BaseMergeTestCase(TransactionTestCase):
             site.save()
 
         # Verify ObjectChange was created in branch
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         changes = branch.get_unmerged_changes().filter(
             changed_object_type=site_ct,
@@ -179,7 +193,6 @@ class BaseMergeTestCase(TransactionTestCase):
             Site.objects.get(id=site_id).delete()
 
         # Verify ObjectChange was created in branch
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         changes = branch.get_unmerged_changes().filter(
             changed_object_type=site_ct,
@@ -228,7 +241,6 @@ class BaseMergeTestCase(TransactionTestCase):
             site.delete()
 
         # Verify 3 ObjectChanges were created in branch
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
         changes = branch.get_unmerged_changes().filter(
             changed_object_type=site_ct,
@@ -754,7 +766,7 @@ class BaseMergeTestCase(TransactionTestCase):
         """
         Test error handling when merge encounters a unique constraint violation.
         Creates branch, then creates site in main, then creates site with duplicate slug in branch.
-        Merge should fail and rollback all changes.
+        Merge should fail with ValidationError (from full_clean()) and rollback all changes.
         """
         # Create branch first
         branch = self._create_and_provision_branch()
@@ -778,8 +790,7 @@ class BaseMergeTestCase(TransactionTestCase):
             conflict_site_id = conflict_site.id
 
         # Attempt to merge branch - this should fail due to slug conflict
-        from django.db import IntegrityError
-        with self.assertRaises(IntegrityError):
+        with self.assertRaises(ValidationError):
             branch.merge(user=self.user, commit=True)
 
         # Verify that main site still exists
@@ -841,13 +852,11 @@ class BaseMergeTestCase(TransactionTestCase):
         self.assertEqual(set(site.tags.all()), {tag1, tag2})
 
 
-class IterativeMergeTestCase(BaseMergeTestCase):
+class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
     """Test cases for Branch merge using iterative merge strategy."""
 
     def _create_and_provision_branch(self, name='Test Branch'):
         """Helper to create and provision a branch with iterative merge strategy."""
-        import time
-
         branch = Branch(name=name, merge_strategy='iterative')
         branch.save(provision=False)
         branch.provision(user=self.user)
