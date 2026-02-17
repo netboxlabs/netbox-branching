@@ -10,6 +10,7 @@ from django.urls import reverse
 
 from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
 from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Region, Site
+from extras.models import Tag
 from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
@@ -477,3 +478,361 @@ class IterativeMergeTestCase(TransactionTestCase):
 
         device_a_restored = Device.objects.get(id=device_a_id)
         self.assertEqual(device_a_restored.name, device_a_name)
+
+    def test_merge_multiple_independent_objects(self):
+        """
+        Test creating, updating, and deleting multiple independent objects.
+        Verifies that iterative merge handles parallel changes to unrelated objects correctly.
+        """
+        # Create some objects in main
+        site_a = Site.objects.create(name='Site A', slug='site-a')
+        site_a_id = site_a.id
+        site_c = Site.objects.create(name='Site C', slug='site-c')
+        site_c_id = site_c.id
+
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In branch: multiple independent operations
+        with activate_branch(branch), event_tracking(request):
+            # Create new Site B
+            site_b = Site.objects.create(name='Site B', slug='site-b')
+            site_b_id = site_b.id
+
+            # Update existing Site A
+            site_a = Site.objects.get(id=site_a_id)
+            site_a.snapshot()
+            site_a.description = 'Updated Site A'
+            site_a.save()
+
+            # Delete existing Site C
+            Site.objects.get(id=site_c_id).delete()
+
+        # Merge branch
+        branch.merge(user=self.user, commit=True)
+
+        # Verify all operations completed correctly
+        # Site B should be created
+        self.assertTrue(Site.objects.filter(id=site_b_id).exists())
+        site_b = Site.objects.get(id=site_b_id)
+        self.assertEqual(site_b.name, 'Site B')
+
+        # Site A should be updated
+        self.assertTrue(Site.objects.filter(id=site_a_id).exists())
+        site_a = Site.objects.get(id=site_a_id)
+        self.assertEqual(site_a.description, 'Updated Site A')
+
+        # Site C should be deleted
+        self.assertFalse(Site.objects.filter(id=site_c_id).exists())
+
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify revert restores everything
+        self.assertFalse(Site.objects.filter(id=site_b_id).exists())
+        site_a = Site.objects.get(id=site_a_id)
+        self.assertEqual(site_a.description, '')  # Back to original
+        self.assertTrue(Site.objects.filter(id=site_c_id).exists())
+
+    def test_merge_fk_nullification_before_delete(self):
+        """
+        Test setting FK to NULL, then deleting the referenced object.
+        Verifies that iterative merge properly orders FK cleanup before deletion.
+        """
+        # Create region and site in main
+        region = Region.objects.create(name='Test Region', slug='test-region')
+        region_id = region.id
+
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Test Site', slug='test-site', region=region)
+        site_id = site.id
+
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # In branch: nullify FK, then delete region
+        with activate_branch(branch), event_tracking(request):
+            # Update site to remove region reference
+            site = Site.objects.get(id=site_id)
+            site.snapshot()
+            site.region = None
+            site.save()
+
+            # Delete the region
+            Region.objects.get(id=region_id).delete()
+
+        # Merge branch
+        branch.merge(user=self.user, commit=True)
+
+        # Verify site exists with NULL region
+        site = Site.objects.get(id=site_id)
+        self.assertIsNone(site.region)
+
+        # Verify region is deleted
+        self.assertFalse(Region.objects.filter(id=region_id).exists())
+
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify region is restored and site FK is restored
+        self.assertTrue(Region.objects.filter(id=region_id).exists())
+        site = Site.objects.get(id=site_id)
+        self.assertEqual(site.region_id, region_id)
+
+    def test_merge_hierarchical_mptt_structure(self):
+        """
+        Test updating MPTT hierarchical structures with parent/child relationships.
+        Verifies that iterative merge correctly handles:
+        - Moving nodes between parents
+        - Creating new nodes in hierarchy
+        - Ancestor and descendant relationships
+        - MPTT tree levels
+        """
+        # Create a multi-level hierarchy in main
+        #   Root
+        #   ├── Parent A
+        #   │   ├── Child A1
+        #   │   └── Child A2
+        #   └── Parent B
+        #       └── Child B1
+
+        root_region = Region.objects.create(name='Root', slug='root')
+        root_id = root_region.id
+
+        parent_a = Region.objects.create(name='Parent A', slug='parent-a', parent=root_region)
+        parent_a_id = parent_a.id
+
+        child_a1 = Region.objects.create(name='Child A1', slug='child-a1', parent=parent_a)
+        child_a1_id = child_a1.id
+
+        child_a2 = Region.objects.create(name='Child A2', slug='child-a2', parent=parent_a)
+        child_a2_id = child_a2.id
+
+        parent_b = Region.objects.create(name='Parent B', slug='parent-b', parent=root_region)
+        parent_b_id = parent_b.id
+
+        child_b1 = Region.objects.create(name='Child B1', slug='child-b1', parent=parent_b)
+        child_b1_id = child_b1.id
+
+        # Verify initial hierarchy
+        self.assertEqual(root_region.level, 0)
+        self.assertEqual(parent_a.level, 1)
+        self.assertEqual(child_a1.level, 2)
+        self.assertEqual(list(parent_a.get_children()), [child_a1, child_a2])
+        self.assertEqual(list(child_a1.get_ancestors()), [root_region, parent_a])
+
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In branch: restructure the hierarchy
+        with activate_branch(branch), event_tracking(request):
+            # Move Child A1 from Parent A to Parent B
+            child_a1 = Region.objects.get(id=child_a1_id)
+            child_a1.snapshot()
+            child_a1.parent = Region.objects.get(id=parent_b_id)
+            child_a1.save()
+
+            # Create new Child B2 under Parent B
+            child_b2 = Region.objects.create(
+                name='Child B2',
+                slug='child-b2',
+                parent=Region.objects.get(id=parent_b_id)
+            )
+            child_b2_id = child_b2.id
+
+            # Create a grandchild under Child A2
+            grandchild = Region.objects.create(
+                name='Grandchild A2-1',
+                slug='grandchild-a2-1',
+                parent=Region.objects.get(id=child_a2_id)
+            )
+            grandchild_id = grandchild.id
+
+        # Merge branch
+        branch.merge(user=self.user, commit=True)
+
+        # Verify the new hierarchy structure
+        # Root
+        # ├── Parent A
+        # │   └── Child A2
+        # │       └── Grandchild A2-1
+        # └── Parent B
+        #     ├── Child A1 (moved)
+        #     ├── Child B1
+        #     └── Child B2 (new)
+
+        # Verify Child A1 moved to Parent B
+        child_a1 = Region.objects.get(id=child_a1_id)
+        self.assertEqual(child_a1.parent_id, parent_b_id)
+        self.assertEqual(child_a1.level, 2)
+        self.assertEqual(list(child_a1.get_ancestors()), [
+            Region.objects.get(id=root_id),
+            Region.objects.get(id=parent_b_id)
+        ])
+
+        # Verify Parent A now has only Child A2
+        parent_a = Region.objects.get(id=parent_a_id)
+        self.assertEqual(list(parent_a.get_children()), [Region.objects.get(id=child_a2_id)])
+
+        # Verify Parent B has three children
+        parent_b = Region.objects.get(id=parent_b_id)
+        parent_b_children = list(parent_b.get_children())
+        self.assertEqual(len(parent_b_children), 3)
+        self.assertIn(Region.objects.get(id=child_a1_id), parent_b_children)
+        self.assertIn(Region.objects.get(id=child_b1_id), parent_b_children)
+        self.assertIn(Region.objects.get(id=child_b2_id), parent_b_children)
+
+        # Verify new Child B2 exists and has correct structure
+        child_b2 = Region.objects.get(id=child_b2_id)
+        self.assertEqual(child_b2.parent_id, parent_b_id)
+        self.assertEqual(child_b2.level, 2)
+
+        # Verify grandchild structure
+        grandchild = Region.objects.get(id=grandchild_id)
+        self.assertEqual(grandchild.parent_id, child_a2_id)
+        self.assertEqual(grandchild.level, 3)
+        self.assertEqual(list(grandchild.get_ancestors()), [
+            Region.objects.get(id=root_id),
+            Region.objects.get(id=parent_a_id),
+            Region.objects.get(id=child_a2_id)
+        ])
+
+        # Verify Child A2 has the grandchild as descendant
+        child_a2 = Region.objects.get(id=child_a2_id)
+        self.assertEqual(list(child_a2.get_descendants()), [grandchild])
+
+        # Verify root's descendants include all nodes
+        root_region = Region.objects.get(id=root_id)
+        all_descendants = list(root_region.get_descendants())
+        self.assertEqual(len(all_descendants), 7)  # 2 parents + 4 children + 1 grandchild
+
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify original hierarchy is restored
+        child_a1 = Region.objects.get(id=child_a1_id)
+        self.assertEqual(child_a1.parent_id, parent_a_id)
+        self.assertEqual(child_a1.level, 2)
+
+        parent_a = Region.objects.get(id=parent_a_id)
+        self.assertEqual(len(list(parent_a.get_children())), 2)
+
+        parent_b = Region.objects.get(id=parent_b_id)
+        self.assertEqual(len(list(parent_b.get_children())), 1)
+
+        # Verify new nodes are deleted
+        self.assertFalse(Region.objects.filter(id=child_b2_id).exists())
+        self.assertFalse(Region.objects.filter(id=grandchild_id).exists())
+
+    def test_merge_error_with_duplicate_slug(self):
+        """
+        Test error handling when iterative merge encounters a unique constraint violation.
+        Creates branch, then creates site in main, then creates site with duplicate slug in branch.
+        Merge should fail and rollback all changes.
+        """
+        # Create branch first
+        branch = self._create_and_provision_branch()
+
+        # Create a request context for event tracking
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In branch: create a valid site first
+        with activate_branch(branch), event_tracking(request):
+            good_site = Site.objects.create(name='Good Site', slug='good-slug')
+            good_site_id = good_site.id
+
+        # Now in main: create site with slug that will conflict
+        main_site = Site.objects.create(name='Main Site', slug='conflict-slug')
+        main_site_id = main_site.id
+
+        # Back in branch: create site with duplicate slug
+        with activate_branch(branch), event_tracking(request):
+            conflict_site = Site.objects.create(name='Conflict Site', slug='conflict-slug')
+            conflict_site_id = conflict_site.id
+
+        # Attempt to merge branch - this should fail due to slug conflict
+        from django.db import IntegrityError
+        with self.assertRaises(IntegrityError):
+            branch.merge(user=self.user, commit=True)
+
+        # Verify that main site still exists
+        self.assertTrue(Site.objects.filter(id=main_site_id).exists())
+
+        # Verify that neither branch site was created in main (transaction rollback)
+        self.assertFalse(Site.objects.filter(id=good_site_id).exists())
+        self.assertFalse(Site.objects.filter(id=conflict_site_id).exists())
+
+        # Verify only main site exists in main
+        main_sites = Site.objects.all()
+        self.assertEqual(main_sites.count(), 1)
+        self.assertEqual(main_sites.first().id, main_site_id)
+
+        # Branch should still be in READY state (merge failed)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+    def test_merge_many_to_many_tags(self):
+        """
+        Test adding and removing many-to-many relationships (tags on site).
+        Verifies that iterative merge handles M2M changes correctly.
+        """
+        # Create tags in main
+        tag1 = Tag.objects.create(name='Tag 1', slug='tag-1')
+        tag2 = Tag.objects.create(name='Tag 2', slug='tag-2')
+        tag3 = Tag.objects.create(name='Tag 3', slug='tag-3')
+
+        # Create site with tags in main
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Test Site', slug='test-site')
+            site.tags.add(tag1, tag2)
+        site_id = site.id
+
+        # Verify initial tags
+        self.assertEqual(set(site.tags.all()), {tag1, tag2})
+
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # In branch: modify tags
+        with activate_branch(branch), event_tracking(request):
+            site = Site.objects.get(id=site_id)
+
+            # Remove tag2, add tag3
+            site.snapshot()
+            site.tags.remove(tag2)
+            site.tags.add(tag3)
+            site.save()
+
+        # Merge branch
+        branch.merge(user=self.user, commit=True)
+
+        # Verify tags changed in main
+        site = Site.objects.get(id=site_id)
+        self.assertEqual(set(site.tags.all()), {tag1, tag3})
+
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify tags restored to original
+        site = Site.objects.get(id=site_id)
+        self.assertEqual(set(site.tags.all()), {tag1, tag2})
