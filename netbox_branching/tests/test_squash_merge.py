@@ -19,8 +19,8 @@ from netbox_branching.utilities import activate_branch
 User = get_user_model()
 
 
-class MergeTestCase(TransactionTestCase):
-    """Test cases for Branch merge with ObjectChange collapsing and ordering."""
+class SquashMergeTestCase(TransactionTestCase):
+    """Test cases for Branch merge with ObjectChange collapsing and ordering using squash strategy."""
 
     serialized_rollback = True
 
