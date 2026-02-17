@@ -270,10 +270,12 @@ class ChangeDiff(models.Model):
         """
         Return a key-value mapping of all attributes which have been modified within the branch.
         """
-        return {
-            k: v for k, v in self.modified.items()
-            if k in self.altered_fields
-        }
+        if self.modified:
+            return {
+                k: v for k, v in self.modified.items()
+                if k in self.altered_fields
+            }
+        return {}
 
     @cached_property
     def current_diff(self):
