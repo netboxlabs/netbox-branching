@@ -4,13 +4,18 @@ Base merge test mixin and iterative merge tests.
 import uuid
 
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db import connections
 from django.test import RequestFactory
 from django.urls import reverse
 
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Region, Site
+from extras.models import Tag
 from netbox.context_managers import event_tracking
+from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
-from dcim.models import DeviceRole, DeviceType, Manufacturer
+from netbox_branching.utilities import activate_branch
 
 
 User = get_user_model()

@@ -3,11 +3,12 @@ Tests for Branch merge functionality with ObjectChange collapsing (squash strate
 """
 import uuid
 
+from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
 
 from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
-from dcim.models import Device, DeviceRole, DeviceType, Interface, Region, Site
+from dcim.models import Region, Site
 from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
