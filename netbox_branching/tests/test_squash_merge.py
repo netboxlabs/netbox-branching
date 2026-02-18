@@ -1,10 +1,8 @@
 """
-Tests for Branch merge functionality with ObjectChange collapsing.
+Tests for Branch merge functionality with ObjectChange collapsing (squash strategy).
 """
 import uuid
 
-from django.contrib.auth import get_user_model
-from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
 
@@ -14,34 +12,11 @@ from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch
+from netbox_branching.tests.test_iterative_merge import BaseMergeTests
 
 
-User = get_user_model()
-
-
-class MergeTestCase(TransactionTestCase):
+class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
     """Test cases for Branch merge with ObjectChange collapsing and ordering."""
-
-    serialized_rollback = True
-
-    def setUp(self):
-        """Set up common test data."""
-        self.user = User.objects.create_user(username='testuser')
-
-        # Create some base objects in main
-        self.manufacturer = Manufacturer.objects.create(name='Manufacturer 1', slug='manufacturer-1')
-        self.device_type = DeviceType.objects.create(
-            manufacturer=self.manufacturer,
-            model='Device Type 1',
-            slug='device-type-1'
-        )
-        self.device_role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1')
-
-    def tearDown(self):
-        """Clean up branch connections."""
-        for branch in Branch.objects.all():
-            if hasattr(connections, branch.connection_name):
-                connections[branch.connection_name].close()
 
     def _create_and_provision_branch(self, name='Test Branch'):
         """Helper to create and provision a branch."""
