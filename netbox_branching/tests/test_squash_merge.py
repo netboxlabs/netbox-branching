@@ -1,7 +1,10 @@
 """
 Tests for Branch merge functionality with ObjectChange collapsing (squash strategy).
 """
+import time
 import uuid
+
+from django.contrib.auth import get_user_model
 
 from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory, TransactionTestCase
@@ -16,12 +19,14 @@ from netbox_branching.utilities import activate_branch
 from netbox_branching.tests.test_iterative_merge import BaseMergeTests
 
 
+User = get_user_model()
+
+
 class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
     """Test cases for Branch merge with ObjectChange collapsing and ordering."""
 
     def _create_and_provision_branch(self, name='Test Branch'):
         """Helper to create and provision a branch."""
-        import time
 
         branch = Branch(name=name, merge_strategy='squash')
         branch.save(provision=False)
