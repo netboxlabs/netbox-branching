@@ -58,10 +58,12 @@ class BaseMergeTests:
             self.device_role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1')
 
     def tearDown(self):
-        """Clean up branch connections."""
+        """Clean up branch connections and schemas."""
         for branch in Branch.objects.all():
-            if hasattr(connections, branch.connection_name):
-                connections[branch.connection_name].close()
+            connection_name = branch.connection_name
+            if connection_name in connections:
+                connections[connection_name].close()
+            branch.delete()
 
     def _create_and_provision_branch(self, name='Test Branch'):
         """
