@@ -4,12 +4,11 @@ from django.db.models.signals import m2m_changed, post_save, pre_delete
 
 from core.signals import handle_changed_object, handle_deleted_object
 from netbox.jobs import JobRunner
+from netbox.plugins import get_plugin_config
 from netbox.signals import post_clean
 from utilities.exceptions import AbortTransaction
 from .signal_receivers import validate_branching_operations
 from .utilities import ListHandler
-
-JOB_TIMEOUT = 3600  # 1 hour - increased for large operations
 
 __all__ = (
     'MergeBranchJob',
@@ -54,12 +53,11 @@ class SyncBranchJob(JobRunner):
     """
     class Meta:
         name = 'Sync branch'
-        job_timeout = 3600  # 1 hour - increased for large syncs
 
     @property
     def job_timeout(self):
-        """Return the job timeout from Meta."""
-        return getattr(self.Meta, 'job_timeout', None)
+        """Return the job timeout from plugin configuration."""
+        return get_plugin_config('netbox_branching', 'job_timeout')
 
     def _disconnect_signal_receivers(self):
         """
@@ -113,7 +111,8 @@ class MergeBranchJob(JobRunner):
 
     @property
     def job_timeout(self):
-        return JOB_TIMEOUT
+        """Return the job timeout from plugin configuration."""
+        return get_plugin_config('netbox_branching', 'job_timeout')
 
     def run(self, commit=True, *args, **kwargs):
         # Initialize logging
@@ -138,7 +137,8 @@ class RevertBranchJob(JobRunner):
 
     @property
     def job_timeout(self):
-        return JOB_TIMEOUT
+        """Return the job timeout from plugin configuration."""
+        return get_plugin_config('netbox_branching', 'job_timeout')
 
     def run(self, commit=True, *args, **kwargs):
         # Initialize logging
