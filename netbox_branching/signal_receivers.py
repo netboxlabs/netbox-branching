@@ -30,7 +30,6 @@ __all__ = (
     'record_change_diff',
     'validate_branch_deletion',
     'validate_branching_operations',
-    'validate_object_deletion_in_branch',
 )
 
 
@@ -159,7 +158,11 @@ def record_change_diff(instance, **kwargs):
                 current_data = None
             else:
                 model = instance.changed_object_type.model_class()
-                if not check_object_accessible_in_branch(branch, model, instance.changed_object_id):
+                # For update operations, validate that object is accessible.
+                if (
+                    instance.action != ObjectChangeActionChoices.ACTION_DELETE and
+                    not check_object_accessible_in_branch(branch, model, instance.changed_object_id)
+                ):
                     # Object was deleted in main, not created in branch
                     raise AbortRequest(
                         _(
@@ -234,44 +237,6 @@ signals.post_deprovision.connect(partial(handle_branch_event, event_type=BRANCH_
 signals.post_sync.connect(partial(handle_branch_event, event_type=BRANCH_SYNCED), weak=False)
 signals.post_merge.connect(partial(handle_branch_event, event_type=BRANCH_MERGED), weak=False)
 signals.post_revert.connect(partial(handle_branch_event, event_type=BRANCH_REVERTED), weak=False)
-
-
-@receiver(pre_delete)
-def validate_object_deletion_in_branch(sender, instance, **kwargs):
-    """
-    Validate that objects being deleted in a branch still exist in main.
-    """
-    # Skip Branch objects - they have their own validation
-    if sender == Branch:
-        return
-
-    # Only validate if we're in a branch
-    branch = active_branch.get()
-    if branch is None:
-        return
-
-    # Check if this model supports branching
-    try:
-        object_type = ObjectType.objects.get_for_model(instance.__class__)
-        if 'branching' not in object_type.features:
-            return
-    except ObjectType.DoesNotExist:
-        return
-
-    # For deletions, check if the object exists in main or was created in the branch
-    if hasattr(instance, 'pk') and instance.pk is not None:
-        model = instance.__class__
-        if not check_object_accessible_in_branch(branch, model, instance.pk):
-            # Object was deleted in main, not created in branch
-            raise AbortRequest(
-                _(
-                    "Cannot delete {model_name} '{object_name}' because it has been deleted in the main branch. "
-                    "Sync with the main branch to update."
-                ).format(
-                    model_name=model._meta.verbose_name,
-                    object_name=str(instance)
-                )
-            )
 
 
 @receiver(pre_delete, sender=Branch)
