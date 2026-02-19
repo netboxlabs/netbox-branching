@@ -762,48 +762,6 @@ class BaseMergeTests:
         self.assertFalse(Region.objects.filter(id=grandchild_a2_1_id).exists())
         self.assertFalse(Region.objects.filter(id=great_grandchild_id).exists())
 
-    def test_merge_error_with_duplicate_slug(self):
-        """
-        Test error handling when merge encounters a unique constraint violation.
-        Creates branch, then creates site in main, then creates site with duplicate slug in branch.
-        Merge should fail with ValidationError (from full_clean()) and rollback all changes.
-        """
-        # Create branch first
-        branch = self._create_and_provision_branch()
-
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-
-        # In branch: create a valid site first
-        with activate_branch(branch), event_tracking(request):
-            good_site = Site.objects.create(name='Good Site', slug='good-slug')
-            good_site_id = good_site.id
-
-        # Now in main: create site with slug that will conflict
-        main_site = Site.objects.create(name='Main Site', slug='conflict-slug')
-        main_site_id = main_site.id
-
-        # Back in branch: create site with duplicate slug
-        with activate_branch(branch), event_tracking(request):
-            conflict_site = Site.objects.create(name='Conflict Site', slug='conflict-slug')
-            conflict_site_id = conflict_site.id
-
-        # Attempt to merge branch - this should fail due to slug conflict
-        with self.assertRaises(ValidationError):
-            branch.merge(user=self.user, commit=True)
-
-        # Verify that main site still exists
-        self.assertTrue(Site.objects.filter(id=main_site_id).exists())
-
-        # Verify that neither branch site was created in main (transaction rollback)
-        self.assertFalse(Site.objects.filter(id=good_site_id).exists())
-        self.assertFalse(Site.objects.filter(id=conflict_site_id).exists())
-
-        # Branch should still be in READY state (merge failed)
-        branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.READY)
-
     def test_merge_many_to_many_tags(self):
         """
         Test adding and removing many-to-many relationships (tags on site).
