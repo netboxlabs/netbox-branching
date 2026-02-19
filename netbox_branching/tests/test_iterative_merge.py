@@ -6,7 +6,6 @@ import uuid
 
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.core.exceptions import ValidationError
 from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
