@@ -22,7 +22,7 @@ EXEMPT_MODEL_FIELDS = (
     'comments',
     'custom_field_data',
     'level',    # MPTT fields
-    'lft',
+    'lft',      # MPTT
     'rght',
     'tree_id',
 )
