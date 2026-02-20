@@ -1,5 +1,3 @@
-from typing import ClassVar
-
 from core.choices import ObjectChangeActionChoices
 from core.filtersets import ObjectChangeFilterSet
 from core.models import ObjectChange
@@ -95,7 +93,7 @@ class BranchDiffView(generic.ObjectChildrenView):
     child_model = ChangeDiff
     filterset = filtersets.ChangeDiffFilterSet
     table = tables.ChangeDiffTable
-    actions: ClassVar[dict] = {}
+    actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Diff'),
         badge=_get_diff_count,
@@ -112,7 +110,7 @@ class BranchChangesBehindView(generic.ObjectChildrenView):
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
     table = tables.ChangesTable
-    actions: ClassVar[dict] = {}
+    actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Changes Behind'),
         badge=lambda obj: obj.get_unsynced_changes().count(),
@@ -129,7 +127,7 @@ class BranchChangesAheadView(generic.ObjectChildrenView):
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
     table = tables.ChangesTable
-    actions: ClassVar[dict] = {}
+    actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Changes Ahead'),
         badge=lambda obj: obj.get_unmerged_changes().count(),
@@ -150,7 +148,7 @@ class BranchChangesMergedView(generic.ObjectChildrenView):
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
     table = tables.ChangesTable
-    actions: ClassVar[dict] = {}
+    actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Changes Merged'),
         badge=lambda obj: obj.get_merged_changes().count(),

@@ -1,5 +1,3 @@
-from typing import ClassVar
-
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
@@ -19,10 +17,10 @@ class AppConfig(PluginConfig):
     # Remember to update COMPATIBILITY.md when modifying the minimum/maximum supported NetBox versions.
     min_version = '4.4.1'
     max_version = '4.5.99'
-    middleware: ClassVar[list] = [
-        'netbox_branching.middleware.BranchMiddleware'
-    ]
-    default_settings: ClassVar[dict] = {
+    middleware = (
+        'netbox_branching.middleware.BranchMiddleware',
+    )
+    default_settings = {  # noqa: RUF012
         # The maximum number of working branches (excludes merged & archived branches)
         'max_working_branches': None,
 
