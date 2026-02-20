@@ -12,18 +12,17 @@ applied iteratively in chronological order.
 import time
 import uuid
 
+from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Region, Site
 from django.contrib.auth import get_user_model
 from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
-
-from dcim.models import Device, DeviceRole, DeviceType, Interface, Manufacturer, Region, Site
 from extras.models import Tag
 from netbox.context_managers import event_tracking
+
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch
-
 
 User = get_user_model()
 
