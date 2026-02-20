@@ -6,6 +6,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import connections
 from django.test import Client, TransactionTestCase
 from django.urls import reverse
+from users.choices import TokenVersionChoices
 from users.models import Token
 
 from netbox_branching.choices import BranchStatusChoices
@@ -13,41 +14,34 @@ from netbox_branching.constants import COOKIE_NAME
 from netbox_branching.models import Branch
 
 
-# TODO: Remove when dropping support for NetBox v4.4
-def create_token(user):
-    try:
-        # NetBox >= 4.5
-        from users.choices import TokenVersionChoices
-        token = Token(version=TokenVersionChoices.V1, user=user)
-        token.save()
-    except ImportError:
-        # NetBox < 4.5
-        token = Token(user=user)
-        token.save()
-        return token.key
-    else:
-        return token.token
-
-
-class APITestCase(TransactionTestCase):
+class BaseAPITestCase:
     serialized_rollback = True
 
     def setUp(self):
         self.client = Client()
-        user = get_user_model().objects.create_user(username='testuser', is_superuser=True)
-        token = create_token(user)
+        self.user = get_user_model().objects.create_user(username='testuser', is_superuser=True)
         self.header = {
-            'HTTP_AUTHORIZATION': f'Token {token}',
+            'HTTP_AUTHORIZATION': f'Token {self.create_token(self.user)}',
             'HTTP_ACCEPT': 'application/json',
             'HTTP_CONTENT_TYPE': 'application/json',
         }
-
         ContentType.objects.get_for_model(Branch)
+
+    def create_token(self, user):
+        token = Token(version=TokenVersionChoices.V1, user=user)
+        token.save()
+        return token.token
+
+
+class APITestCase(BaseAPITestCase, TransactionTestCase):
+
+    def setUp(self):
+        super().setUp()
 
         # Create a Branch
         branch = Branch(name='Branch 1')
         branch.save(provision=False)
-        branch.provision(user)
+        branch.provision(self.user)
 
         # Create sites
         Site.objects.create(name='Site 1', slug='site-1')
@@ -116,20 +110,7 @@ class APITestCase(TransactionTestCase):
         self.assertEqual(results[0]['name'], 'Site 2')
 
 
-class BranchArchiveAPITestCase(TransactionTestCase):
-    serialized_rollback = True
-
-    def setUp(self):
-        self.client = Client()
-        self.user = get_user_model().objects.create_user(username='testuser', is_superuser=True)
-        token = create_token(self.user)
-        self.header = {
-            'HTTP_AUTHORIZATION': f'Token {token}',
-            'HTTP_ACCEPT': 'application/json',
-            'HTTP_CONTENT_TYPE': 'application/json',
-        }
-
-        ContentType.objects.get_for_model(Branch)
+class BranchArchiveAPITestCase(BaseAPITestCase, TransactionTestCase):
 
     def test_archive_endpoint_success(self):
         branch = Branch(name='Test Branch', status=BranchStatusChoices.MERGED)
@@ -148,9 +129,8 @@ class BranchArchiveAPITestCase(TransactionTestCase):
 
     def test_archive_endpoint_permission_denied(self):
         user = get_user_model().objects.create_user(username='limited_user')
-        token = create_token(user)
         header = {
-            'HTTP_AUTHORIZATION': f'Token {token}',
+            'HTTP_AUTHORIZATION': f'Token {self.create_token(user)}',
             'HTTP_ACCEPT': 'application/json',
             'HTTP_CONTENT_TYPE': 'application/json',
         }
@@ -194,3 +174,177 @@ class BranchArchiveAPITestCase(TransactionTestCase):
 
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+
+class BranchSyncAPITestCase(BaseAPITestCase, TransactionTestCase):
+
+    def test_sync_endpoint_success(self):
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-sync', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **self.header)
+
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertIn('status', data)
+
+    def test_sync_endpoint_with_commit(self):
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-sync', kwargs={'pk': branch.pk})
+        response = self.client.post(
+            url,
+            data=json.dumps({'commit': True}),
+            content_type='application/json',
+            **self.header
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertIn('status', data)
+
+    def test_sync_endpoint_permission_denied(self):
+        user = get_user_model().objects.create_user(username='limited_user')
+        header = {
+            'HTTP_AUTHORIZATION': f'Token {self.create_token(user)}',
+            'HTTP_ACCEPT': 'application/json',
+            'HTTP_CONTENT_TYPE': 'application/json',
+        }
+
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-sync', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **header)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_sync_endpoint_not_ready(self):
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.NEW)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-sync', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **self.header)
+
+        self.assertEqual(response.status_code, 400)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.NEW)
+
+
+class BranchMergeAPITestCase(BaseAPITestCase, TransactionTestCase):
+
+    def test_merge_endpoint_success(self):
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-merge', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **self.header)
+
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertIn('status', data)
+
+    def test_merge_endpoint_with_commit(self):
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-merge', kwargs={'pk': branch.pk})
+        response = self.client.post(
+            url,
+            data=json.dumps({'commit': True}),
+            content_type='application/json',
+            **self.header
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertIn('status', data)
+
+    def test_merge_endpoint_permission_denied(self):
+        user = get_user_model().objects.create_user(username='limited_user')
+        header = {
+            'HTTP_AUTHORIZATION': f'Token {self.create_token(user)}',
+            'HTTP_ACCEPT': 'application/json',
+            'HTTP_CONTENT_TYPE': 'application/json',
+        }
+
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-merge', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **header)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_merge_endpoint_not_ready(self):
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.NEW)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-merge', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **self.header)
+
+        self.assertEqual(response.status_code, 400)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.NEW)
+
+
+class BranchRevertAPITestCase(BaseAPITestCase, TransactionTestCase):
+
+    def test_revert_endpoint_success(self):
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.MERGED)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-revert', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **self.header)
+
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertIn('status', data)
+
+    def test_revert_endpoint_with_commit(self):
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.MERGED)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-revert', kwargs={'pk': branch.pk})
+        response = self.client.post(
+            url,
+            data=json.dumps({'commit': True}),
+            content_type='application/json',
+            **self.header
+        )
+
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertIn('status', data)
+
+    def test_revert_endpoint_permission_denied(self):
+        user = get_user_model().objects.create_user(username='limited_user')
+        header = {
+            'HTTP_AUTHORIZATION': f'Token {self.create_token(user)}',
+            'HTTP_ACCEPT': 'application/json',
+            'HTTP_CONTENT_TYPE': 'application/json',
+        }
+
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.MERGED)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-revert', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **header)
+
+        self.assertEqual(response.status_code, 403)
+
+    def test_revert_endpoint_not_merged(self):
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-revert', kwargs={'pk': branch.pk})
+        response = self.client.post(url, **self.header)
+
+        self.assertEqual(response.status_code, 400)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
