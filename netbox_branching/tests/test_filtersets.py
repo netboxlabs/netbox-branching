@@ -13,16 +13,16 @@ except ImportError:
     TaggableManager = None
 
 from core.choices import ObjectChangeActionChoices
+
 from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.filtersets import BranchEventFilterSet, BranchFilterSet, ChangeDiffFilterSet
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
-
 
 EXEMPT_MODEL_FIELDS = (
     'comments',
     'custom_field_data',
     'level',    # MPTT fields
-    'lft',      # MPTT
+    'lft',
     'rght',
     'tree_id',
 )
@@ -34,7 +34,7 @@ class BaseFilterSetTests:
     corresponding filter defined on its FilterSet.  Fields that are
     intentionally not filterable should be listed in ignore_fields.
     """
-    ignore_fields = tuple()
+    ignore_fields = ()
 
     def _get_filters_for_field(self, field):
         """
@@ -201,8 +201,6 @@ class ChangeDiffFilterSetTestCase(TestCase, BaseFilterSetTests):
     queryset = ChangeDiff.objects.all()
     filterset = ChangeDiffFilterSet
 
-    # These fields have no direct filters; object_repr is searched via q,
-    # conflicts is handled by has_conflicts, json fields are not filtered.
     ignore_fields = ('object_repr', 'original', 'modified', 'current', 'conflicts')
 
     @classmethod
@@ -244,8 +242,6 @@ class ChangeDiffFilterSetTestCase(TestCase, BaseFilterSetTests):
         self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
 
     def test_q(self):
-        # object_repr is set to str(branch) = branch.name on save()
-        # Two diffs reference branches[0] as their object (object_id=branches[0].pk)
         branch = Branch.objects.get(name='Branch 1')
         params = {'q': branch.name}
         self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
