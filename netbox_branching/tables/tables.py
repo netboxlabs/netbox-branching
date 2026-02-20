@@ -1,16 +1,17 @@
 import django_tables2 as tables
+from core.models import ObjectChange
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
-
-from core.models import ObjectChange
 from netbox.tables import NetBoxTable, columns
-from netbox_branching.models import Branch, ChangeDiff
 from utilities.templatetags.builtins.filters import placeholder
+
+from netbox_branching.models import Branch, ChangeDiff
+
 from .columns import ConflictsColumn, DiffColumn
 
 __all__ = (
-    'ChangeDiffTable',
     'BranchTable',
+    'ChangeDiffTable',
     'ChangesTable',
 )
 
