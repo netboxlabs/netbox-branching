@@ -1,16 +1,16 @@
 import json
 
+from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections
 from django.test import Client, TransactionTestCase
 from django.urls import reverse
+from users.models import Token
 
-from dcim.models import Site
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME
 from netbox_branching.models import Branch
-from users.models import Token
 
 
 # TODO: Remove when dropping support for NetBox v4.4
@@ -20,12 +20,13 @@ def create_token(user):
         from users.choices import TokenVersionChoices
         token = Token(version=TokenVersionChoices.V1, user=user)
         token.save()
-        return token.token
     except ImportError:
         # NetBox < 4.5
         token = Token(user=user)
         token.save()
         return token.key
+    else:
+        return token.token
 
 
 class APITestCase(TransactionTestCase):
