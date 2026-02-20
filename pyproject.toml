@@ -44,18 +44,6 @@ package-data = { "netbox_branching" = ["**/*", "templates/**"] }
 exclude-package-data = { netbox_branching = ["tests/*"] }
 license-files = ["LICENSE.md"]
 
-[tool.ruff]
-line-length = 120
-exclude = ["build"]
-
-[tool.ruff.lint]
-extend-select = ["E1", "E2", "E3", "E501", "W"]
-ignore = ["F403", "F405"]
-preview = true
-
-[tool.ruff.format]
-quote-style = "single"
-
 [build-system]
 requires = ["setuptools>=43.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
