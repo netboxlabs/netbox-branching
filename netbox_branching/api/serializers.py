@@ -1,5 +1,3 @@
-from typing import ClassVar
-
 from core.choices import ObjectChangeActionChoices
 from drf_spectacular.utils import extend_schema_field
 from netbox.api.exceptions import SerializerNotFound
@@ -39,10 +37,10 @@ class BranchSerializer(NetBoxModelSerializer):
 
     class Meta:
         model = Branch
-        fields: ClassVar[list] = [
+        fields = (
             'id', 'url', 'display', 'name', 'status', 'owner', 'description', 'schema_id', 'last_sync', 'merged_time',
             'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated',
-        ]
+        )
         brief_fields = ('id', 'url', 'display', 'name', 'status', 'description')
 
     def create(self, validated_data):
@@ -72,9 +70,9 @@ class BranchEventSerializer(NetBoxModelSerializer):
 
     class Meta:
         model = BranchEvent
-        fields: ClassVar[list] = [
+        fields = (
             'id', 'url', 'display', 'time', 'branch', 'user', 'type',
-        ]
+        )
         brief_fields = ('id', 'url', 'display')
 
 
@@ -117,10 +115,10 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
 
     class Meta:
         model = ChangeDiff
-        fields: ClassVar[list] = [
+        fields = (
             'id', 'url', 'display', 'branch', 'object_type', 'object_id', 'object', 'object_repr', 'action',
             'conflicts', 'diff', 'original_data', 'modified_data', 'current_data', 'last_updated',
-        ]
+        )
         brief_fields = ('id', 'url', 'display', 'object_type', 'object_id', 'object_repr', 'action')
 
     @extend_schema_field(serializers.JSONField(allow_null=True))
