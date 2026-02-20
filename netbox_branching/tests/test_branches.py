@@ -5,12 +5,13 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
-
 from netbox.plugins import get_plugin_config
+
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.models import Branch
 from netbox_branching.utilities import get_tables_to_replicate
+
 from .utils import fetchall, fetchone
 
 

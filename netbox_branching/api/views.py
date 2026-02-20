@@ -1,18 +1,19 @@
+from core.api.serializers import JobSerializer
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseBadRequest
 from drf_spectacular.utils import extend_schema
+from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
+from netbox.plugins import get_plugin_config
 from rest_framework.decorators import action
 from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet
 
-from core.api.serializers import JobSerializer
-from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
-from netbox.plugins import get_plugin_config
 from netbox_branching import filtersets
 from netbox_branching.jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
+
 from . import serializers
 
 

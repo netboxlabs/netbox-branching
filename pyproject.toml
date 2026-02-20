@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["check-manifest", "mkdocs", "mkdocs-material", "ruff"]
+dev = ["check-manifest", "mkdocs", "mkdocs-material", "ruff==0.15.2"]
 test = ["coverage", "pytest", "pytest-cov"]
 
 [project.urls]
@@ -43,17 +43,6 @@ packages = [
 package-data = { "netbox_branching" = ["**/*", "templates/**"] }
 exclude-package-data = { netbox_branching = ["tests/*"] }
 license-files = ["LICENSE.md"]
-
-[tool.ruff]
-line-length = 120
-
-[tool.ruff.lint]
-extend-select = ["E1", "E2", "E3", "E501", "W"]
-ignore = ["F403", "F405"]
-preview = true
-
-[tool.ruff.format]
-quote-style = "single"
 
 [build-system]
 requires = ["setuptools>=43.0.0", "wheel"]

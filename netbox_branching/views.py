@@ -1,24 +1,24 @@
+from core.choices import ObjectChangeActionChoices
+from core.filtersets import ObjectChangeFilterSet
+from core.models import ObjectChange
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Count, Q
 from django.shortcuts import redirect, render
 from django.utils.translation import gettext_lazy as _
-
-from core.choices import ObjectChangeActionChoices
-from core.filtersets import ObjectChangeFilterSet
-from core.models import ObjectChange
 from netbox.plugins import get_plugin_config
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
+
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
 from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
 
-
 #
 # Branches
 #
+
 
 class BranchListView(generic.ObjectListView):
     queryset = Branch.objects.annotate(
@@ -93,7 +93,7 @@ class BranchDiffView(generic.ObjectChildrenView):
     child_model = ChangeDiff
     filterset = filtersets.ChangeDiffFilterSet
     table = tables.ChangeDiffTable
-    actions = {}
+    actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Diff'),
         badge=_get_diff_count,
@@ -110,7 +110,7 @@ class BranchChangesBehindView(generic.ObjectChildrenView):
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
     table = tables.ChangesTable
-    actions = {}
+    actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Changes Behind'),
         badge=lambda obj: obj.get_unsynced_changes().count(),
@@ -127,7 +127,7 @@ class BranchChangesAheadView(generic.ObjectChildrenView):
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
     table = tables.ChangesTable
-    actions = {}
+    actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Changes Ahead'),
         badge=lambda obj: obj.get_unmerged_changes().count(),
@@ -148,7 +148,7 @@ class BranchChangesMergedView(generic.ObjectChildrenView):
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
     table = tables.ChangesTable
-    actions = {}
+    actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Changes Merged'),
         badge=lambda obj: obj.get_merged_changes().count(),
@@ -193,7 +193,7 @@ class BaseBranchActionView(generic.ObjectView):
 
         return render(request, self.template_name, {
             'branch': branch,
-            'action': _(f'{self.action.title()} Branch'),
+            'action': _('%s Branch') % self.action.title(),
             'form': form,
             'action_permitted': action_permitted,
             'conflicts_table': self._get_conflicts_table(branch),
@@ -213,7 +213,7 @@ class BaseBranchActionView(generic.ObjectView):
 
         return render(request, self.template_name, {
             'branch': branch,
-            'action': _(f'{self.action.title()} Branch'),
+            'action': _('%s Branch') % self.action.title(),
             'form': form,
             'action_permitted': action_permitted,
             'conflicts_table': self._get_conflicts_table(branch),
@@ -298,6 +298,7 @@ class BranchArchiveView(generic.ObjectView):
         if not branch.can_revert:
             messages.error(request, _("Reverting this branch is disallowed per policy."))
             return redirect(branch.get_absolute_url())
+        return None
 
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
@@ -337,7 +338,7 @@ class BranchMigrateView(generic.ObjectView):
 
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        action_permitted = getattr(branch, 'can_migrate')
+        action_permitted = branch.can_migrate
         form = self.form()
 
         return render(request, self.template_name, {
@@ -348,7 +349,7 @@ class BranchMigrateView(generic.ObjectView):
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        action_permitted = getattr(branch, 'can_migrate')
+        action_permitted = branch.can_migrate
         form = self.form(request.POST)
 
         if branch.status != BranchStatusChoices.PENDING_MIGRATIONS:
