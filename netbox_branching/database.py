@@ -6,7 +6,6 @@ from netbox.registry import registry
 from .contextvars import active_branch
 from .utilities import supports_branching
 
-
 __all__ = (
     'BranchAwareRouter',
 )
@@ -26,15 +25,16 @@ class BranchAwareRouter:
         # Warn & exit if branching support has not yet been initialized
         if 'branching' not in registry['model_features']:
             warnings.warn(f"Routing database query for {model} before branching support is initialized.")
-            return
+            return None
 
         # Bail if the model does not support branching
         if not supports_branching(model):
-            return
+            return None
 
         # Return the schema for the active branch (if any)
         if branch := active_branch.get():
             return self._get_connection(branch)
+        return None
 
     def db_for_read(self, model, **hints):
 
@@ -42,7 +42,7 @@ class BranchAwareRouter:
         if model._meta.label == 'core.ObjectChange':
             if branch := active_branch.get():
                 return self._get_connection(branch)
-            return
+            return None
 
         return self._get_db(model, **hints)
 
@@ -56,7 +56,7 @@ class BranchAwareRouter:
     def allow_migrate(self, db, app_label, model_name=None, **hints):
         # This router has no opinion on non-branch connections
         if not db.startswith(self.connection_prefix):
-            return
+            return None
 
         # Disallow migrations for models from the plugin itself within a branch
         if app_label == 'netbox_branching':
@@ -75,3 +75,4 @@ class BranchAwareRouter:
                     features__contains=['branching'],
             ).exists():
                 return False
+        return None

@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["check-manifest", "mkdocs", "mkdocs-material", "ruff"]
+dev = ["check-manifest", "mkdocs", "mkdocs-material", "ruff==0.15.2"]
 test = ["coverage", "pytest", "pytest-cov"]
 
 [project.urls]

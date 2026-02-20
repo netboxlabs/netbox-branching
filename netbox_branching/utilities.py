@@ -12,9 +12,9 @@ from django.db import connections
 from django.db.models import ForeignKey, ManyToManyField
 from django.http import HttpResponseBadRequest
 from django.urls import reverse
-
 from netbox.plugins import get_plugin_config
 from netbox.utils import register_request_processor
+
 from .constants import BRANCH_HEADER, COOKIE_NAME, EXEMPT_MODELS, EXEMPT_PATHS, INCLUDE_MODELS, QUERY_PARAM
 from .contextvars import active_branch
 
@@ -24,11 +24,11 @@ from .contextvars import active_branch
 _branch_connections_tracker = Local(thread_critical=False)
 
 __all__ = (
+    'ActiveBranchContextManager',
     'BranchActionIndicator',
     'ChangeSummary',
     'DynamicSchemaDict',
     'ListHandler',
-    'ActiveBranchContextManager',
     'activate_branch',
     'close_old_branch_connections',
     'deactivate_branch',
@@ -66,18 +66,17 @@ class DynamicSchemaDict(dict):
         return get_plugin_config('netbox_branching', 'main_schema')
 
     def __getitem__(self, item):
-        if type(item) is str and item.startswith('schema_'):
-            if schema := item.removeprefix('schema_'):
-                track_branch_connection(item)
+        if type(item) is str and item.startswith('schema_') and (schema := item.removeprefix('schema_')):
+            track_branch_connection(item)
 
-                default_config = super().__getitem__('default')
-                return {
-                    **default_config,
-                    'OPTIONS': {
-                        **default_config.get('OPTIONS', {}),
-                        'options': f'-c search_path={schema},{self.main_schema}'
-                    },
-                }
+            default_config = super().__getitem__('default')
+            return {
+                **default_config,
+                'OPTIONS': {
+                    **default_config.get('OPTIONS', {}),
+                    'options': f'-c search_path={schema},{self.main_schema}'
+                },
+            }
         return super().__getitem__(item)
 
     def __contains__(self, item):
@@ -165,10 +164,7 @@ def supports_branching(model):
         *EXEMPT_MODELS,
         *get_plugin_config('netbox_branching', 'exempt_models', []),
     ]
-    if label in exempt_models or wildcard_label in exempt_models:
-        return False
-
-    return True
+    return label not in exempt_models and wildcard_label not in exempt_models
 
 
 def get_tables_to_replicate():
@@ -295,28 +291,27 @@ def get_active_branch(request):
         return branch
 
     # Branch activated/deactivated by URL query parameter
-    elif QUERY_PARAM in request.GET:
+    if QUERY_PARAM in request.GET:
         if schema_id := request.GET.get(QUERY_PARAM):
             branch = Branch.objects.get(schema_id=schema_id)
             if branch.ready:
                 messages.success(request, f"Activated branch {branch}")
                 return branch
-            else:
-                messages.error(request, f"Branch {branch} is not ready for use (status: {branch.status})")
-                return None
-        else:
-            messages.success(request, "Deactivated branch")
-            request.COOKIES.pop(COOKIE_NAME, None)  # Delete cookie if set
+            messages.error(request, f"Branch {branch} is not ready for use (status: {branch.status})")
             return None
+        messages.success(request, "Deactivated branch")
+        request.COOKIES.pop(COOKIE_NAME, None)  # Delete cookie if set
+        return None
 
     # Branch set by cookie
-    elif schema_id := request.COOKIES.get(COOKIE_NAME):
+    if schema_id := request.COOKIES.get(COOKIE_NAME):
         try:
             branch = Branch.objects.get(schema_id=schema_id)
             if branch.ready:
                 return branch
         except ObjectDoesNotExist:
             pass
+    return None
 
 
 def get_sql_results(cursor):
@@ -334,9 +329,8 @@ def ActiveBranchContextManager(request):
     """
     Activate a branch if indicated by the request (except for exempt paths).
     """
-    if request and request.path not in EXEMPT_PATHS:
-        if branch := get_active_branch(request):
-            return activate_branch(branch)
+    if request and request.path not in EXEMPT_PATHS and (branch := get_active_branch(request)):
+        return activate_branch(branch)
     return nullcontext()
 
 

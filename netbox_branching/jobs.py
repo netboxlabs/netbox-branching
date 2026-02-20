@@ -1,12 +1,12 @@
 import logging
 
-from django.db.models.signals import m2m_changed, post_save, pre_delete
-
 from core.signals import handle_changed_object, handle_deleted_object
+from django.db.models.signals import m2m_changed, post_save, pre_delete
 from netbox.jobs import JobRunner
 from netbox.plugins import get_plugin_config
 from netbox.signals import post_clean
 from utilities.exceptions import AbortTransaction
+
 from .signal_receivers import validate_branching_operations
 from .utilities import ListHandler
 
@@ -24,7 +24,7 @@ def get_job_log(job):
     Initialize and return the job log.
     """
     job.data = {
-        'log': list()
+        'log': []
     }
     return job.data['log']
 
@@ -92,11 +92,11 @@ class SyncBranchJob(JobRunner):
             branch.sync(user=self.job.user, commit=commit)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
-        except Exception as e:
+        except Exception:
             # TODO: Can JobRunner be extended to handle this more cleanly?
             # Ensure that signal handlers are reconnected
             self._reconnect_signal_receivers()
-            raise e
+            raise
 
         # Reconnect signal handlers
         self._reconnect_signal_receivers()

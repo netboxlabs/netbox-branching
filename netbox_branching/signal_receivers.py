@@ -1,22 +1,23 @@
 import logging
 from functools import partial
 
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectChange, ObjectType
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS
 from django.db.models.signals import post_migrate, post_save, pre_delete
 from django.dispatch import receiver
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
-from django.core.exceptions import ValidationError
-
-from core.choices import ObjectChangeActionChoices
-from core.models import ObjectChange, ObjectType
 from extras.events import process_event_rules
 from extras.models import EventRule
 from netbox.signals import post_clean
-from netbox_branching import signals
 from utilities.exceptions import AbortRequest
 from utilities.serialization import serialize_object
+
+from netbox_branching import signals
+
 from .choices import BranchStatusChoices
 from .constants import INCLUDE_MODELS
 from .contextvars import active_branch
@@ -57,9 +58,10 @@ def check_object_accessible_in_branch(branch, model, object_id):
     with deactivate_branch():
         try:
             model.objects.get(pk=object_id)
-            return True
         except model.DoesNotExist:
             pass
+        else:
+            return True
 
     # Object doesn't exist in main - check if it was created in the branch
     content_type = ContentType.objects.get_for_model(model)

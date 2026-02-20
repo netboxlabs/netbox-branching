@@ -2,11 +2,9 @@
 Iterative merge strategy implementation.
 """
 from django.db import DEFAULT_DB_ALIAS
-
 from netbox.context_managers import event_tracking
 
 from .strategy import MergeStrategy
-
 
 __all__ = (
     'IterativeMergeStrategy',

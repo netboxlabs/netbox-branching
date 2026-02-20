@@ -5,9 +5,9 @@ from netbox_branching.choices import BranchMergeStrategyChoices
 from netbox_branching.models import ChangeDiff
 
 __all__ = (
-    'BranchSyncForm',
     'BranchMergeForm',
     'BranchRevertForm',
+    'BranchSyncForm',
     'ConfirmationForm',
     'MigrateBranchForm',
 )
@@ -41,7 +41,7 @@ class BaseBranchActionForm(forms.Form):
             branch=self.branch,
             conflicts__isnull=False
         )
-        selected_diffs = self.cleaned_data.get('pk', list())
+        selected_diffs = self.cleaned_data.get('pk', [])
         if conflicted_diffs and not set(conflicted_diffs).issubset(selected_diffs):
             raise forms.ValidationError(_("All conflicts must be acknowledged in order to merge the branch."))
 
@@ -50,7 +50,6 @@ class BaseBranchActionForm(forms.Form):
 
 class BranchSyncForm(BaseBranchActionForm):
     """Form for syncing a branch."""
-    pass
 
 
 class BranchMergeForm(BaseBranchActionForm):
@@ -66,7 +65,6 @@ class BranchMergeForm(BaseBranchActionForm):
 
 class BranchRevertForm(BaseBranchActionForm):
     """Form for reverting a branch."""
-    pass
 
 
 class ConfirmationForm(forms.Form):

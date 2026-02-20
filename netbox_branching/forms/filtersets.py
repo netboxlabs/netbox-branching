@@ -1,17 +1,17 @@
-from django import forms
-from django.utils.translation import gettext as _
-
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectType
+from django import forms
+from django.utils.translation import gettext as _
 from netbox.forms import NetBoxModelFilterSetForm
-from netbox_branching.choices import BranchStatusChoices
-from netbox_branching.models import ChangeDiff, Branch
 from utilities.forms.fields import ContentTypeMultipleChoiceField, DynamicModelMultipleChoiceField, TagFilterField
 from utilities.forms.rendering import FieldSet
 
+from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.models import Branch, ChangeDiff
+
 __all__ = (
-    'ChangeDiffFilterForm',
     'BranchFilterForm',
+    'ChangeDiffFilterForm',
 )
 
 
