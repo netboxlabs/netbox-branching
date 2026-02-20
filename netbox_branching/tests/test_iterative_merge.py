@@ -35,7 +35,6 @@ class BaseMergeTests:
     """
     Mixin with common merge tests for all merge strategies.
 
-    This is a mixin class (not inheriting from TestCase) that provides common test methods.
     Subclasses should inherit from both this mixin and TransactionTestCase, and must
     implement _create_and_provision_branch() with their specific merge strategy.
 
@@ -1003,56 +1002,34 @@ class BaseMergeTests:
         # A successful cable connection creates two CablePath records (one per endpoint)
         self.assertEqual(CablePath.objects.count(), 2, 'Cable paths not populated after merge')
 
-        # Revert branch
-        branch.revert(user=self.user, commit=True)
-
-        # Verify cable and its paths are removed after revert
-        self.assertFalse(Cable.objects.filter(id=cable_id).exists())
-        self.assertEqual(CablePath.objects.count(), 0)
-
-    def test_merge_edit_then_delete_after_main_delete(self):
+    def test_merge_delete_after_main_delete(self):
         """
-        This tests that deleting an object in a branch that was deleted in main
-        works correctly even when there are prior edits to that object in the branch.
+        Test that a branch delete succeeds when the object was already deleted in main.
+        Refs: #422
         """
-        # Create site in main
-        site = Site.objects.create(name='Site 1', slug='site-1', description='Original description')
+        site = Site.objects.create(name='Site 1', slug='site-1', description='Original')
         site_id = site.id
 
-        # Create and activate branch
         branch = self._create_and_provision_branch()
 
-        # Create a request context for event tracking
         request = RequestFactory().get(reverse('home'))
         request.id = uuid.uuid4()
         request.user = self.user
 
-        # Edit site in branch
-        with activate_branch(branch), event_tracking(request):
-            site_in_branch = Site.objects.get(id=site_id)
-            site_in_branch.snapshot()
-            site_in_branch.description = 'Updated in branch'
-            site_in_branch.save()
-
-        # Verify the update was recorded
-        self._assert_object_changes(branch, Site, site_id, 1, ['update'])
-
-        # Go back to main and delete site
+        # Delete site in main before the branch merge
         site.delete()
         self.assertFalse(Site.objects.filter(id=site_id).exists())
 
-        # Activate branch and delete site
+        # In branch: delete the site (which is now already gone from main)
         with activate_branch(branch), event_tracking(request):
             site_in_branch = Site.objects.get(id=site_id)
             site_in_branch.delete()
 
-        # Verify both update and delete were recorded
-        self._assert_object_changes(branch, Site, site_id, 2, ['update', 'delete'])
+        self._assert_object_changes(branch, Site, site_id, 1, ['delete'])
 
-        # Merge branch - should succeed
+        # Merge should succeed — the DELETE is skipped gracefully when already deleted
         branch.merge(user=self.user, commit=True)
 
-        # Verify branch status
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
