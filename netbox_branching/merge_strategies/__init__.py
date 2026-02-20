@@ -1,14 +1,13 @@
 """
 Merge strategy implementations for branch operations.
 """
-from .strategy import MergeStrategy, get_merge_strategy
 from .iterative import IterativeMergeStrategy
 from .squash import SquashMergeStrategy
-
+from .strategy import MergeStrategy, get_merge_strategy
 
 __all__ = (
-    'MergeStrategy',
     'IterativeMergeStrategy',
+    'MergeStrategy',
     'SquashMergeStrategy',
     'get_merge_strategy',
 )

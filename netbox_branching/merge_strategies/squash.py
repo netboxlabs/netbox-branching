@@ -1,22 +1,20 @@
 """
 Squash merge strategy implementation with functions for collapsing and ordering ObjectChanges.
 """
-from enum import Enum
+from enum import StrEnum
 
 from django.contrib.contenttypes.models import ContentType
 from django.db import DEFAULT_DB_ALIAS, models
-
 from netbox.context_managers import event_tracking
 
 from .strategy import MergeStrategy
-
 
 __all__ = (
     'SquashMergeStrategy',
 )
 
 
-class ActionType(str, Enum):
+class ActionType(StrEnum):
     """
     Enum for collapsed change action types.
     """
@@ -474,10 +472,7 @@ class SquashMergeStrategy(MergeStrategy):
 
             # Try to get identifying info
             data = collapsed.postchange_data or collapsed.prechange_data or {}
-            identifying_info = []
-            for field in ['name', 'slug', 'label']:
-                if field in data:
-                    identifying_info.append(f"{field}={data[field]!r}")
+            identifying_info = [f"{field}={data[field]!r}" for field in ['name', 'slug', 'label'] if field in data]
             info_str = f" ({', '.join(identifying_info)})" if identifying_info else ""
 
             logger.error(f"    {action} {model_name} (ID: {obj_id}){info_str} depends on: {deps}")
@@ -538,13 +533,12 @@ class SquashMergeStrategy(MergeStrategy):
                     f"circular dependencies and cannot be ordered. This may indicate a complex cycle "
                     f"that could not be automatically resolved. Check the logs above for details."
                 )
-            else:
-                # Sort ready nodes by action priority (primary) and time (secondary)
-                # This maintains DELETE -> UPDATE -> CREATE ordering, with time ordering within each group
-                ready.sort(key=lambda k: (
-                    action_priority.get(collapsed_changes[k].final_action, 99),
-                    collapsed_changes[k].last_change.time
-                ))
+            # Sort ready nodes by action priority (primary) and time (secondary)
+            # This maintains DELETE -> UPDATE -> CREATE ordering, with time ordering within each group
+            ready.sort(key=lambda k: (
+                action_priority.get(collapsed_changes[k].final_action, 99),
+                collapsed_changes[k].last_change.time
+            ))
 
             # Process ready nodes
             for key in ready:

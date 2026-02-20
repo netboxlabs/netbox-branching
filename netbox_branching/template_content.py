@@ -1,6 +1,8 @@
-from django.contrib.contenttypes.models import ContentType
+from typing import ClassVar
 
+from django.contrib.contenttypes.models import ContentType
 from netbox.plugins import PluginTemplateExtension
+
 from .choices import BranchStatusChoices
 from .contextvars import active_branch
 from .models import Branch, ChangeDiff
@@ -55,7 +57,7 @@ class BranchNotification(PluginTemplateExtension):
 
 
 class ScriptNotification(PluginTemplateExtension):
-    models = ['extras.script']
+    models: ClassVar[list] = ['extras.script']
 
     def alerts(self):
         return self.render('netbox_branching/inc/script_alert.html', extra_context={

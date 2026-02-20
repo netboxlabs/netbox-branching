@@ -1,3 +1,4 @@
+from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.contrib.messages import get_messages
 from django.core.exceptions import ValidationError
@@ -5,14 +6,12 @@ from django.db import connections
 from django.test import TransactionTestCase, override_settings
 from django.urls import reverse
 from django_rq import get_queue
+from utilities.testing import ViewTestCases, create_tags
 
-from dcim.models import Site
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch
-from utilities.testing import ViewTestCases, create_tags
-
 
 User = get_user_model()
 
