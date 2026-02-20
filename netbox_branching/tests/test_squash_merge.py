@@ -1,24 +1,22 @@
 """
 Tests for Branch merge functionality with ObjectChange collapsing using squash merge strategy.
 """
-'''
 import time
 import uuid
 
+from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
+from dcim.models import Region, Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
-
-from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
-from dcim.models import Region, Site
 from netbox.context_managers import event_tracking
+
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch
 
 from .test_iterative_merge import BaseMergeTests
-
 
 User = get_user_model()
 
@@ -421,4 +419,3 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
         # Verify branch status
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
-'''
