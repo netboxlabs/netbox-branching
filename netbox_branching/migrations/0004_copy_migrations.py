@@ -1,6 +1,6 @@
 from django.db import connection, migrations
-
 from netbox.plugins import get_plugin_config
+
 from netbox_branching.choices import BranchStatusChoices
 
 

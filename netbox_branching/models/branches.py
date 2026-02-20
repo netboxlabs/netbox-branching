@@ -6,6 +6,7 @@ from collections import defaultdict
 from datetime import timedelta
 from functools import cached_property, partial
 
+from core.models import ObjectChange as ObjectChange_
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.postgres.fields import ArrayField
@@ -18,26 +19,29 @@ from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
-
-from core.models import ObjectChange as ObjectChange_
 from netbox.config import get_config
 from netbox.context import current_request
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
+from utilities.exceptions import AbortRequest, AbortTransaction
+from utilities.querysets import RestrictedQuerySet
+
 from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
-from netbox_branching.constants import BRANCH_ACTIONS
-from netbox_branching.constants import SKIP_INDEXES
+from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
 from netbox_branching.merge_strategies import get_merge_strategy
 from netbox_branching.signals import *
-from netbox_branching.utilities import BranchActionIndicator
 from netbox_branching.utilities import (
-    ChangeSummary, activate_branch, get_branchable_object_types, get_sql_results,
-    get_tables_to_replicate, record_applied_change,
+    BranchActionIndicator,
+    ChangeSummary,
+    activate_branch,
+    get_branchable_object_types,
+    get_sql_results,
+    get_tables_to_replicate,
+    record_applied_change,
 )
-from utilities.exceptions import AbortRequest, AbortTransaction
-from utilities.querysets import RestrictedQuerySet
+
 from .changes import ObjectChange
 
 __all__ = (
@@ -351,7 +355,7 @@ class Branch(JobsMixin, PrimaryModel):
             if not (indicator := func(self)):
                 # Backward compatibility for pre-v0.6.0 validators
                 if type(indicator) is not BranchActionIndicator:
-                    return BranchActionIndicator(False, _(f"Validation failed for {action}: {func}"))
+                    return BranchActionIndicator(False, _('Validation failed for %s: %s') % (action, func))
                 return indicator
 
         return BranchActionIndicator(True)
@@ -424,27 +428,26 @@ class Branch(JobsMixin, PrimaryModel):
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.SYNCING)
 
         try:
-            with activate_branch(self):
-                with transaction.atomic(using=self.connection_name):
-                    models = set()
+            with activate_branch(self), transaction.atomic(using=self.connection_name):
+                models = set()
 
-                    # Apply each change from the main schema
-                    for change in changes:
-                        models.add(change.changed_object_type.model_class())
-                        change.apply(self, using=self.connection_name, logger=logger)
-                    if not commit:
-                        raise AbortTransaction()
+                # Apply each change from the main schema
+                for change in changes:
+                    models.add(change.changed_object_type.model_class())
+                    change.apply(self, using=self.connection_name, logger=logger)
+                if not commit:
+                    raise AbortTransaction()
 
-                    # Perform cleanup tasks
-                    strategy_class = get_merge_strategy(self.merge_strategy)
-                    strategy_class()._clean(models)
+                # Perform cleanup tasks
+                strategy_class = get_merge_strategy(self.merge_strategy)
+                strategy_class()._clean(models)
 
         except Exception as e:
             if err_message := str(e):
                 logger.error(err_message)
             # Restore original branch status
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
-            raise e
+            raise
 
         # Record the branch's last_synced time & update its status
         logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
@@ -497,7 +500,7 @@ class Branch(JobsMixin, PrimaryModel):
                 # Save applied migrations & reset status
                 self.status = BranchStatusChoices.READY
                 self.save()
-                raise e
+                raise
         else:
             logger.info("Found no migrations to apply")
 
@@ -567,7 +570,7 @@ class Branch(JobsMixin, PrimaryModel):
             # Disconnect signal receiver & restore original branch status
             post_save.disconnect(handler, sender=ObjectChange_)
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.READY)
-            raise e
+            raise
 
         # Update the Branch's status to "merged"
         logger.debug(f"Setting branch status to {BranchStatusChoices.MERGED}")
@@ -642,7 +645,7 @@ class Branch(JobsMixin, PrimaryModel):
             # Disconnect signal receiver & restore original branch status
             post_save.disconnect(handler, sender=ObjectChange_)
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MERGED)
-            raise e
+            raise
 
         # Update the Branch's status to "ready"
         logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
@@ -700,7 +703,7 @@ class Branch(JobsMixin, PrimaryModel):
                             f"database ({settings.DATABASE['NAME']}). (Use the PostgreSQL command 'GRANT CREATE ON "
                             f"DATABASE $database TO $role;' to grant the required permission.)"
                         )
-                    raise e
+                    raise
 
                 # Create an empty copy of the global change log. Share the ID sequence from the main table to avoid
                 # reusing change record IDs.
@@ -790,9 +793,9 @@ class Branch(JobsMixin, PrimaryModel):
                             try:
                                 cursor.execute(sql)
                                 logger.debug(sql)
-                            except Exception as e:
+                            except Exception:
                                 logger.error(sql)
-                                raise e
+                                raise
                     else:
                         logger.warning(
                             f"Found no matching index in main for branch index {index.indexname}."
@@ -809,7 +812,7 @@ class Branch(JobsMixin, PrimaryModel):
                 logger.error(e)
                 Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
 
-                raise e
+                raise
 
         # Emit post-provision signal
         post_provision.send(sender=self.__class__, branch=self, user=user)

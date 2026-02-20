@@ -3,7 +3,7 @@ import time
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import connections
-from django.test import tag, TransactionTestCase
+from django.test import TransactionTestCase, tag
 
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch, close_old_branch_connections

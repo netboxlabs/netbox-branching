@@ -1,18 +1,18 @@
-from drf_spectacular.utils import extend_schema_field
-from rest_framework import serializers
-
 from core.choices import ObjectChangeActionChoices
+from drf_spectacular.utils import extend_schema_field
 from netbox.api.exceptions import SerializerNotFound
 from netbox.api.fields import ChoiceField, ContentTypeField
 from netbox.api.serializers import NetBoxModelSerializer
-from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
-from netbox_branching.models import ChangeDiff, Branch, BranchEvent
+from rest_framework import serializers
 from users.api.serializers import UserSerializer
 from utilities.api import get_serializer_for_model
 
+from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
+from netbox_branching.models import Branch, BranchEvent, ChangeDiff
+
 __all__ = (
-    'BranchSerializer',
     'BranchEventSerializer',
+    'BranchSerializer',
     'ChangeDiffSerializer',
     'CommitSerializer',
 )
@@ -37,10 +37,10 @@ class BranchSerializer(NetBoxModelSerializer):
 
     class Meta:
         model = Branch
-        fields = [
+        fields = (
             'id', 'url', 'display', 'name', 'status', 'owner', 'description', 'schema_id', 'last_sync', 'merged_time',
             'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated',
-        ]
+        )
         brief_fields = ('id', 'url', 'display', 'name', 'status', 'description')
 
     def create(self, validated_data):
@@ -70,9 +70,9 @@ class BranchEventSerializer(NetBoxModelSerializer):
 
     class Meta:
         model = BranchEvent
-        fields = [
+        fields = (
             'id', 'url', 'display', 'time', 'branch', 'user', 'type',
-        ]
+        )
         brief_fields = ('id', 'url', 'display')
 
 
@@ -115,10 +115,10 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
 
     class Meta:
         model = ChangeDiff
-        fields = [
+        fields = (
             'id', 'url', 'display', 'branch', 'object_type', 'object_id', 'object', 'object_repr', 'action',
             'conflicts', 'diff', 'original_data', 'modified_data', 'current_data', 'last_updated',
-        ]
+        )
         brief_fields = ('id', 'url', 'display', 'object_type', 'object_id', 'object_repr', 'action')
 
     @extend_schema_field(serializers.JSONField(allow_null=True))
