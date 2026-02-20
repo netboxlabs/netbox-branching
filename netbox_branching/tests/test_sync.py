@@ -823,9 +823,9 @@ class SyncTestCase(TransactionTestCase):
         """
         Test sync when an object was deleted in the branch AND also deleted in main.
 
-        Sync applies main's DELETE to the branch schema. Since the object was already
-        removed from the branch schema by the branch's own delete, the apply() must
-        handle the DoesNotExist case gracefully (skip the already-deleted object).
+        The branch's own DELETE ChangeDiff causes get_unsynced_changes() to exclude
+        main's DELETE for the same object, so sync is a no-op for that object. The
+        branch must remain READY with the object still absent from its schema.
         Refs: #422
         """
         # Create site in main before branch provisioning
@@ -835,7 +835,6 @@ class SyncTestCase(TransactionTestCase):
 
         # Create branch (inherits the site)
         branch = self._create_and_provision_branch()
-        initial_last_sync = branch.last_sync
 
         # In branch: delete the site
         with activate_branch(branch), event_tracking(self.request):
@@ -853,10 +852,12 @@ class SyncTestCase(TransactionTestCase):
             Site.objects.get(id=site_id).delete()
         self.assertFalse(Site.objects.filter(id=site_id).exists())
 
-        # Sync: should apply main's DELETE gracefully (object already gone from branch)
+        # Sync: no errors thrown; branch remains READY
         branch.sync(user=self.user, commit=True)
 
-        # Branch remains READY and last_sync is updated
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.READY)
-        self.assertGreater(branch.last_sync, initial_last_sync)
+
+        # Object remains gone from branch schema
+        with activate_branch(branch):
+            self.assertFalse(Site.objects.filter(id=site_id).exists())
