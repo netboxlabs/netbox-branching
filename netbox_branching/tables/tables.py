@@ -30,8 +30,12 @@ OBJECTCHANGE_OBJECT = """
 """
 
 BEFORE_DIFF = """
+{% load branch_buttons %}
 {% if record.action == 'create' %}
     {{ ''|placeholder }}
+{% elif record.action == 'delete' %}
+    <pre class="p-0">{% for k, v in record.diff.pre|compact_items %}{{ k }}: {{ v }}
+{% endfor %}</pre>
 {% else %}
     <pre class="p-0">{% for k, v in record.diff.pre.items %}{{ k }}: {{ v }}
 {% endfor %}</pre>
@@ -39,8 +43,12 @@ BEFORE_DIFF = """
 """
 
 AFTER_DIFF = """
+{% load branch_buttons %}
 {% if record.action == 'delete' %}
     {{ ''|placeholder }}
+{% elif record.action == 'create' %}
+    <pre class="p-0">{% for k, v in record.diff.post|compact_items %}{{ k }}: {{ v }}
+{% endfor %}</pre>
 {% else %}
     <pre class="p-0">{% for k, v in record.diff.post.items %}{{ k }}: {{ v }}
 {% endfor %}</pre>
