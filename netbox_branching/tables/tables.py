@@ -34,8 +34,8 @@ BEFORE_DIFF = """
 {% if record.action == 'create' %}
     {{ ''|placeholder }}
 {% elif record.action == 'delete' %}
-    <pre class="p-0">{% for k, v in record.diff.pre|compact_items %}{{ k }}: {{ v }}
-{% endfor %}</pre>
+    <pre class="p-0">{% for k, v in record.diff.pre.items %}{% if not v|is_empty %}{{ k }}: {{ v }}
+{% endif %}{% endfor %}</pre>
 {% else %}
     <pre class="p-0">{% for k, v in record.diff.pre.items %}{{ k }}: {{ v }}
 {% endfor %}</pre>
@@ -47,8 +47,8 @@ AFTER_DIFF = """
 {% if record.action == 'delete' %}
     {{ ''|placeholder }}
 {% elif record.action == 'create' %}
-    <pre class="p-0">{% for k, v in record.diff.post|compact_items %}{{ k }}: {{ v }}
-{% endfor %}</pre>
+    <pre class="p-0">{% for k, v in record.diff.post.items %}{% if not v|is_empty %}{{ k }}: {{ v }}
+{% endif %}{% endfor %}</pre>
 {% else %}
     <pre class="p-0">{% for k, v in record.diff.post.items %}{{ k }}: {{ v }}
 {% endfor %}</pre>
