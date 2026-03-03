@@ -25,7 +25,7 @@ from django.urls import reverse
 from extras.models import Tag
 from netbox.context_managers import event_tracking
 
-from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.utilities import activate_branch
 
@@ -37,14 +37,14 @@ class BaseMergeTests:
     Mixin with common merge tests for all merge strategies.
 
     Subclasses should inherit from both this mixin and TransactionTestCase, and must
-    implement _create_and_provision_branch() with their specific merge strategy.
+    define a MERGE_STRATEGY class attribute using BranchMergeStrategyChoices.
 
     Example:
         class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
-            def _create_and_provision_branch(self, name='Test Branch'):
-                # Implementation for iterative strategy
-                ...
+            MERGE_STRATEGY = BranchMergeStrategyChoices.ITERATIVE
     """
+
+    MERGE_STRATEGY = None
 
     serialized_rollback = True
 
@@ -74,12 +74,29 @@ class BaseMergeTests:
                 connections[branch.connection_name].close()
 
     def _create_and_provision_branch(self, name='Test Branch'):
-        """
-        Helper to create and provision a branch.
+        """Helper to create and provision a branch using the subclass's merge strategy."""
+        branch = Branch(name=name, merge_strategy=self.MERGE_STRATEGY)
+        branch.save(provision=False)
+        branch.provision(user=self.user)
 
-        Must be implemented by subclasses to specify the merge strategy.
-        """
-        raise NotImplementedError("Subclasses must implement _create_and_provision_branch()")
+        # Wait for branch to be provisioned (background task)
+        max_wait = 30  # Maximum 30 seconds
+        wait_interval = 0.1  # Check every 100ms
+        elapsed = 0
+
+        while elapsed < max_wait:
+            branch.refresh_from_db()
+            if branch.status == BranchStatusChoices.READY:
+                break
+            time.sleep(wait_interval)
+            elapsed += wait_interval
+        else:
+            raise TimeoutError(
+                f"Branch {branch.name} did not become READY within {max_wait} seconds. "
+                f"Status: {branch.status}"
+            )
+
+        return branch
 
     def _assert_object_changes(self, branch, model, object_id, expected_count, expected_actions=None):
         """
@@ -1031,27 +1048,4 @@ class BaseMergeTests:
 class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
     """Test cases for Branch merge using iterative merge strategy."""
 
-    def _create_and_provision_branch(self, name='Test Branch'):
-        """Helper to create and provision a branch with iterative merge strategy."""
-        branch = Branch(name=name, merge_strategy='iterative')
-        branch.save(provision=False)
-        branch.provision(user=self.user)
-
-        # Wait for branch to be provisioned (background task)
-        max_wait = 30  # Maximum 30 seconds
-        wait_interval = 0.1  # Check every 100ms
-        elapsed = 0
-
-        while elapsed < max_wait:
-            branch.refresh_from_db()
-            if branch.status == BranchStatusChoices.READY:
-                break
-            time.sleep(wait_interval)
-            elapsed += wait_interval
-        else:
-            raise TimeoutError(
-                f"Branch {branch.name} did not become READY within {max_wait} seconds. "
-                f"Status: {branch.status}"
-            )
-
-        return branch
+    MERGE_STRATEGY = BranchMergeStrategyChoices.ITERATIVE

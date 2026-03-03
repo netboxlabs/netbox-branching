@@ -12,7 +12,7 @@ from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
 from netbox.context_managers import event_tracking
 
-from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch
 
@@ -24,30 +24,7 @@ User = get_user_model()
 class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
     """Test cases for Branch merge with ObjectChange collapsing and ordering using squash strategy."""
 
-    def _create_and_provision_branch(self, name='Test Branch'):
-        """Helper to create and provision a branch with squash merge strategy."""
-        branch = Branch(name=name, merge_strategy='squash')
-        branch.save(provision=False)
-        branch.provision(user=self.user)
-
-        # Wait for branch to be provisioned (background task)
-        max_wait = 30  # Maximum 30 seconds
-        wait_interval = 0.1  # Check every 100ms
-        elapsed = 0
-
-        while elapsed < max_wait:
-            branch.refresh_from_db()
-            if branch.status == BranchStatusChoices.READY:
-                break
-            time.sleep(wait_interval)
-            elapsed += wait_interval
-        else:
-            raise TimeoutError(
-                f"Branch {branch.name} did not become READY within {max_wait} seconds. "
-                f"Status: {branch.status}"
-            )
-
-        return branch
+    MERGE_STRATEGY = BranchMergeStrategyChoices.SQUASH
 
     def test_merge_delete_then_create_same_slug(self):
         """
