@@ -1,12 +1,12 @@
 import json
 
+from core.models import Job
 from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections
 from django.test import Client, TransactionTestCase
 from django.urls import reverse
-from users.choices import TokenVersionChoices
 from users.models import Token
 
 from netbox_branching.choices import BranchStatusChoices
@@ -27,8 +27,15 @@ class BaseAPITestCase:
         }
         ContentType.objects.get_for_model(Branch)
 
+    # TODO: Remove when dropping support for NetBox v4.4
     def create_token(self, user):
-        token = Token(version=TokenVersionChoices.V1, user=user)
+        try:
+            # NetBox >= 4.5
+            from users.choices import TokenVersionChoices
+            token = Token(version=TokenVersionChoices.V1, user=user)
+        except ImportError:
+            # NetBox < 4.5
+            token = Token(user=user)
         token.save()
         return token.token
 
@@ -188,6 +195,8 @@ class BranchSyncAPITestCase(BaseAPITestCase, TransactionTestCase):
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.content)
         self.assertIn('status', data)
+        self.assertIn('job_id', data)
+        self.assertTrue(Job.objects.filter(job_id=data['job_id']).exists())
 
     def test_sync_endpoint_with_commit(self):
         branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
@@ -246,6 +255,8 @@ class BranchMergeAPITestCase(BaseAPITestCase, TransactionTestCase):
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.content)
         self.assertIn('status', data)
+        self.assertIn('job_id', data)
+        self.assertTrue(Job.objects.filter(job_id=data['job_id']).exists())
 
     def test_merge_endpoint_with_commit(self):
         branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
@@ -304,6 +315,8 @@ class BranchRevertAPITestCase(BaseAPITestCase, TransactionTestCase):
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.content)
         self.assertIn('status', data)
+        self.assertIn('job_id', data)
+        self.assertTrue(Job.objects.filter(job_id=data['job_id']).exists())
 
     def test_revert_endpoint_with_commit(self):
         branch = Branch(name='Test Branch', status=BranchStatusChoices.MERGED)
