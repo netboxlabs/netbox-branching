@@ -42,6 +42,8 @@ INCLUDE_MODELS = (
     'extras.cachedvalue',
     'extras.taggeditem',  # Fix for issue #354 - tags through model
     'tenancy.contactgroupmembership',  # Fix for NetBox v4.3.0
+    'dcim.portmapping',           # Fix for NetBox v4.5.x
+    'dcim.porttemplatemapping',   # Fix for NetBox v4.5.x
 )
 
 # Models for which branching support is explicitly disabled
