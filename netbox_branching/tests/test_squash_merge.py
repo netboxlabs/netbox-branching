@@ -1,7 +1,6 @@
 """
 Tests for Branch merge functionality with ObjectChange collapsing using squash merge strategy.
 """
-import time
 import uuid
 
 from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
@@ -13,7 +12,6 @@ from django.urls import reverse
 from netbox.context_managers import event_tracking
 
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
-from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch
 
 from .test_iterative_merge import BaseMergeTests
