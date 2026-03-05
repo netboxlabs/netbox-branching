@@ -275,7 +275,7 @@ class SquashMergeStrategy(MergeStrategy):
                     if ref_key in changed_objects:
                         references.add(ref_key)
 
-        # Check GenericForeignKey fields (e.g. IPAddress.assigned_object)
+        # Check GenericForeignKey fields
         for field in model_class._meta.private_fields:
             if isinstance(field, GenericForeignKey):
                 ct_value = data.get(field.ct_field)
