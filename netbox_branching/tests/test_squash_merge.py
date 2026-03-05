@@ -4,11 +4,12 @@ Tests for Branch merge functionality with ObjectChange collapsing using squash m
 import uuid
 
 from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
-from dcim.models import Region, Site
+from dcim.models import Device, Interface, Region, Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
+from ipam.models import IPAddress
 from netbox.context_managers import event_tracking
 
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
@@ -394,3 +395,73 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
         # Verify branch status
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+    def test_merge_gfk_reference_to_new_object(self):
+        """
+        Test that squash merge correctly orders the creation of an IPAddress assigned to
+        a new Interface (via GenericForeignKey) so that the Interface is created before
+        the IPAddress. Regression test for GitHub issue #448.
+        """
+        # Create the site and device prerequisites in main
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Test Site', slug='test-site')
+            device = Device.objects.create(
+                name='Test Device',
+                site=site,
+                device_type=self.device_type,
+                role=self.device_role,
+            )
+
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        request2 = RequestFactory().get(reverse('home'))
+        request2.id = uuid.uuid4()
+        request2.user = self.user
+
+        # In branch: create IP address, then create interface, then assign IP to interface
+        with activate_branch(branch), event_tracking(request2):
+            # Step 1: Create IP address (unassigned initially)
+            ip = IPAddress.objects.create(address='10.0.0.1/24')
+            ip_id = ip.id
+
+            # Step 2: Create a new virtual interface on the device
+            iface = Interface.objects.create(
+                device=device,
+                name='eth0',
+                type='virtual',
+            )
+            iface_id = iface.id
+
+            # Step 3: Assign the IP address to the interface (GenericForeignKey)
+            ip.snapshot()
+            ip.assigned_object = iface
+            ip.save()
+
+        # Merge branch - should succeed without ValidationError
+        branch.merge(user=self.user, commit=True)
+
+        # Verify both objects exist in main with correct relationship
+        self.assertTrue(Interface.objects.filter(id=iface_id).exists())
+        self.assertTrue(IPAddress.objects.filter(id=ip_id).exists())
+        merged_ip = IPAddress.objects.get(id=ip_id)
+        self.assertEqual(merged_ip.assigned_object_id, iface_id)
+        self.assertEqual(
+            merged_ip.assigned_object_type,
+            ContentType.objects.get_for_model(Interface)
+        )
+
+        # Verify branch status
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Verify both objects are removed
+        self.assertFalse(Interface.objects.filter(id=iface_id).exists())
+        self.assertFalse(IPAddress.objects.filter(id=ip_id).exists())
