@@ -396,7 +396,7 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
-    def test_448_merge_gfk_reference_to_new_object(self):
+    def test_merge_gfk_reference_to_new_object(self):
         """
         Test that squash merge correctly orders the creation of an IPAddress assigned to
         a new Interface (via GenericForeignKey) so that the Interface is created before
