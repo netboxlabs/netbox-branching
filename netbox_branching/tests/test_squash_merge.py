@@ -4,7 +4,7 @@ Tests for Branch merge functionality with ObjectChange collapsing using squash m
 import uuid
 
 from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
-from dcim.models import Device, Interface, InterfaceTypeChoices, Region, Site
+from dcim.models import Device, Interface, Region, Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory, TransactionTestCase
@@ -433,7 +433,7 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
             iface = Interface.objects.create(
                 device=device,
                 name='eth0',
-                type=InterfaceTypeChoices.TYPE_VIRTUAL,
+                type='virtual',
             )
             iface_id = iface.id
 
