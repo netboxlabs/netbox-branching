@@ -1,5 +1,20 @@
 # Change Log
 
+## v0.8.2
+
+### Enhancements
+
+* [#5](https://github.com/netboxlabs/netbox-branching/issues/5) - Automatically redirect to avoid 404s when activating or deactivating a branch
+* [#86](https://github.com/netboxlabs/netbox-branching/issues/86) - Omit empty values from displayed data for created & deleted objects
+* [#307](https://github.com/netboxlabs/netbox-branching/issues/307) - Exempt `/api/status/` from branching middleware
+* [#418](https://github.com/netboxlabs/netbox-branching/issues/418) - Allow setting maximum threshold for job timeout
+
+### Bug Fixes
+
+* [#422](https://github.com/netboxlabs/netbox-branching/issues/422) - Do not display deletion warning if object has already been deleted in main
+
+---
+
 ## v0.8.1
 
 ### Bug Fixes
