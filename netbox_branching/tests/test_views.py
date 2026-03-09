@@ -1,9 +1,14 @@
+import uuid
+
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectChange
 from dcim.models import Site
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.messages import get_messages
 from django.core.exceptions import ValidationError
 from django.db import connections
-from django.test import TransactionTestCase, override_settings
+from django.test import TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django_rq import get_queue
 from utilities.testing import ViewTestCases, create_tags
@@ -12,6 +17,7 @@ from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch
+from netbox_branching.views import BaseBranchActionView
 
 User = get_user_model()
 
@@ -261,3 +267,103 @@ class BranchMiddlewareTestCase(TransactionTestCase):
 
         # Clean up
         branch.deprovision()
+
+
+class ChangesSummaryTestCase(TestCase):
+    """
+    Unit tests for BaseBranchActionView._get_changes_summary.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.site_ct = ContentType.objects.get(app_label='dcim', model='site')
+        cls.device_ct = ContentType.objects.get(app_label='dcim', model='device')
+
+    def _make_change(self, ct, obj_id, action):
+        return ObjectChange.objects.create(
+            request_id=uuid.uuid4(),
+            action=action,
+            changed_object_type=ct,
+            changed_object_id=obj_id,
+            user_name='testuser',
+        )
+
+    def test_empty_queryset(self):
+        summary = BaseBranchActionView._get_changes_summary(ObjectChange.objects.none())
+        self.assertEqual(summary['creates'], {})
+        self.assertEqual(summary['updates'], {})
+        self.assertEqual(summary['deletes'], {})
+        self.assertEqual(summary['creates_total'], 0)
+        self.assertEqual(summary['updates_total'], 0)
+        self.assertEqual(summary['deletes_total'], 0)
+
+    def test_single_create(self):
+        self._make_change(self.site_ct, 1, ObjectChangeActionChoices.ACTION_CREATE)
+        summary = BaseBranchActionView._get_changes_summary(ObjectChange.objects.all())
+        self.assertEqual(summary['creates'], {self.site_ct: 1})
+        self.assertEqual(summary['updates'], {})
+        self.assertEqual(summary['deletes'], {})
+        self.assertEqual(summary['creates_total'], 1)
+
+    def test_single_update(self):
+        self._make_change(self.site_ct, 1, ObjectChangeActionChoices.ACTION_UPDATE)
+        summary = BaseBranchActionView._get_changes_summary(ObjectChange.objects.all())
+        self.assertEqual(summary['creates'], {})
+        self.assertEqual(summary['updates'], {self.site_ct: 1})
+        self.assertEqual(summary['deletes'], {})
+        self.assertEqual(summary['updates_total'], 1)
+
+    def test_single_delete(self):
+        self._make_change(self.site_ct, 1, ObjectChangeActionChoices.ACTION_DELETE)
+        summary = BaseBranchActionView._get_changes_summary(ObjectChange.objects.all())
+        self.assertEqual(summary['creates'], {})
+        self.assertEqual(summary['updates'], {})
+        self.assertEqual(summary['deletes'], {self.site_ct: 1})
+        self.assertEqual(summary['deletes_total'], 1)
+
+    def test_create_then_update_counts_as_create(self):
+        # Same object: create + update → counted as create, not update
+        self._make_change(self.site_ct, 1, ObjectChangeActionChoices.ACTION_CREATE)
+        self._make_change(self.site_ct, 1, ObjectChangeActionChoices.ACTION_UPDATE)
+        summary = BaseBranchActionView._get_changes_summary(ObjectChange.objects.all())
+        self.assertEqual(summary['creates'], {self.site_ct: 1})
+        self.assertEqual(summary['updates'], {})
+        self.assertEqual(summary['deletes'], {})
+        self.assertEqual(summary['creates_total'], 1)
+
+    def test_create_then_delete_counts_as_delete(self):
+        # Same object: create + delete → counted as delete
+        self._make_change(self.site_ct, 1, ObjectChangeActionChoices.ACTION_CREATE)
+        self._make_change(self.site_ct, 1, ObjectChangeActionChoices.ACTION_DELETE)
+        summary = BaseBranchActionView._get_changes_summary(ObjectChange.objects.all())
+        self.assertEqual(summary['creates'], {})
+        self.assertEqual(summary['updates'], {})
+        self.assertEqual(summary['deletes'], {self.site_ct: 1})
+        self.assertEqual(summary['deletes_total'], 1)
+
+    def test_update_then_delete_counts_as_delete(self):
+        # Same object: update + delete → counted as delete
+        self._make_change(self.site_ct, 1, ObjectChangeActionChoices.ACTION_UPDATE)
+        self._make_change(self.site_ct, 1, ObjectChangeActionChoices.ACTION_DELETE)
+        summary = BaseBranchActionView._get_changes_summary(ObjectChange.objects.all())
+        self.assertEqual(summary['creates'], {})
+        self.assertEqual(summary['updates'], {})
+        self.assertEqual(summary['deletes'], {self.site_ct: 1})
+        self.assertEqual(summary['deletes_total'], 1)
+
+    def test_multiple_objects_same_type(self):
+        self._make_change(self.site_ct, 1, ObjectChangeActionChoices.ACTION_CREATE)
+        self._make_change(self.site_ct, 2, ObjectChangeActionChoices.ACTION_UPDATE)
+        self._make_change(self.site_ct, 3, ObjectChangeActionChoices.ACTION_DELETE)
+        summary = BaseBranchActionView._get_changes_summary(ObjectChange.objects.all())
+        self.assertEqual(summary['creates'], {self.site_ct: 1})
+        self.assertEqual(summary['updates'], {self.site_ct: 1})
+        self.assertEqual(summary['deletes'], {self.site_ct: 1})
+
+    def test_sorted_by_model_name(self):
+        # 'device' sorts before 'site' alphabetically
+        self._make_change(self.site_ct, 1, ObjectChangeActionChoices.ACTION_CREATE)
+        self._make_change(self.device_ct, 1, ObjectChangeActionChoices.ACTION_CREATE)
+        summary = BaseBranchActionView._get_changes_summary(ObjectChange.objects.all())
+        keys = list(summary['creates'].keys())
+        self.assertEqual(keys, [self.device_ct, self.site_ct])

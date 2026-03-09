@@ -214,10 +214,11 @@ class BaseBranchActionView(generic.ObjectView):
                 updates[ct_id] += 1
 
         def resolve(counts_dict):
-            return {
-                ContentType.objects.get(pk=ct_id): count
-                for ct_id, count in sorted(counts_dict.items())
-            }
+            ct_map = {ct.pk: ct for ct in ContentType.objects.filter(pk__in=counts_dict)}
+            return dict(sorted(
+                {ct_map[ct_id]: count for ct_id, count in counts_dict.items()}.items(),
+                key=lambda item: item[0].model
+            ))
 
         return {
             'creates': resolve(creates),
@@ -238,6 +239,7 @@ class BaseBranchActionView(generic.ObjectView):
         return {
             'branch': branch,
             'action': _('%s Branch') % self.action.title(),
+            'action_name': self.action,
             'form': form,
             'action_permitted': action_permitted,
             'conflicts_table': self._get_conflicts_table(branch),
