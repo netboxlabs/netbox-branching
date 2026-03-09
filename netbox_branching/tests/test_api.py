@@ -28,6 +28,7 @@ class BaseAPITestCase:
         ContentType.objects.get_for_model(Branch)
 
     # TODO: Remove when dropping support for NetBox v4.4
+    @staticmethod
     def create_token(user):
         try:
             # NetBox >= 4.5
