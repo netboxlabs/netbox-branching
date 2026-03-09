@@ -1,5 +1,6 @@
 {% extends 'generic/_base.html' %}
 {% load form_helpers %}
+{% load helpers %}
 {% load i18n %}
 
 {% block title %}{% trans action %} {{ branch }}{% endblock %}
@@ -37,6 +38,76 @@
         <i class="mdi mdi-check-circle"></i>
         {% trans "No conflicts found." %}
       </div>
+    {% endif %}
+    {% if changes_summary %}
+      {% if changes_summary.creates or changes_summary.updates or changes_summary.deletes %}
+        <div class="card mb-3">
+          <div class="card-header">
+            <strong>{% trans "Changes to be Merged" %}</strong>
+          </div>
+          <div class="card-body p-0">
+            <div class="list-group list-group-flush">
+              {% if changes_summary.creates %}
+                <div class="list-group-item">
+                  <a class="d-flex justify-content-between align-items-center text-decoration-none text-body"
+                     data-bs-toggle="collapse" href="#merge-creates" role="button" aria-expanded="false" aria-controls="merge-creates">
+                    <span>{% trans "Creates" %}</span>
+                    <span class="badge bg-success rounded-pill text-white">{{ changes_summary.creates_total }}</span>
+                  </a>
+                  <div class="collapse" id="merge-creates">
+                    <ul class="list-unstyled mt-2 mb-0 ms-4">
+                      {% for ct, count in changes_summary.creates.items %}
+                        <li class="d-flex justify-content-between py-1">
+                          <span>{{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}</span>
+                          <span class="badge bg-secondary text-white">{{ count }}</span>
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                </div>
+              {% endif %}
+              {% if changes_summary.updates %}
+                <div class="list-group-item">
+                  <a class="d-flex justify-content-between align-items-center text-decoration-none text-body"
+                     data-bs-toggle="collapse" href="#merge-updates" role="button" aria-expanded="false" aria-controls="merge-updates">
+                    <span>{% trans "Updates" %}</span>
+                    <span class="badge bg-primary rounded-pill text-white">{{ changes_summary.updates_total }}</span>
+                  </a>
+                  <div class="collapse" id="merge-updates">
+                    <ul class="list-unstyled mt-2 mb-0 ms-4">
+                      {% for ct, count in changes_summary.updates.items %}
+                        <li class="d-flex justify-content-between py-1">
+                          <span>{{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}</span>
+                          <span class="badge bg-secondary text-white">{{ count }}</span>
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                </div>
+              {% endif %}
+              {% if changes_summary.deletes %}
+                <div class="list-group-item">
+                  <a class="d-flex justify-content-between align-items-center text-decoration-none text-body"
+                     data-bs-toggle="collapse" href="#merge-deletes" role="button" aria-expanded="false" aria-controls="merge-deletes">
+                    <span>{% trans "Deletes" %}</span>
+                    <span class="badge bg-danger rounded-pill text-white">{{ changes_summary.deletes_total }}</span>
+                  </a>
+                  <div class="collapse" id="merge-deletes">
+                    <ul class="list-unstyled mt-2 mb-0 ms-4">
+                      {% for ct, count in changes_summary.deletes.items %}
+                        <li class="d-flex justify-content-between py-1">
+                          <span>{{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}</span>
+                          <span class="badge bg-secondary text-white">{{ count }}</span>
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                </div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      {% endif %}
     {% endif %}
     <form action="" method="post" enctype="multipart/form-data">
       {% csrf_token %}
