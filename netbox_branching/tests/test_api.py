@@ -43,7 +43,6 @@ class BaseAPITestCase:
             return token.token
 
 
-
 class APITestCase(BaseAPITestCase, TransactionTestCase):
 
     def setUp(self):
