@@ -28,16 +28,20 @@ class BaseAPITestCase:
         ContentType.objects.get_for_model(Branch)
 
     # TODO: Remove when dropping support for NetBox v4.4
-    def create_token(self, user):
+    def create_token(user):
         try:
             # NetBox >= 4.5
             from users.choices import TokenVersionChoices
             token = Token(version=TokenVersionChoices.V1, user=user)
+            token.save()
         except ImportError:
             # NetBox < 4.5
             token = Token(user=user)
-        token.save()
-        return token.token
+            token.save()
+            return token.key
+        else:
+            return token.token
+
 
 
 class APITestCase(BaseAPITestCase, TransactionTestCase):
