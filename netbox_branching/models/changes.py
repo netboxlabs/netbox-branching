@@ -62,9 +62,12 @@ class ObjectChange(ObjectChange_):
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
-            instance = model.objects.using(using).get(pk=self.changed_object_id)
-            logger.debug(f'Updating {model._meta.verbose_name} {instance}')
-            update_object(instance, self.diff()['post'], using=using)
+            try:
+                instance = model.objects.using(using).get(pk=self.changed_object_id)
+                logger.debug(f'Updating {model._meta.verbose_name} {instance}')
+                update_object(instance, self.diff()['post'], using=using)
+            except model.DoesNotExist:
+                logger.debug(f'{model._meta.verbose_name} ID {self.changed_object_id} already deleted; skipping')
 
         # Deleting an object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
