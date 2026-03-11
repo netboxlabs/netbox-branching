@@ -35,7 +35,7 @@ class ObjectChange(ObjectChange_):
         for migrator in branch.migrators.get(object_type, []):
             migrator(self, revert)
 
-    def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None):
+    def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None, skip_missing=False):
         """
         Apply the change using the specified database connection.
         """
@@ -67,7 +67,10 @@ class ObjectChange(ObjectChange_):
                 logger.debug(f'Updating {model._meta.verbose_name} {instance}')
                 update_object(instance, self.diff()['post'], using=using)
             except model.DoesNotExist:
-                logger.debug(f'{model._meta.verbose_name} ID {self.changed_object_id} already deleted; skipping')
+                if skip_missing:
+                    logger.debug(f'{model._meta.verbose_name} ID {self.changed_object_id} already deleted; skipping')
+                else:
+                    raise
 
         # Deleting an object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:

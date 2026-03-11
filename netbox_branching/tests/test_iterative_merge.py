@@ -1044,42 +1044,6 @@ class BaseMergeTests:
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
-    def test_merge_update_after_main_delete(self):
-        """
-        Test that a branch update is skipped gracefully when the object was deleted in main.
-        Refs: #426
-        """
-        site = Site.objects.create(name='Site 1', slug='site-1', description='Original')
-        site_id = site.id
-
-        branch = self._create_and_provision_branch()
-
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-
-        # In branch: update the site
-        with activate_branch(branch), event_tracking(request):
-            branch_site = Site.objects.get(id=site_id)
-            branch_site.snapshot()
-            branch_site.description = 'Updated in branch'
-            branch_site.save()
-
-        self._assert_object_changes(branch, Site, site_id, 1, ['update'])
-
-        # In main: delete the site before merge
-        site.delete()
-        self.assertFalse(Site.objects.filter(id=site_id).exists())
-
-        # Merge should succeed — the UPDATE is skipped gracefully when object is gone from main
-        branch.merge(user=self.user, commit=True)
-
-        branch.refresh_from_db()
-        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
-
-        # Object remains absent from main
-        self.assertFalse(Site.objects.filter(id=site_id).exists())
-
 
 class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
     """Test cases for Branch merge using iterative merge strategy."""
