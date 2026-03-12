@@ -54,14 +54,16 @@
                   <span class="badge bg-success rounded-pill text-white">{{ changes_summary.creates_total }}</span>
                 </a>
                 <div class="collapse" id="{{ action_name }}-creates">
-                  <ul class="list-unstyled mt-2 mb-0 ms-4">
-                    {% for ct, count in changes_summary.creates.items %}
-                      <li class="d-flex justify-content-between py-1">
-                        <span>{{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}</span>
-                        <span class="badge bg-secondary text-white">{{ count }}</span>
-                      </li>
-                    {% endfor %}
-                  </ul>
+                  <table class="table table-hover table-borderless mb-0">
+                    <tbody>
+                      {% for ct, count in changes_summary.creates.items %}
+                        <tr>
+                          <td>{{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}</td>
+                          <td class="text-end">{{ count }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             {% endif %}
@@ -73,14 +75,16 @@
                   <span class="badge bg-primary rounded-pill text-white">{{ changes_summary.updates_total }}</span>
                 </a>
                 <div class="collapse" id="{{ action_name }}-updates">
-                  <ul class="list-unstyled mt-2 mb-0 ms-4">
-                    {% for ct, count in changes_summary.updates.items %}
-                      <li class="d-flex justify-content-between py-1">
-                        <span>{{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}</span>
-                        <span class="badge bg-secondary text-white">{{ count }}</span>
-                      </li>
-                    {% endfor %}
-                  </ul>
+                  <table class="table table-hover table-borderless mb-0">
+                    <tbody>
+                      {% for ct, count in changes_summary.updates.items %}
+                        <tr>
+                          <td>{{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}</td>
+                          <td class="text-end">{{ count }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             {% endif %}
@@ -92,14 +96,16 @@
                   <span class="badge bg-danger rounded-pill text-white">{{ changes_summary.deletes_total }}</span>
                 </a>
                 <div class="collapse" id="{{ action_name }}-deletes">
-                  <ul class="list-unstyled mt-2 mb-0 ms-4">
-                    {% for ct, count in changes_summary.deletes.items %}
-                      <li class="d-flex justify-content-between py-1">
-                        <span>{{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}</span>
-                        <span class="badge bg-secondary text-white">{{ count }}</span>
-                      </li>
-                    {% endfor %}
-                  </ul>
+                  <table class="table table-hover table-borderless mb-0">
+                    <tbody>
+                      {% for ct, count in changes_summary.deletes.items %}
+                        <tr>
+                          <td>{{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}</td>
+                          <td class="text-end">{{ count }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
                 </div>
               </div>
             {% endif %}
