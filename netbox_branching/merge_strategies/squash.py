@@ -3,6 +3,7 @@ Squash merge strategy implementation with functions for collapsing and ordering 
 """
 from enum import StrEnum
 
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import DEFAULT_DB_ALIAS, models
 from netbox.context_managers import event_tracking
@@ -250,11 +251,14 @@ class SquashMergeStrategy(MergeStrategy):
         """
         Find foreign key references in the given data that point to objects in changed_objects.
         Returns a set of (model_label, object_id) tuples where model_label is "app.model".
+        Handles both regular ForeignKey fields and GenericForeignKey fields.
         """
         if not data:
             return set()
 
         references = set()
+
+        # Check regular ForeignKey fields
         for field in model_class._meta.get_fields():
             if isinstance(field, models.ForeignKey):
                 fk_value = data.get(field.name)
@@ -270,6 +274,24 @@ class SquashMergeStrategy(MergeStrategy):
                     # Only track if this object is in our changed_objects
                     if ref_key in changed_objects:
                         references.add(ref_key)
+
+        # Check GenericForeignKey fields
+        for field in model_class._meta.private_fields:
+            if isinstance(field, GenericForeignKey):
+                ct_value = data.get(field.ct_field)
+                fk_value = data.get(field.fk_field)
+
+                if ct_value and fk_value:
+                    try:
+                        ct = ContentType.objects.get_for_id(ct_value)
+                        app_label, model = ct.natural_key()
+                        model_label = f"{app_label}.{model}"
+                        ref_key = (model_label, fk_value)
+
+                        if ref_key in changed_objects:
+                            references.add(ref_key)
+                    except ContentType.DoesNotExist:
+                        pass
 
         return references
 
@@ -375,7 +397,7 @@ class SquashMergeStrategy(MergeStrategy):
     def _has_fk_to(collapsed, target_model_class, target_obj_id):
         """
         Check if a CollapsedChange has a foreign key reference to a specific object.
-        Returns True if any FK field in postchange_data points to the target object.
+        Returns True if any FK or GenericFK field in postchange_data points to the target object.
         """
         if not collapsed.postchange_data:
             return False
@@ -388,6 +410,19 @@ class SquashMergeStrategy(MergeStrategy):
                     related_model = field.related_model
                     if related_model == target_model_class and fk_value == target_obj_id:
                         return True
+
+        for field in collapsed.model_class._meta.private_fields:
+            if isinstance(field, GenericForeignKey):
+                ct_value = collapsed.postchange_data.get(field.ct_field)
+                fk_value = collapsed.postchange_data.get(field.fk_field)
+                if ct_value and fk_value == target_obj_id:
+                    try:
+                        ct = ContentType.objects.get_for_id(ct_value)
+                        if ct.model_class() == target_model_class:
+                            return True
+                    except ContentType.DoesNotExist:
+                        pass
+
         return False
 
     @staticmethod
