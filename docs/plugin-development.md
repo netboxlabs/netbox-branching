@@ -138,37 +138,6 @@ The `action` argument must be one of: `sync`, `merge`, `revert`, `archive`.
 !!! note
     Validators registered programmatically are equivalent to those registered via configuration. Both approaches are supported; use whichever fits your plugin's architecture.
 
-## ObjectChange Migrators
-
-When a migration changes the structure of a model — for example, renaming a field, restructuring a relationship, or moving data between fields — any `ObjectChange` records already stored in an open branch will still contain the old data format. If those records are replayed during a merge or sync, they may fail or produce incorrect results because the data no longer matches the current schema.
-
-NetBox addresses this with **objectchange migrators**: a convention where a migration declares a module-level `objectchange_migrators` dictionary mapping model labels to functions that update existing `ObjectChange` records to match the post-migration schema. NetBox Branching reads these migrators from each migration applied to a branch and runs them against the branch's `ObjectChange` records during migration.
-
-If your plugin introduces a migration that changes how a model's data is structured, you should include an `objectchange_migrators` dict in that migration:
-
-```python
-def oc_rename_my_field(objectchange, reverting):
-    for data in (objectchange.prechange_data, objectchange.postchange_data):
-        if data is None:
-            continue
-        if 'old_field_name' in data:
-            data['new_field_name'] = data.pop('old_field_name')
-
-
-objectchange_migrators = {
-    'my_plugin.mymodel': oc_rename_my_field,
-}
-```
-
-Each migrator function receives:
-
-| Argument | Description |
-|---|---|
-| `objectchange` | The `ObjectChange` instance being migrated, with `prechange_data` and `postchange_data` JSON fields to update in place |
-| `reverting` | `True` if the migration is being reversed; use this to swap the direction of any transformation |
-
-The migrator should modify `prechange_data` and `postchange_data` in place to reflect the new schema. Always guard against `None` values, as one or both fields may be absent depending on whether the change was a create or delete.
-
 ## Changelog Considerations
 
 Since branching relies entirely on the `ObjectChange` log, anything that affects how your models serialize or emit changes will also affect how they behave in branches.
