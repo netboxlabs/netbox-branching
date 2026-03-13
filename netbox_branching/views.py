@@ -1,3 +1,5 @@
+from collections import defaultdict
+
 from core.choices import ObjectChangeActionChoices
 from core.filtersets import ObjectChangeFilterSet
 from core.models import ObjectChange
@@ -183,21 +185,73 @@ class BaseBranchActionView(generic.ObjectView):
 
         return conflicts_table
 
+    @staticmethod
+    def _get_changes_summary(changes_qs):
+        """
+        Compute a deduplicated summary of creates, updates, and deletes from a changes queryset.
+        Rules:
+          - create + update = create
+          - anything + delete = delete
+        Returns dict with 'creates', 'updates', 'deletes' (each {ContentType: count}) and totals.
+        """
+        changes = changes_qs.values('action', 'changed_object_type_id', 'changed_object_id')
+
+        object_actions = defaultdict(set)
+        for change in changes:
+            key = (change['changed_object_type_id'], change['changed_object_id'])
+            object_actions[key].add(change['action'])
+
+        creates = defaultdict(int)
+        updates = defaultdict(int)
+        deletes = defaultdict(int)
+
+        for (ct_id, _obj_id), actions in object_actions.items():
+            if ObjectChangeActionChoices.ACTION_DELETE in actions:
+                deletes[ct_id] += 1
+            elif ObjectChangeActionChoices.ACTION_CREATE in actions:
+                creates[ct_id] += 1
+            else:
+                updates[ct_id] += 1
+
+        def resolve(counts_dict):
+            ct_map = {ct.pk: ct for ct in ContentType.objects.filter(pk__in=counts_dict)}
+            return dict(sorted(
+                {ct_map[ct_id]: count for ct_id, count in counts_dict.items()}.items(),
+                key=lambda item: item[0].model
+            ))
+
+        return {
+            'creates': resolve(creates),
+            'creates_total': sum(creates.values()),
+            'updates': resolve(updates),
+            'updates_total': sum(updates.values()),
+            'deletes': resolve(deletes),
+            'deletes_total': sum(deletes.values()),
+        }
+
+    def get_action_summary(self, branch):
+        return None
+
     def do_action(self, branch, request, form):
         raise NotImplementedError(f"{self.__class__} must implement action() method.")
+
+    def _build_context(self, branch, form, action_permitted):
+        return {
+            'branch': branch,
+            'action': _('%s Branch') % self.action.title(),
+            'action_name': self.action,
+            'form': form,
+            'action_permitted': action_permitted,
+            'conflicts_table': self._get_conflicts_table(branch),
+            'changes_summary': self.get_action_summary(branch),
+        }
 
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
         action_permitted = getattr(branch, f'can_{self.action}')
         form = self.form(branch, allow_commit=action_permitted)
 
-        return render(request, self.template_name, {
-            'branch': branch,
-            'action': _('%s Branch') % self.action.title(),
-            'form': form,
-            'action_permitted': action_permitted,
-            'conflicts_table': self._get_conflicts_table(branch),
-        })
+        return render(request, self.template_name, self._build_context(branch, form, action_permitted))
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
@@ -211,19 +265,16 @@ class BaseBranchActionView(generic.ObjectView):
         elif form.is_valid():
             return self.do_action(branch, request, form)
 
-        return render(request, self.template_name, {
-            'branch': branch,
-            'action': _('%s Branch') % self.action.title(),
-            'form': form,
-            'action_permitted': action_permitted,
-            'conflicts_table': self._get_conflicts_table(branch),
-        })
+        return render(request, self.template_name, self._build_context(branch, form, action_permitted))
 
 
 @register_model_view(Branch, 'sync')
 class BranchSyncView(BaseBranchActionView):
     action = 'sync'
     form = forms.BranchSyncForm
+
+    def get_action_summary(self, branch):
+        return self._get_changes_summary(branch.get_unsynced_changes())
 
     def do_action(self, branch, request, form):
         # Enqueue a background job to sync the Branch
@@ -241,6 +292,9 @@ class BranchSyncView(BaseBranchActionView):
 class BranchMergeView(BaseBranchActionView):
     action = 'merge'
     form = forms.BranchMergeForm
+
+    def get_action_summary(self, branch):
+        return self._get_changes_summary(branch.get_unmerged_changes())
 
     def do_action(self, branch, request, form):
         # Save the merge_strategy setting to the branch
