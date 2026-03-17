@@ -149,9 +149,28 @@
   </div>
 </div>
 
-{# Row 3: Main | Difference (Main) #}
+{# Row 3: Original | Main | Difference (Main) — only shown when main has changes #}
+{% if main_diff_added != None %}
 <div class="row">
-  <div class="col col-12 col-md-6">
+  <div class="col col-12 col-md-4">
+    <div class="card">
+      <h5 class="card-header">{% trans "Original" %}</h5>
+      <div class="card-body p-0">
+        {% if object.original %}
+          {% spaceless %}
+            <pre class="change-data m-0">
+              {% for k, v in object.original.items %}
+                <span{% if k in altered_in_current %} class="removed"{% endif %}>{{ k }}: {{ v|json }}</span>
+              {% endfor %}
+            </pre>
+          {% endspaceless %}
+        {% else %}
+          <span class="text-muted p-2 d-block">{% trans "None" %}</span>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col col-12 col-md-4">
     <div class="card">
       <h5 class="card-header">{% trans "Main" %}</h5>
       <div class="card-body p-0">
@@ -169,7 +188,7 @@
       </div>
     </div>
   </div>
-  <div class="col col-12 col-md-6">
+  <div class="col col-12 col-md-4">
     <div class="card">
       <h5 class="card-header">{% trans "Difference (Main)" %}</h5>
       <div class="card-body">
@@ -183,6 +202,7 @@
     </div>
   </div>
 </div>
+{% endif %}
 
 <div class="row">
   <div class="col col-md-6">
