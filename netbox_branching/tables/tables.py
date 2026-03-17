@@ -145,7 +145,9 @@ class ChangeDiffTable(NetBoxTable):
             'id', 'branch', 'object_type', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff',
             'current_diff', 'last_updated', 'actions',
         )
-        default_columns = ('id', 'branch', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff')
+        default_columns = (
+            'id', 'branch', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff',
+        )
 
 
 class ChangesTable(NetBoxTable):
