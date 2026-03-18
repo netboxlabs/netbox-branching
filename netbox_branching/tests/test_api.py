@@ -202,6 +202,21 @@ class BranchSyncAPITestCase(BaseAPITestCase, TransactionTestCase):
         self.assertIn('job_id', data)
         self.assertTrue(Job.objects.filter(job_id=data['job_id']).exists())
 
+    def test_sync_endpoint_without_commit(self):
+        """Omitting 'commit' from a JSON body must not raise KeyError (issue #468)."""
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-sync', kwargs={'pk': branch.pk})
+        response = self.client.post(
+            url,
+            data=json.dumps({}),
+            content_type='application/json',
+            **self.header
+        )
+
+        self.assertEqual(response.status_code, 200)
+
     def test_sync_endpoint_with_commit(self):
         branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
         branch.save(provision=False)
@@ -262,6 +277,21 @@ class BranchMergeAPITestCase(BaseAPITestCase, TransactionTestCase):
         self.assertIn('job_id', data)
         self.assertTrue(Job.objects.filter(job_id=data['job_id']).exists())
 
+    def test_merge_endpoint_without_commit(self):
+        """Omitting 'commit' from a JSON body must not raise KeyError (issue #468)."""
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-merge', kwargs={'pk': branch.pk})
+        response = self.client.post(
+            url,
+            data=json.dumps({}),
+            content_type='application/json',
+            **self.header
+        )
+
+        self.assertEqual(response.status_code, 200)
+
     def test_merge_endpoint_with_commit(self):
         branch = Branch(name='Test Branch', status=BranchStatusChoices.READY)
         branch.save(provision=False)
@@ -321,6 +351,21 @@ class BranchRevertAPITestCase(BaseAPITestCase, TransactionTestCase):
         self.assertIn('status', data)
         self.assertIn('job_id', data)
         self.assertTrue(Job.objects.filter(job_id=data['job_id']).exists())
+
+    def test_revert_endpoint_without_commit(self):
+        """Omitting 'commit' from a JSON body must not raise KeyError (issue #468)."""
+        branch = Branch(name='Test Branch', status=BranchStatusChoices.MERGED)
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-revert', kwargs={'pk': branch.pk})
+        response = self.client.post(
+            url,
+            data=json.dumps({}),
+            content_type='application/json',
+            **self.header
+        )
+
+        self.assertEqual(response.status_code, 200)
 
     def test_revert_endpoint_with_commit(self):
         branch = Branch(name='Test Branch', status=BranchStatusChoices.MERGED)
