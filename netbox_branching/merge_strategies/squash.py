@@ -278,7 +278,8 @@ class SquashMergeStrategy(MergeStrategy):
         # Check GenericForeignKey fields
         for field in model_class._meta.private_fields:
             if isinstance(field, GenericForeignKey):
-                ct_value = data.get(field.ct_field)
+                # ObjectChange data may store the CT FK as either 'field_name' or 'field_name_id'
+                ct_value = data.get(field.ct_field) or data.get(field.ct_field + '_id')
                 fk_value = data.get(field.fk_field)
 
                 if ct_value and fk_value:
@@ -413,7 +414,9 @@ class SquashMergeStrategy(MergeStrategy):
 
         for field in collapsed.model_class._meta.private_fields:
             if isinstance(field, GenericForeignKey):
-                ct_value = collapsed.postchange_data.get(field.ct_field)
+                # ObjectChange data may store the CT FK as either 'field_name' or 'field_name_id'
+                ct_value = (collapsed.postchange_data.get(field.ct_field)
+                            or collapsed.postchange_data.get(field.ct_field + '_id'))
                 fk_value = collapsed.postchange_data.get(field.fk_field)
                 if ct_value and fk_value == target_obj_id:
                     try:

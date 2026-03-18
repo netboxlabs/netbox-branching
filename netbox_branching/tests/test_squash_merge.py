@@ -465,3 +465,83 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
         # Verify both objects are removed
         self.assertFalse(Interface.objects.filter(id=iface_id).exists())
         self.assertFalse(IPAddress.objects.filter(id=ip_id).exists())
+
+    def test_merge_gfk_interface_updated_after_ip_assignment(self):
+        """
+        Regression test for GitHub issue #467.
+
+        ObjectChange serializes the ContentType FK as 'assigned_object_type_id' (with
+        the _id suffix), not 'assigned_object_type'. Without the fix, _get_fk_references
+        returns nothing for GFK fields and the dependency is never added to the graph.
+
+        The bug is triggered when Interface.last_change.time > IPAddress.last_change.time,
+        so the default time-based ordering puts IPAddress before Interface. The fix
+        detects the GFK dependency and forces Interface to be created first.
+
+        Sequence:
+          T1: Create IPAddress (unassigned)
+          T2: Create Interface
+          T3: Update IPAddress  → assign GFK to Interface   (IP.last_change = T3)
+          T4: Update Interface  → any field change           (Interface.last_change = T4 > T3)
+
+        Without the fix: both are CREATEs; Interface (T4) sorts after IPAddress (T3) → ValidationError.
+        With the fix: GFK dependency detected → Interface forced before IPAddress → success.
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Test Site', slug='test-site-gfk467')
+            device = Device.objects.create(
+                name='Test Device',
+                site=site,
+                device_type=self.device_type,
+                role=self.device_role,
+            )
+
+        branch = self._create_and_provision_branch()
+
+        request2 = RequestFactory().get(reverse('home'))
+        request2.id = uuid.uuid4()
+        request2.user = self.user
+
+        with activate_branch(branch), event_tracking(request2):
+            # T1: Create IPAddress unassigned
+            ip = IPAddress.objects.create(address='10.0.0.3/24')
+            ip_id = ip.id
+
+            # T2: Create Interface
+            iface = Interface.objects.create(device=device, name='eth0', type='virtual')
+            iface_id = iface.id
+
+            # T3: Update IPAddress → assign GFK to Interface (IP.last_change = T3)
+            ip.snapshot()
+            ip.assigned_object = iface
+            ip.save()
+
+            # T4: Update Interface → makes Interface.last_change = T4 > T3
+            # Without the GFK dependency fix, Interface (T4) sorts AFTER IPAddress (T3),
+            # causing a ValidationError when the merge tries to apply IPAddress first.
+            iface.snapshot()
+            iface.description = 'updated after ip assignment'
+            iface.save()
+
+        branch.merge(user=self.user, commit=True)
+
+        self.assertTrue(Interface.objects.filter(id=iface_id).exists())
+        self.assertTrue(IPAddress.objects.filter(id=ip_id).exists())
+        merged_ip = IPAddress.objects.get(id=ip_id)
+        self.assertEqual(merged_ip.assigned_object_id, iface_id)
+        self.assertEqual(
+            merged_ip.assigned_object_type,
+            ContentType.objects.get_for_model(Interface)
+        )
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        branch.revert(user=self.user, commit=True)
+
+        self.assertFalse(Interface.objects.filter(id=iface_id).exists())
+        self.assertFalse(IPAddress.objects.filter(id=ip_id).exists())
