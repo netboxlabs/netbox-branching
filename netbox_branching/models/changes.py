@@ -195,16 +195,22 @@ class ChangeDiff(models.Model):
         """
         Record any conflicting changes between the modified and current object data.
         """
-        if self.original is None or self.current is None:
-            # Both the original and current states must be available to compare
+        if self.original is None:
             return
         conflicts = None
         if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
-            conflicts = [
-                k for k, v in self.original.items()
-                if v != self.modified[k] and v != self.current.get(k) and self.modified[k] != self.current.get(k)
-            ]
+            if self.current is None:
+                # Object was deleted in main; all branch modifications are in conflict
+                conflicts = [k for k, v in self.original.items() if v != self.modified[k]]
+            else:
+                conflicts = [
+                    k for k, v in self.original.items()
+                    if v != self.modified[k] and v != self.current.get(k) and self.modified[k] != self.current.get(k)
+                ]
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
+            if self.current is None:
+                # Object was also deleted in main; no conflict
+                return
             conflicts = [
                 k for k, v in self.original.items()
                 if v != self.current.get(k)
@@ -226,6 +232,8 @@ class ChangeDiff(models.Model):
         """
         Return the set of attributes altered in the main schema.
         """
+        if self.current is None:
+            return set()
         return {
             k for k, v in self.current.items()
             if k in self.original and v != self.original[k]
@@ -274,6 +282,8 @@ class ChangeDiff(models.Model):
         """
         Return a key-value mapping of all attributes which have been modified outside the branch.
         """
+        if self.current is None:
+            return {}
         return {
             k: v for k, v in self.current.items()
             if k in self.altered_fields
