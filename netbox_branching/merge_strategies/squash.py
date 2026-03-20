@@ -141,6 +141,48 @@ class SquashMergeStrategy(MergeStrategy):
     # because the collapse logic expects CREATE -> UPDATE -> DELETE order
     revert_changes_ordering = 'time'
 
+    @staticmethod
+    def _collapse_changes(changes, logger):
+        """
+        Collapse a queryset of ObjectChanges into a dict of CollapsedChange objects keyed by
+        (model_label, object_id). Returns a tuple of (collapsed_changes, change_count).
+        """
+        collapsed_changes = {}
+        change_count = 0
+
+        for change in changes:
+            change_count += 1
+            app_label, model = change.changed_object_type.natural_key()
+            key = (f"{app_label}.{model}", change.changed_object_id)
+
+            if key not in collapsed_changes:
+                model_class = change.changed_object_type.model_class()
+                collapsed_changes[key] = CollapsedChange(key, model_class)
+                logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
+
+            collapsed_changes[key].add_change(change, logger)
+
+        return collapsed_changes, change_count
+
+    @staticmethod
+    def _skip_updates_missing_in_main(collapsed_changes, logger):
+        """
+        Mark any collapsed UPDATE as SKIP if the object no longer exists in main. This handles
+        the case where an object was modified in the branch but deleted in main and then synced,
+        leaving only an UPDATE in the branch's ObjectChange log with no object to act on.
+        """
+        for collapsed in collapsed_changes.values():
+            if collapsed.final_action == ActionType.UPDATE:
+                exists = collapsed.model_class.objects.using(DEFAULT_DB_ALIAS).filter(
+                    pk=collapsed.key[1]
+                ).exists()
+                if not exists:
+                    logger.info(
+                        f"  Skipping UPDATE for {collapsed.model_class.__name__}:{collapsed.key[1]} "
+                        f"(object deleted in main)"
+                    )
+                    collapsed.final_action = ActionType.SKIP
+
     def merge(self, branch, changes, request, logger, user):
         """
         Apply changes after collapsing them by object and ordering by dependencies.
@@ -148,21 +190,8 @@ class SquashMergeStrategy(MergeStrategy):
         models = set()
 
         logger.info("Collapsing ObjectChanges by object (incremental)...")
-        collapsed_changes = {}
-
-        for change in changes:
-            app_label, model = change.changed_object_type.natural_key()
-            model_label = f"{app_label}.{model}"
-            key = (model_label, change.changed_object_id)
-
-            if key not in collapsed_changes:
-                model_class = change.changed_object_type.model_class()
-                collapsed = CollapsedChange(key, model_class)
-                collapsed_changes[key] = collapsed
-                logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
-
-            # Incrementally process each change to avoid storing all in memory
-            collapsed_changes[key].add_change(change, logger)
+        collapsed_changes, _ = SquashMergeStrategy._collapse_changes(changes, logger)
+        SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
 
         # Order collapsed changes based on dependencies
         ordered_changes = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger)
@@ -196,27 +225,10 @@ class SquashMergeStrategy(MergeStrategy):
         """
         models = set()
 
-        # Group changes by object and create CollapsedChange objects
         logger.info("Collapsing ObjectChanges by object (incremental)...")
-        collapsed_changes = {}
-        change_count = 0
-
-        for change in changes:
-            change_count += 1
-            app_label, model = change.changed_object_type.natural_key()
-            model_label = f"{app_label}.{model}"
-            key = (model_label, change.changed_object_id)
-
-            if key not in collapsed_changes:
-                model_class = change.changed_object_type.model_class()
-                collapsed = CollapsedChange(key, model_class)
-                collapsed_changes[key] = collapsed
-                logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
-
-            # Incrementally process each change to avoid storing all in memory
-            collapsed_changes[key].add_change(change, logger)
-
+        collapsed_changes, change_count = SquashMergeStrategy._collapse_changes(changes, logger)
         logger.info(f"  {change_count} changes collapsed into {len(collapsed_changes)} objects")
+        SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
 
         # Order collapsed changes for revert (reverse of merge order)
         merge_order = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger)

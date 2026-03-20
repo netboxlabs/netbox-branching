@@ -545,3 +545,70 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
 
         self.assertFalse(Interface.objects.filter(id=iface_id).exists())
         self.assertFalse(IPAddress.objects.filter(id=ip_id).exists())
+
+    def test_merge_and_revert_update_on_object_deleted_in_main(self):
+        """
+        Test that squash merge and revert skip an UPDATE for an object that was deleted in main
+        and synced into the branch.
+
+        Scenario:
+        1. Create site in main
+        2. Create branch
+        3. Modify site in branch
+        4. Delete site in main
+        5. Sync branch (applies main's DELETE to branch schema, no ObjectChange recorded)
+        6. Squash merge — branch ObjectChanges only contain the UPDATE; object is gone from main.
+           The UPDATE should be skipped rather than raising DoesNotExist.
+        7. Revert — same: the UPDATE should be skipped.
+        """
+        # Create site in main
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            site_id = site.id
+
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # Modify site in branch
+        request2 = RequestFactory().get(reverse('home'))
+        request2.id = uuid.uuid4()
+        request2.user = self.user
+
+        with activate_branch(branch), event_tracking(request2):
+            site = Site.objects.get(id=site_id)
+            site.snapshot()
+            site.description = 'Modified in branch'
+            site.save()
+
+        # Delete site in main
+        request3 = RequestFactory().get(reverse('home'))
+        request3.id = uuid.uuid4()
+        request3.user = self.user
+
+        with event_tracking(request3):
+            Site.objects.get(id=site_id).delete()
+
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+        # Sync branch — applies the main DELETE to the branch schema
+        branch.sync(user=self.user, commit=True)
+
+        # Branch ObjectChanges only contain the original UPDATE (sync doesn't record changes)
+        self.assertEqual(branch.get_unmerged_changes().count(), 1)
+        self.assertEqual(branch.get_unmerged_changes().first().action, 'update')
+
+        # Merge should succeed: the UPDATE is skipped because the object no longer exists in main
+        branch.merge(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+        # Revert should also succeed: again the UPDATE is skipped
+        branch.revert(user=self.user, commit=True)
+
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
