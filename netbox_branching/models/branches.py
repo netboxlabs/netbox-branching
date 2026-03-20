@@ -434,7 +434,7 @@ class Branch(JobsMixin, PrimaryModel):
                 # Apply each change from the main schema
                 for change in changes:
                     models.add(change.changed_object_type.model_class())
-                    change.apply(self, using=self.connection_name, logger=logger)
+                    change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
                 if not commit:
                     raise AbortTransaction()
 
