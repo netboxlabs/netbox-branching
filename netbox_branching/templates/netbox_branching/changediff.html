@@ -69,8 +69,8 @@
             {% for field in object.conflicts %}
             <tr>
               <td><code>{{ field }}</code></td>
-              <td>{{ object.modified|get_item:field|json }}</td>
-              <td>{{ object.current|get_item:field|json }}</td>
+              <td>{% if object.modified %}{{ object.modified|get_item:field|json }}{% else %}<span class="text-muted">{% trans "Deleted" %}</span>{% endif %}</td>
+              <td>{% if object.current %}{{ object.current|get_item:field|json }}{% else %}<span class="text-muted">{% trans "Deleted" %}</span>{% endif %}</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -98,7 +98,7 @@
           {% spaceless %}
             <pre class="change-data m-0">
               {% for k, v in object.original.items %}
-                <span{% if k in altered_fields %} class="removed"{% endif %}>{{ k }}: {{ v|json }}</span>
+                <span{% if k in altered_in_modified %} class="removed"{% endif %}>{{ k }}: {{ v|json }}</span>
               {% endfor %}
             </pre>
           {% endspaceless %}
@@ -110,7 +110,7 @@
   </div>
   <div class="col col-12 col-md-4">
     <div class="card">
-      <h5 class="card-header">{% trans "Branch" %}</h5>
+      <h5 class="card-header">{% trans "Changed in" %} {{ object.branch.name }}</h5>
       <div class="card-body p-0">
         {% if object.modified %}
           {% spaceless %}
@@ -172,7 +172,7 @@
   </div>
   <div class="col col-12 col-md-4">
     <div class="card">
-      <h5 class="card-header">{% trans "Main" %}</h5>
+      <h5 class="card-header">{% trans "Changed in main" %}</h5>
       <div class="card-body p-0">
         {% if object.current %}
           {% spaceless %}
@@ -192,12 +192,8 @@
     <div class="card">
       <h5 class="card-header">{% trans "Difference (Main)" %}</h5>
       <div class="card-body">
-        {% if main_diff_added == None %}
-          <span class="text-muted">{% trans "No changes in main" %}</span>
-        {% else %}
-          <pre class="change-diff change-removed">{{ main_diff_removed|json }}</pre>
-          <pre class="change-diff change-added">{{ main_diff_added|json }}</pre>
-        {% endif %}
+        <pre class="change-diff change-removed">{{ main_diff_removed|json }}</pre>
+        <pre class="change-diff change-added">{{ main_diff_added|json }}</pre>
       </div>
     </div>
   </div>

@@ -8,7 +8,7 @@ from netbox.signals import post_clean
 from utilities.exceptions import AbortTransaction
 
 from .signal_receivers import validate_branching_operations
-from .utilities import ListHandler
+from .utilities import ListHandler, build_operation_report
 
 __all__ = (
     'MergeBranchJob',
@@ -92,11 +92,12 @@ class SyncBranchJob(JobRunner):
             branch.sync(user=self.job.user, commit=commit)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
-        except Exception:
-            # TODO: Can JobRunner be extended to handle this more cleanly?
-            # Ensure that signal handlers are reconnected
+        except Exception as exc:
+            self.job.data['report'] = build_operation_report('sync', 'error', exc=exc)
             self._reconnect_signal_receivers()
             raise
+        else:
+            self.job.data['report'] = build_operation_report('sync', 'success')
 
         # Reconnect signal handlers
         self._reconnect_signal_receivers()
@@ -126,6 +127,11 @@ class MergeBranchJob(JobRunner):
             branch.merge(user=self.job.user, commit=commit)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
+        except Exception as exc:
+            self.job.data['report'] = build_operation_report('merge', 'error', exc=exc)
+            raise
+        else:
+            self.job.data['report'] = build_operation_report('merge', 'success')
 
 
 class RevertBranchJob(JobRunner):

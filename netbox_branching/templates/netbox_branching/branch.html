@@ -39,6 +39,9 @@
         <i class="mdi mdi-alert"></i>
         The <a href="{{ last_job.get_absolute_url }}">last job</a> ({{ last_job.name }}) failed with an error:
       </h4>
+      {% if last_job.data.report.guidance %}
+        <p class="mb-2"><strong>{{ last_job.data.report.guidance }}</strong></p>
+      {% endif %}
       <div class="text-secondary">{{ last_job.error }}</div>
     </div>
   {% endif %}
