@@ -165,7 +165,7 @@ class BranchJobReportView(generic.ObjectView):
                     try:
                         ct = ContentType.objects.get_for_id(ct_id)
                         obj = ct.get_object_for_this_type(pk=obj_id)
-                        object_url = obj.get_absolute_url()
+                        object_url = f'{obj.get_absolute_url()}?_branch={instance.schema_id}'
                         object_str = str(obj)
                     except (ContentType.DoesNotExist, ObjectDoesNotExist, AttributeError):
                         object_str = f'#{obj_id}'
