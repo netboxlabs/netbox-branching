@@ -4,6 +4,7 @@ from django.http import HttpResponseBadRequest
 from drf_spectacular.utils import extend_schema
 from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
 from netbox.plugins import get_plugin_config
+from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
 from rest_framework.response import Response
@@ -47,6 +48,20 @@ class BranchViewSet(ModelViewSet):
         serializer = serializers.CommitSerializer(data=request.data)
         commit = serializer.validated_data.get('commit', True) if serializer.is_valid() else False
 
+        # Check for unacknowledged conflicts
+        conflicts = ChangeDiff.objects.filter(branch=branch, conflicts__isnull=False)
+        if conflicts.exists():
+            acknowledged = set(serializer.validated_data.get('acknowledged_conflicts', []))
+            unacknowledged = conflicts.exclude(pk__in=acknowledged)
+            if unacknowledged.exists():
+                return Response(
+                    {
+                        'detail': 'All conflicts must be acknowledged before this action can proceed.',
+                        'conflicts': [c.pk for c in unacknowledged],
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
+
         # Enqueue a background job
         job = SyncBranchJob.enqueue(
             instance=branch,
@@ -75,6 +90,20 @@ class BranchViewSet(ModelViewSet):
 
         serializer = serializers.CommitSerializer(data=request.data)
         commit = serializer.validated_data.get('commit', True) if serializer.is_valid() else False
+
+        # Check for unacknowledged conflicts
+        conflicts = ChangeDiff.objects.filter(branch=branch, conflicts__isnull=False)
+        if conflicts.exists():
+            acknowledged = set(serializer.validated_data.get('acknowledged_conflicts', []))
+            unacknowledged = conflicts.exclude(pk__in=acknowledged)
+            if unacknowledged.exists():
+                return Response(
+                    {
+                        'detail': 'All conflicts must be acknowledged before this action can proceed.',
+                        'conflicts': [c.pk for c in unacknowledged],
+                    },
+                    status=status.HTTP_409_CONFLICT,
+                )
 
         # Enqueue a background job
         job = MergeBranchJob.enqueue(

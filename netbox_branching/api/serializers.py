@@ -34,14 +34,18 @@ class BranchSerializer(NetBoxModelSerializer):
         choices=BranchStatusChoices,
         read_only=True
     )
+    has_conflicts = serializers.SerializerMethodField()
 
     class Meta:
         model = Branch
         fields = (
             'id', 'url', 'display', 'name', 'status', 'owner', 'description', 'schema_id', 'last_sync', 'merged_time',
-            'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated',
+            'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated', 'has_conflicts',
         )
         brief_fields = ('id', 'url', 'display', 'name', 'status', 'description')
+
+    def get_has_conflicts(self, obj):
+        return ChangeDiff.objects.filter(branch=obj, conflicts__isnull=False).exists()
 
     def create(self, validated_data):
         """
@@ -140,3 +144,8 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
 
 class CommitSerializer(serializers.Serializer):
     commit = serializers.BooleanField(required=False)
+    acknowledged_conflicts = serializers.ListField(
+        child=serializers.IntegerField(),
+        required=False,
+        default=list,
+    )
