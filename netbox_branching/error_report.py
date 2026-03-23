@@ -169,13 +169,15 @@ def get_sync_recommendations(entry):
     if error_type == 'unique_constraint':
         if field and value:
             return [
-                _('Rename the conflicting object (where %(field)s="%(value)s") in either the branch or the main schema, then retry the sync.') % {
+                _('Rename the conflicting object (where %(field)s="%(value)s") in either the branch or the main schema,'
+                  ' then retry the sync.') % {
                     'field': field,
                     'value': value,
                 },
             ]
         return [
-            _('Rename the conflicting object in either the branch or the main schema so the values no longer conflict, then retry the sync.'),
+            _('Rename the conflicting object in either the branch or the main schema so the values no longer conflict,'
+              ' then retry the sync.'),
         ]
 
     if error_type == 'fk_violation':
@@ -186,7 +188,8 @@ def get_sync_recommendations(entry):
     if error_type in ('not_null_violation', 'check_violation', 'validation_error'):
         if field:
             return [
-                _('Fix the invalid value for field "%(field)s" on the affected object in the branch, then retry the sync.') % {
+                _('Fix the invalid value for field "%(field)s" on the affected object in the branch,'
+                  ' then retry the sync.') % {
                     'field': field,
                 },
             ]
@@ -205,12 +208,14 @@ def get_merge_recommendations(entry):
 
     if error_type == 'unique_constraint':
         if field and value:
-            rename_rec = _('Rename the conflicting object (where %(field)s="%(value)s") in either the branch or the main schema.') % {
+            rename_rec = _('Rename the conflicting object (where %(field)s="%(value)s") in either the branch'
+                           ' or the main schema.') % {
                 'field': field,
                 'value': value,
             }
         else:
-            rename_rec = _('Rename the conflicting object in either the branch or the main schema so the values no longer conflict.')
+            rename_rec = _('Rename the conflicting object in either the branch or the main schema'
+                           ' so the values no longer conflict.')
         return [
             rename_rec,
             _('Switch to the Squash merge strategy, which handles unique constraint conflicts automatically.'),
@@ -225,7 +230,8 @@ def get_merge_recommendations(entry):
     if error_type in ('not_null_violation', 'check_violation', 'validation_error'):
         if field:
             return [
-                _('Fix the invalid value for field "%(field)s" on the affected object in the branch before retrying.') % {
+                _('Fix the invalid value for field "%(field)s" on the affected object in the branch'
+                  ' before retrying.') % {
                     'field': field,
                 },
             ]

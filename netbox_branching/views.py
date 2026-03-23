@@ -12,8 +12,6 @@ from netbox.plugins import get_plugin_config
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 
-from django.contrib.contenttypes.models import ContentType
-
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
 from .error_report import get_entry_message, get_merge_recommendations, get_sync_recommendations
@@ -168,7 +166,7 @@ class BranchJobReportView(generic.ObjectView):
                         obj = ct.get_object_for_this_type(pk=obj_id)
                         object_url = obj.get_absolute_url()
                         object_str = str(obj)
-                    except Exception:
+                    except (ContentType.DoesNotExist, AttributeError, LookupError):
                         object_str = f'#{obj_id}'
                 get_recs = get_sync_recommendations if job_type == 'sync' else get_merge_recommendations
                 report_entries.append({

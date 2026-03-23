@@ -56,7 +56,7 @@ def _snapshot_changes_summary(changes_qs):
             try:
                 ct = ContentType.objects.get_for_id(ct_id)
                 result[f'{ct.app_label}.{ct.model}'] = count
-            except Exception:
+            except ContentType.DoesNotExist:
                 pass
         return result
 
