@@ -5,6 +5,7 @@ from core.filtersets import ObjectChangeFilterSet
 from core.models import ObjectChange
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Count, Q
 from django.shortcuts import redirect, render
 from django.utils.translation import gettext_lazy as _
@@ -166,7 +167,7 @@ class BranchJobReportView(generic.ObjectView):
                         obj = ct.get_object_for_this_type(pk=obj_id)
                         object_url = obj.get_absolute_url()
                         object_str = str(obj)
-                    except (ContentType.DoesNotExist, AttributeError, LookupError):
+                    except (ContentType.DoesNotExist, ObjectDoesNotExist, AttributeError):
                         object_str = f'#{obj_id}'
                 get_recs = get_sync_recommendations if job_type == 'sync' else get_merge_recommendations
                 report_entries.append({
