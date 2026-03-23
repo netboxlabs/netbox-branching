@@ -9,7 +9,6 @@ __all__ = ('build_error_report', 'get_entry_message', 'get_merge_recommendations
 
 # PostgreSQL error codes
 PG_UNIQUE_VIOLATION = '23505'
-PG_FK_VIOLATION = '23503'
 
 
 def _table_to_model(table_name):
@@ -34,14 +33,6 @@ def _analyze_integrity_error(exc):
             'model': _table_to_model(table_match.group(1)) if table_match else None,
             'field': detail_match.group(1) if detail_match else None,
             'value': detail_match.group(2) if detail_match else None,
-        }
-
-    if pgcode == PG_FK_VIOLATION:
-        return {
-            'type': 'fk_violation',
-            'model': None,
-            'field': None,
-            'value': None,
         }
 
     return {
@@ -117,9 +108,6 @@ def get_entry_message(entry):
             }
         return _('Unique constraint violation: an object already exists in the main schema.')
 
-    if error_type == 'fk_violation':
-        return _('Foreign key violation: a referenced object does not exist in the main schema.')
-
     if error_type == 'validation_error':
         parts = [p for p in [model_str, field_str] if p]
         if parts:
@@ -147,11 +135,6 @@ def get_sync_recommendations(entry):
         return [
             _('Rename the conflicting object in either the branch or the main schema so the values no longer conflict,'
               ' then retry the sync.'),
-        ]
-
-    if error_type == 'fk_violation':
-        return [
-            _('Ensure all objects referenced by the incoming changes exist in the branch schema, then retry the sync.'),
         ]
 
     if error_type == 'validation_error':
@@ -188,12 +171,6 @@ def get_merge_recommendations(entry):
         return [
             rename_rec,
             _('Switch to the Squash merge strategy, which handles unique constraint conflicts automatically.'),
-        ]
-
-    if error_type == 'fk_violation':
-        return [
-            _('Ensure all objects referenced by the branch changes exist in the main schema.'),
-            _('Switch to the Squash merge strategy, which resolves dependency ordering automatically.'),
         ]
 
     if error_type == 'validation_error':
