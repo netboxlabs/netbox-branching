@@ -436,7 +436,7 @@ class Branch(JobsMixin, PrimaryModel):
                     model_class = change.changed_object_type.model_class()
                     models.add(model_class)
                     try:
-                        change.apply(self, using=self.connection_name, logger=logger)
+                        change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
                     except ValidationError as e:
                         e.netbox_branching_model = model_class
                         e.netbox_branching_object_id = change.changed_object_id
