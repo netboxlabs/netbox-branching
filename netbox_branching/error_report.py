@@ -72,7 +72,7 @@ def _analyze_integrity_error(exc):
 
 
 def _analyze_validation_error(exc):
-    """Parse a Django ValidationError into a structured report entry (factual data only)."""
+    """Parse a Django ValidationError into a structured report entry."""
     model_class = getattr(exc, 'netbox_branching_model', None)
     model_name = model_class._meta.verbose_name if model_class else None
 
@@ -100,10 +100,8 @@ def _analyze_validation_error(exc):
 
 def build_error_report(exc):
     """
-    Analyze an exception and return a structured report entry dict containing only
-    factual data: type, model, field, value, object_id, content_type_id. No messages
-    or recommendations are stored — those are computed at render time so improvements
-    apply retroactively.
+    Analyze an exception and return a structured report entry dict containing:
+    type, model, field, value, object_id, content_type_id.
     """
     if isinstance(exc, IntegrityError):
         return _analyze_integrity_error(exc)
