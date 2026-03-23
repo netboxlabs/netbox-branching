@@ -433,8 +433,15 @@ class Branch(JobsMixin, PrimaryModel):
 
                 # Apply each change from the main schema
                 for change in changes:
-                    models.add(change.changed_object_type.model_class())
-                    change.apply(self, using=self.connection_name, logger=logger)
+                    model_class = change.changed_object_type.model_class()
+                    models.add(model_class)
+                    try:
+                        change.apply(self, using=self.connection_name, logger=logger)
+                    except ValidationError as e:
+                        e.netbox_branching_model = model_class
+                        e.netbox_branching_object_id = change.changed_object_id
+                        e.netbox_branching_content_type_id = change.changed_object_type_id
+                        raise
                 if not commit:
                     raise AbortTransaction()
 

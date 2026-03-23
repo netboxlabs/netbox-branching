@@ -12,8 +12,11 @@ from netbox.plugins import get_plugin_config
 from netbox.views import generic
 from utilities.views import ViewTab, register_model_view
 
+from django.contrib.contenttypes.models import ContentType
+
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
+from .error_report import get_entry_message, get_merge_recommendations, get_sync_recommendations
 from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
 
@@ -138,6 +141,73 @@ class BranchChangesAheadView(generic.ObjectChildrenView):
 
     def get_children(self, request, parent):
         return parent.get_unmerged_changes().order_by('time')
+
+
+@register_model_view(Branch, 'job-report')
+class BranchJobReportView(generic.ObjectView):
+    queryset = Branch.objects.all()
+    template_name = 'netbox_branching/branch_job_report.html'
+
+    def get_extra_context(self, request, instance):
+        last_job = instance.jobs.order_by('created').last()
+        report_entries = []
+        job_type = 'merge'
+        if last_job and last_job.name == 'Sync branch':
+            job_type = 'sync'
+        elif last_job and last_job.name == 'Revert branch':
+            job_type = 'revert'
+        if last_job and last_job.data and last_job.data.get('report'):
+            for entry in last_job.data['report']:
+                object_url = None
+                object_str = None
+                ct_id = entry.get('content_type_id')
+                obj_id = entry.get('object_id')
+                if ct_id and obj_id:
+                    try:
+                        ct = ContentType.objects.get_for_id(ct_id)
+                        obj = ct.get_object_for_this_type(pk=obj_id)
+                        object_url = obj.get_absolute_url()
+                        object_str = str(obj)
+                    except Exception:
+                        object_str = f'#{obj_id}'
+                get_recs = get_sync_recommendations if job_type == 'sync' else get_merge_recommendations
+                report_entries.append({
+                    **entry,
+                    'message': get_entry_message(entry),
+                    'recommendations': get_recs(entry),
+                    'object_url': object_url,
+                    'object_str': object_str,
+                })
+        changes_summary = None
+        stored = last_job.data.get('changes_summary') if last_job and last_job.data else None
+        if stored:
+            def _resolve(d):
+                result = {}
+                for key, count in d.items():
+                    app_label, model = key.split('.', 1)
+                    try:
+                        ct = ContentType.objects.get_by_natural_key(app_label, model)
+                        result[ct] = count
+                    except ContentType.DoesNotExist:
+                        pass
+                return result
+            changes_summary = {
+                'creates': _resolve(stored.get('creates', {})),
+                'creates_total': stored.get('creates_total', 0),
+                'updates': _resolve(stored.get('updates', {})),
+                'updates_total': stored.get('updates_total', 0),
+                'deletes': _resolve(stored.get('deletes', {})),
+                'deletes_total': stored.get('deletes_total', 0),
+            }
+        has_unsynced_changes = (
+            last_job and last_job.data and last_job.data.get('has_unsynced_changes', False)
+        )
+        return {
+            'last_job': last_job,
+            'report_entries': report_entries,
+            'changes_summary': changes_summary,
+            'has_unsynced_changes': has_unsynced_changes,
+        }
 
 
 def _get_change_count(obj):

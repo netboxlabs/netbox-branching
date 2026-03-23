@@ -1,12 +1,18 @@
 import logging
+from collections import defaultdict
 
+from core.choices import ObjectChangeActionChoices
 from core.signals import handle_changed_object, handle_deleted_object
+from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError
 from django.db.models.signals import m2m_changed, post_save, pre_delete
 from netbox.jobs import JobRunner
 from netbox.plugins import get_plugin_config
 from netbox.signals import post_clean
 from utilities.exceptions import AbortTransaction
 
+from .error_report import build_error_report
 from .signal_receivers import validate_branching_operations
 from .utilities import ListHandler
 
@@ -19,12 +25,59 @@ __all__ = (
 )
 
 
+def _snapshot_changes_summary(changes_qs):
+    """
+    Compute a JSON-serializable changes summary from a queryset, snapshotted at job start time.
+    Stored as {'creates': {'app_label.model': count}, ...} so it remains accurate even if the
+    branch state changes later.
+    """
+    changes = changes_qs.values('action', 'changed_object_type_id', 'changed_object_id')
+
+    object_actions = defaultdict(set)
+    for change in changes:
+        key = (change['changed_object_type_id'], change['changed_object_id'])
+        object_actions[key].add(change['action'])
+
+    creates = defaultdict(int)
+    updates = defaultdict(int)
+    deletes = defaultdict(int)
+
+    for (ct_id, _obj_id), actions in object_actions.items():
+        if ObjectChangeActionChoices.ACTION_DELETE in actions:
+            deletes[ct_id] += 1
+        elif ObjectChangeActionChoices.ACTION_CREATE in actions:
+            creates[ct_id] += 1
+        else:
+            updates[ct_id] += 1
+
+    def resolve(counts_dict):
+        result = {}
+        for ct_id, count in counts_dict.items():
+            try:
+                ct = ContentType.objects.get_for_id(ct_id)
+                result[f'{ct.app_label}.{ct.model}'] = count
+            except Exception:
+                pass
+        return result
+
+    return {
+        'creates': resolve(creates),
+        'creates_total': sum(creates.values()),
+        'updates': resolve(updates),
+        'updates_total': sum(updates.values()),
+        'deletes': resolve(deletes),
+        'deletes_total': sum(deletes.values()),
+    }
+
+
 def get_job_log(job):
     """
     Initialize and return the job log.
     """
     job.data = {
-        'log': []
+        'log': [],
+        'report': [],
+        'changes_summary': None,
     }
     return job.data['log']
 
@@ -86,12 +139,21 @@ class SyncBranchJob(JobRunner):
         # Disconnect changelog handlers
         self._disconnect_signal_receivers()
 
+        # Snapshot pending changes before syncing
+        branch = self.job.object
+        self.job.data['changes_summary'] = _snapshot_changes_summary(branch.get_unsynced_changes())
+
         # Sync the branch
         try:
-            branch = self.job.object
             branch.sync(user=self.job.user, commit=commit)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
+        except (IntegrityError, ValidationError) as e:
+            # TODO: Can JobRunner be extended to handle this more cleanly?
+            # Ensure that signal handlers are reconnected
+            self._reconnect_signal_receivers()
+            self.job.data['report'].append(build_error_report(e))
+            raise
         except Exception:
             # TODO: Can JobRunner be extended to handle this more cleanly?
             # Ensure that signal handlers are reconnected
@@ -120,12 +182,19 @@ class MergeBranchJob(JobRunner):
         logger.setLevel(logging.DEBUG)
         logger.addHandler(ListHandler(queue=get_job_log(self.job)))
 
+        # Snapshot pending changes before merging
+        branch = self.job.object
+        self.job.data['changes_summary'] = _snapshot_changes_summary(branch.get_unmerged_changes())
+        self.job.data['has_unsynced_changes'] = branch.get_unsynced_changes().exists()
+
         # Merge the Branch
         try:
-            branch = self.job.object
             branch.merge(user=self.job.user, commit=commit)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
+        except (IntegrityError, ValidationError) as e:
+            self.job.data['report'].append(build_error_report(e))
+            raise
 
 
 class RevertBranchJob(JobRunner):
@@ -146,12 +215,15 @@ class RevertBranchJob(JobRunner):
         logger.setLevel(logging.DEBUG)
         logger.addHandler(ListHandler(queue=get_job_log(self.job)))
 
-        # Merge the Branch
+        # Revert the Branch
         try:
             branch = self.job.object
             branch.revert(user=self.job.user, commit=commit)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
+        except (IntegrityError, ValidationError) as e:
+            self.job.data['report'].append(build_error_report(e))
+            raise
 
 
 class MigrateBranchJob(JobRunner):

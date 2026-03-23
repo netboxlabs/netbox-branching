@@ -1,6 +1,7 @@
 """
 Iterative merge strategy implementation.
 """
+from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS
 from netbox.context_managers import event_tracking
 
@@ -23,11 +24,18 @@ class IterativeMergeStrategy(MergeStrategy):
         models = set()
 
         for change in changes:
-            models.add(change.changed_object_type.model_class())
+            model_class = change.changed_object_type.model_class()
+            models.add(model_class)
             with event_tracking(request):
                 request.id = change.request_id
                 request.user = change.user
-                change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+                try:
+                    change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+                except ValidationError as e:
+                    e.netbox_branching_model = model_class
+                    e.netbox_branching_object_id = change.changed_object_id
+                    e.netbox_branching_content_type_id = change.changed_object_type_id
+                    raise
 
         self._clean(models)
 
@@ -39,11 +47,18 @@ class IterativeMergeStrategy(MergeStrategy):
 
         # Undo each change from the Branch
         for change in changes:
-            models.add(change.changed_object_type.model_class())
+            model_class = change.changed_object_type.model_class()
+            models.add(model_class)
             with event_tracking(request):
                 request.id = change.request_id
                 request.user = change.user
-                change.undo(branch, logger=logger)
+                try:
+                    change.undo(branch, logger=logger)
+                except ValidationError as e:
+                    e.netbox_branching_model = model_class
+                    e.netbox_branching_object_id = change.changed_object_id
+                    e.netbox_branching_content_type_id = change.changed_object_type_id
+                    raise
 
         # Perform cleanup tasks
         self._clean(models)
