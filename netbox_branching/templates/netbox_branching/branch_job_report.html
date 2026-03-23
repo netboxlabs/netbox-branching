@@ -80,7 +80,7 @@
     {% if changes_summary.creates or changes_summary.updates or changes_summary.deletes %}
       <div class="card mb-3">
         <div class="card-header">
-          <strong>{% if last_job.name == 'Sync branch' %}{% trans "Objects in Sync" %}{% else %}{% trans "Objects in Merge" %}{% endif %}</strong>
+          <strong>{% trans "Changes" %}</strong>
         </div>
         <div class="card-body p-0">
           <div class="list-group list-group-flush">
