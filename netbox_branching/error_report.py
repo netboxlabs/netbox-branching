@@ -10,8 +10,6 @@ __all__ = ('build_error_report', 'get_entry_message', 'get_merge_recommendations
 # PostgreSQL error codes
 PG_UNIQUE_VIOLATION = '23505'
 PG_FK_VIOLATION = '23503'
-PG_NOT_NULL_VIOLATION = '23502'
-PG_CHECK_VIOLATION = '23514'
 
 
 def _table_to_model(table_name):
@@ -41,23 +39,6 @@ def _analyze_integrity_error(exc):
     if pgcode == PG_FK_VIOLATION:
         return {
             'type': 'fk_violation',
-            'model': None,
-            'field': None,
-            'value': None,
-        }
-
-    if pgcode == PG_NOT_NULL_VIOLATION:
-        col_match = re.search(r'column "([^"]+)"', pgerror)
-        return {
-            'type': 'not_null_violation',
-            'model': None,
-            'field': col_match.group(1) if col_match else None,
-            'value': None,
-        }
-
-    if pgcode == PG_CHECK_VIOLATION:
-        return {
-            'type': 'check_violation',
             'model': None,
             'field': None,
             'value': None,
@@ -139,16 +120,6 @@ def get_entry_message(entry):
     if error_type == 'fk_violation':
         return _('Foreign key violation: a referenced object does not exist in the main schema.')
 
-    if error_type == 'not_null_violation':
-        if field_str:
-            return _('Not-null constraint violation on field %(field)s: a required field has no value.') % {
-                'field': field_str,
-            }
-        return _('Not-null constraint violation: a required field has no value.')
-
-    if error_type == 'check_violation':
-        return _('Check constraint violation: a field value did not satisfy a database constraint.')
-
     if error_type == 'validation_error':
         parts = [p for p in [model_str, field_str] if p]
         if parts:
@@ -183,7 +154,7 @@ def get_sync_recommendations(entry):
             _('Ensure all objects referenced by the incoming changes exist in the branch schema, then retry the sync.'),
         ]
 
-    if error_type in ('not_null_violation', 'check_violation', 'validation_error'):
+    if error_type == 'validation_error':
         if field:
             return [
                 _('Fix the invalid value for field "%(field)s" on the affected object in the branch,'
@@ -225,7 +196,7 @@ def get_merge_recommendations(entry):
             _('Switch to the Squash merge strategy, which resolves dependency ordering automatically.'),
         ]
 
-    if error_type in ('not_null_violation', 'check_violation', 'validation_error'):
+    if error_type == 'validation_error':
         if field:
             return [
                 _('Fix the invalid value for field "%(field)s" on the affected object in the branch'
