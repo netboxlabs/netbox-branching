@@ -45,7 +45,7 @@ class BranchViewSet(ModelViewSet):
             return HttpResponseBadRequest("Branch is not ready to sync.")
 
         serializer = serializers.CommitSerializer(data=request.data)
-        commit = serializer.validated_data['commit'] if serializer.is_valid() else False
+        commit = serializer.validated_data.get('commit', True) if serializer.is_valid() else False
 
         # Enqueue a background job
         job = SyncBranchJob.enqueue(
@@ -74,7 +74,7 @@ class BranchViewSet(ModelViewSet):
             return HttpResponseBadRequest("Branch is not ready to merge.")
 
         serializer = serializers.CommitSerializer(data=request.data)
-        commit = serializer.validated_data['commit'] if serializer.is_valid() else False
+        commit = serializer.validated_data.get('commit', True) if serializer.is_valid() else False
 
         # Enqueue a background job
         job = MergeBranchJob.enqueue(
@@ -104,7 +104,7 @@ class BranchViewSet(ModelViewSet):
             return HttpResponseBadRequest("Only merged branches can be reverted.")
 
         serializer = serializers.CommitSerializer(data=request.data)
-        commit = serializer.validated_data['commit'] if serializer.is_valid() else False
+        commit = serializer.validated_data.get('commit', True) if serializer.is_valid() else False
 
         # Enqueue a background job
         job = RevertBranchJob.enqueue(
