@@ -15,6 +15,7 @@ __all__ = (
     'BranchSerializer',
     'ChangeDiffSerializer',
     'CommitSerializer',
+    'ConflictSummarySerializer',
 )
 
 
