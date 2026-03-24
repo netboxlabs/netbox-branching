@@ -34,18 +34,14 @@ class BranchSerializer(NetBoxModelSerializer):
         choices=BranchStatusChoices,
         read_only=True
     )
-    has_conflicts = serializers.SerializerMethodField()
 
     class Meta:
         model = Branch
         fields = (
             'id', 'url', 'display', 'name', 'status', 'owner', 'description', 'schema_id', 'last_sync', 'merged_time',
-            'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated', 'has_conflicts',
+            'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated',
         )
         brief_fields = ('id', 'url', 'display', 'name', 'status', 'description')
-
-    def get_has_conflicts(self, obj):
-        return ChangeDiff.objects.filter(branch=obj, conflicts__isnull=False).exists()
 
     def create(self, validated_data):
         """
@@ -140,6 +136,33 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
         data = serializer(obj.object, nested=True, context={'request': self.context['request']}).data
 
         return data
+
+
+class ConflictSummarySerializer(serializers.ModelSerializer):
+    """
+    Compact read-only representation of a conflicting ChangeDiff, included inline
+    in HTTP 409 responses from the sync and merge actions.
+    """
+    object_type = ContentTypeField(read_only=True)
+    action = ChoiceField(choices=ObjectChangeActionChoices, read_only=True)
+    conflicting_data = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ChangeDiff
+        fields = ('id', 'object_type', 'object_id', 'object_repr', 'action', 'conflicts', 'conflicting_data',
+                  'last_updated')
+
+    def get_conflicting_data(self, obj):
+        """
+        Return the original, branch, and main values for only the conflicting fields.
+        """
+        if not obj.conflicts:
+            return None
+        return {
+            'original': {k: v for k, v in (obj.original or {}).items() if k in obj.conflicts},
+            'branch': {k: v for k, v in (obj.modified or {}).items() if k in obj.conflicts},
+            'main': {k: v for k, v in (obj.current or {}).items() if k in obj.conflicts},
+        }
 
 
 class CommitSerializer(serializers.Serializer):

@@ -57,7 +57,7 @@ class BranchViewSet(ModelViewSet):
                 return Response(
                     {
                         'detail': 'All conflicts must be acknowledged before this action can proceed.',
-                        'conflicts': [c.pk for c in unacknowledged],
+                        'conflicts': serializers.ConflictSummarySerializer(unacknowledged, many=True).data,
                     },
                     status=status.HTTP_409_CONFLICT,
                 )
@@ -100,7 +100,7 @@ class BranchViewSet(ModelViewSet):
                 return Response(
                     {
                         'detail': 'All conflicts must be acknowledged before this action can proceed.',
-                        'conflicts': [c.pk for c in unacknowledged],
+                        'conflicts': serializers.ConflictSummarySerializer(unacknowledged, many=True).data,
                     },
                     status=status.HTTP_409_CONFLICT,
                 )
