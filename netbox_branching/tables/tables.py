@@ -30,7 +30,7 @@ OBJECTCHANGE_OBJECT = """
 """
 
 BEFORE_DIFF = """
-{% load filters %}
+{% load branch_filters %}
 {% if record.action == 'create' %}
     {{ ''|placeholder }}
 {% elif record.action == 'delete' %}
@@ -43,7 +43,7 @@ BEFORE_DIFF = """
 """
 
 AFTER_DIFF = """
-{% load filters %}
+{% load branch_filters %}
 {% if record.action == 'delete' %}
     {{ ''|placeholder }}
 {% elif record.action == 'create' %}
