@@ -15,6 +15,7 @@ __all__ = (
     'BranchSerializer',
     'ChangeDiffSerializer',
     'CommitSerializer',
+    'ConflictResponseSerializer',
     'ConflictSummarySerializer',
 )
 
@@ -166,10 +167,14 @@ class ConflictSummarySerializer(serializers.ModelSerializer):
         }
 
 
+class ConflictResponseSerializer(serializers.Serializer):
+    """
+    Shape of the HTTP 409 response body returned by the sync and merge actions.
+    """
+    detail = serializers.CharField()
+    conflicts = ConflictSummarySerializer(many=True)
+
+
 class CommitSerializer(serializers.Serializer):
     commit = serializers.BooleanField(required=False)
-    acknowledged_conflicts = serializers.ListField(
-        child=serializers.IntegerField(),
-        required=False,
-        default=list,
-    )
+    acknowledge_conflicts = serializers.BooleanField(required=False, default=False)

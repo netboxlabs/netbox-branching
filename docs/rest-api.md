@@ -174,7 +174,7 @@ Each entry in `conflicts` corresponds to a `ChangeDiff` record and includes:
 
 | Field | Description |
 |-------|-------------|
-| `id` | The `ChangeDiff` PK — used to acknowledge the conflict |
+| `id` | The `ChangeDiff` PK |
 | `object_type` | The type of the affected object (e.g. `dcim.site`) |
 | `object_id` | The PK of the affected object |
 | `object_repr` | Human-readable name of the affected object |
@@ -193,7 +193,7 @@ http://netbox:8000/api/plugins/branching/changes/6/
 
 ### Acknowledging Conflicts
 
-To proceed despite conflicts, include an `acknowledged_conflicts` list of `ChangeDiff` PKs in the request body. All conflicting PKs must be acknowledged — a partial list will still return `409` with the remaining unacknowledged conflicts.
+To proceed despite conflicts, include `"acknowledge_conflicts": true` in the request body. This signals that you have reviewed the conflicts and accept that the branch's version of the affected fields will overwrite whatever is currently in main.
 
 ```no-highlight title="Request"
 curl -X POST \
@@ -201,8 +201,8 @@ curl -X POST \
 -H "Content-Type: application/json" \
 -H "Accept: application/json; indent=4" \
 http://netbox:8000/api/plugins/branching/branches/2/sync/ \
---data '{"commit": true, "acknowledged_conflicts": [6]}'
+--data '{"commit": true, "acknowledge_conflicts": true}'
 ```
 
 !!! warning
-    Acknowledging a conflict means the branch's version of the affected fields will overwrite whatever is currently in main. Review `conflicting_data` carefully before proceeding.
+    Acknowledging conflicts means the branch's version of all conflicting fields will overwrite whatever is currently in main. Review `conflicting_data` carefully before proceeding.

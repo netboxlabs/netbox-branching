@@ -30,19 +30,20 @@ class BranchViewSet(ModelViewSet):
 
     def _check_conflicts(self, branch, serializer):
         """
-        Return a 409 response if the branch has unacknowledged conflicts, else None.
+        Return a 409 response if the branch has conflicts and they have not been
+        acknowledged, else None.
         """
-        conflicts = ChangeDiff.objects.filter(branch=branch, conflicts__isnull=False)
-        if not conflicts.exists():
+        if serializer.validated_data.get('acknowledge_conflicts', False):
             return None
-        acknowledged = set(serializer.validated_data.get('acknowledged_conflicts', []))
-        unacknowledged = conflicts.exclude(pk__in=acknowledged)
-        if not unacknowledged.exists():
+        conflicts = ChangeDiff.objects.filter(
+            branch=branch, conflicts__isnull=False
+        ).select_related('object_type')
+        if not conflicts.exists():
             return None
         return Response(
             {
                 'detail': 'All conflicts must be acknowledged before this action can proceed.',
-                'conflicts': serializers.ConflictSummarySerializer(unacknowledged, many=True).data,
+                'conflicts': serializers.ConflictSummarySerializer(conflicts, many=True).data,
             },
             status=status.HTTP_409_CONFLICT,
         )
@@ -50,7 +51,7 @@ class BranchViewSet(ModelViewSet):
     @extend_schema(
         methods=['post'],
         request=serializers.CommitSerializer(),
-        responses={200: JobSerializer(), 409: serializers.ConflictSummarySerializer(many=True)},
+        responses={200: JobSerializer(), 409: serializers.ConflictResponseSerializer()},
     )
     @action(detail=True, methods=['post'])
     def sync(self, request, pk):
@@ -82,7 +83,7 @@ class BranchViewSet(ModelViewSet):
     @extend_schema(
         methods=['post'],
         request=serializers.CommitSerializer(),
-        responses={200: JobSerializer(), 409: serializers.ConflictSummarySerializer(many=True)},
+        responses={200: JobSerializer(), 409: serializers.ConflictResponseSerializer()},
     )
     @action(detail=True, methods=['post'])
     def merge(self, request, pk):

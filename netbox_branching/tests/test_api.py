@@ -326,33 +326,32 @@ class BranchConflictAPITestMixin:
 
     def test_acknowledged_conflicts_proceeds(self):
         branch = self.make_branch()
-        diff = self.make_conflict(branch)
+        self.make_conflict(branch)
 
         response = self.client.post(
             self.get_url(branch.pk),
-            data=json.dumps({'commit': False, 'acknowledged_conflicts': [diff.pk]}),
+            data=json.dumps({'commit': False, 'acknowledge_conflicts': True}),
             content_type='application/json',
             **self.header
         )
 
         self.assertEqual(response.status_code, 200)
 
-    def test_partial_acknowledgement_returns_409(self):
+    def test_unacknowledged_conflicts_returns_409(self):
         branch = self.make_branch()
-        diff1 = self.make_conflict(branch, slug_suffix='-1')
-        diff2 = self.make_conflict(branch, slug_suffix='-2')
+        self.make_conflict(branch, slug_suffix='-1')
+        self.make_conflict(branch, slug_suffix='-2')
 
         response = self.client.post(
             self.get_url(branch.pk),
-            data=json.dumps({'commit': False, 'acknowledged_conflicts': [diff1.pk]}),
+            data=json.dumps({'commit': False, 'acknowledge_conflicts': False}),
             content_type='application/json',
             **self.header
         )
 
         self.assertEqual(response.status_code, 409)
         data = json.loads(response.content)
-        returned_ids = [c['id'] for c in data['conflicts']]
-        self.assertEqual(returned_ids, [diff2.pk])
+        self.assertEqual(len(data['conflicts']), 2)
 
 
 class BranchSyncAPITestCase(BranchConflictAPITestMixin, BaseBranchAPITestCase, TransactionTestCase):
