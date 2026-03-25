@@ -30,7 +30,6 @@ __all__ = (
     'DynamicSchemaDict',
     'ListHandler',
     'activate_branch',
-    'build_operation_report',
     'close_old_branch_connections',
     'deactivate_branch',
     'get_active_branch',
@@ -38,8 +37,6 @@ __all__ = (
     'get_sql_results',
     'get_tables_to_replicate',
     'is_api_request',
-    'parse_integrity_error',
-    'parse_validation_error',
     'record_applied_change',
     'supports_branching',
     'track_branch_connection',
@@ -195,147 +192,6 @@ def get_tables_to_replicate():
             tables.add(m2m_table)
 
     return sorted(tables)
-
-
-def parse_integrity_error(exc):
-    """
-    Parse a PostgreSQL unique-constraint violation (pgcode 23505) from a
-    django.db.utils.IntegrityError. Returns a dict with constraint/model/field/
-    conflicting_value, or None if not a unique-constraint error or unparseable.
-    """
-    import re
-
-    from django.apps import apps
-
-    cause = getattr(exc, '__cause__', None)
-    if cause is None or getattr(cause, 'pgcode', None) != '23505':
-        return None
-
-    pgerror = getattr(cause, 'pgerror', '') or ''
-    constraint_match = re.search(r'unique constraint "([^"]+)"', pgerror)
-    detail_match = re.search(r'Key \(([^)]+)\)=\(([^)]+)\)', pgerror)
-
-    constraint_name = constraint_match.group(1) if constraint_match else None
-    column_name = detail_match.group(1) if detail_match else None
-    conflicting_value = detail_match.group(2) if detail_match else None
-
-    # Map constraint name → Django model by matching db_table as prefix
-    model_class = None
-    if constraint_name:
-        for candidate in apps.get_models():
-            table = candidate._meta.db_table
-            if constraint_name.startswith(table + '_'):
-                model_class = candidate
-                break
-
-    # Resolve column name → Django field name
-    field_name = None
-    model_label = None
-    if model_class and column_name:
-        for field in model_class._meta.fields:
-            if column_name in (field.column, field.name):
-                field_name = field.name
-                break
-        meta = model_class._meta
-        model_label = f'{meta.app_label}.{model_class.__name__}'
-
-    return {
-        'constraint': constraint_name,
-        'model': model_label,
-        'field': field_name,
-        'conflicting_value': conflicting_value,
-    }
-
-
-def parse_validation_error(exc):
-    """
-    Parse a Django ValidationError to detect unique constraint violations (i.e. messages containing
-    "already exists"). Returns a dict with field/message, or None if not a unique constraint error.
-
-    This complements parse_integrity_error(): Django's full_clean() raises ValidationError for
-    unique=True field violations before the query even reaches the database, so iterative merge
-    failures on intermediate conflicting states (e.g. a slug updated to a taken value mid-replay)
-    surface here rather than as IntegrityError.
-    """
-    from django.core.exceptions import ValidationError
-
-    if not isinstance(exc, ValidationError):
-        return None
-
-    try:
-        message_dict = exc.message_dict
-    except AttributeError:
-        messages = exc.messages
-        if any('already exists' in m for m in messages):
-            return {'field': None, 'message': '; '.join(messages)}
-        return None
-
-    unique_fields = {
-        field: msgs[0]
-        for field, msgs in message_dict.items()
-        if any('already exists' in m for m in msgs)
-    }
-    if not unique_fields:
-        return None
-
-    # Use the first conflicting field name unless it's the sentinel '__all__'
-    field_name = next(iter(unique_fields))
-    if field_name == '__all__':
-        field_name = None
-
-    return {
-        'field': field_name,
-        'message': '; '.join(f'{f}: {m}' for f, m in unique_fields.items()),
-    }
-
-
-def build_operation_report(operation, status, exc=None):
-    """
-    Build a structured report dict for a sync/merge/revert operation.
-    Stored in job.data['report'].
-    """
-    from django.utils import timezone
-
-    report = {
-        'operation': operation,
-        'status': status,
-        'timestamp': timezone.now().isoformat(),
-    }
-
-    if status == 'error' and exc is not None:
-        report['error_message'] = str(exc)
-        integrity_details = parse_integrity_error(exc)
-        validation_details = parse_validation_error(exc)
-
-        if integrity_details:
-            report['error_type'] = 'unique_constraint'
-            model_str = integrity_details.get('model') or 'an object'
-            field_str = integrity_details.get('field') or 'a field'
-            value_str = integrity_details.get('conflicting_value') or 'unknown'
-            report['guidance'] = (
-                f'A unique constraint violation occurred on {model_str} (field: {field_str}, '
-                f'conflicting value: "{value_str}"). To resolve: rename or remove the '
-                f'conflicting object in the branch, or switch to the Squash merge strategy.'
-            )
-            report['details'] = integrity_details
-        elif validation_details:
-            report['error_type'] = 'unique_constraint'
-            field_str = validation_details.get('field') or 'a field'
-            report['guidance'] = (
-                f'A unique constraint violation occurred on field "{field_str}". '
-                f'The iterative merge strategy replays each intermediate change in order, which '
-                f'can temporarily conflict with existing data even if the final branch state does not. '
-                f'To resolve: switch to the Squash merge strategy, or rename the conflicting '
-                f'object in the branch.'
-            )
-            report['details'] = validation_details
-        else:
-            report['error_type'] = 'unknown'
-            report['guidance'] = (
-                'An error occurred during the operation. Review the job log for details.'
-            )
-
-    return report
 
 
 class ListHandler(logging.Handler):
