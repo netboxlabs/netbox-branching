@@ -11,6 +11,7 @@ from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
 
 __all__ = (
+    'BranchableModelSerializer',
     'BranchEventSerializer',
     'BranchSerializer',
     'BranchableModelSerializer',
