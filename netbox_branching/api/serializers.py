@@ -11,6 +11,7 @@ from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
 
 __all__ = (
+    'BranchableModelSerializer',
     'BranchEventSerializer',
     'BranchSerializer',
     'ChangeDiffSerializer',
@@ -136,6 +137,13 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
         data = serializer(obj.object, nested=True, context={'request': self.context['request']}).data
 
         return data
+
+
+class BranchableModelSerializer(serializers.Serializer):
+    app_label = serializers.CharField(read_only=True)
+    model = serializers.CharField(read_only=True)
+    verbose_name = serializers.CharField(read_only=True)
+    verbose_name_plural = serializers.CharField(read_only=True)
 
 
 class CommitSerializer(serializers.Serializer):

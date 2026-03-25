@@ -7,5 +7,6 @@ router.APIRootView = views.RootView
 router.register('branches', views.BranchViewSet)
 router.register('branch-events', views.BranchEventViewSet)
 router.register('changes', views.ChangeDiffViewSet)
+router.register('branchable-models', views.BranchableModelViewSet, basename='branchable-model')
 
 urlpatterns = router.urls
