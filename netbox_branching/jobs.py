@@ -92,6 +92,9 @@ class SyncBranchJob(JobRunner):
             branch.sync(user=self.job.user, commit=commit)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
+        except Exception:
+            self._reconnect_signal_receivers()
+            raise
 
         # Reconnect signal handlers
         self._reconnect_signal_receivers()

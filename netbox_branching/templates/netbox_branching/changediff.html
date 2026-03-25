@@ -130,7 +130,7 @@
     <div class="card">
       <h5 class="card-header">{% trans "Difference" %}</h5>
       <div class="card-body">
-        {% if branch_diff_added == None %}
+        {% if branch_diff_added is None %}
           <span class="text-muted">
             {% if object.action == 'create' %}
               {% trans "Object Created" %}

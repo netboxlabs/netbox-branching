@@ -475,7 +475,6 @@ class ChangeDiffView(generic.ObjectView):
             main_diff_removed = main_diff_added = None
 
         return {
-            'altered_fields': altered_fields,
             'altered_in_modified': altered_in_modified,
             'altered_in_current': altered_in_current,
             'branch_diff_removed': branch_diff_removed,
