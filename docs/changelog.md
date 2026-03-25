@@ -1,5 +1,20 @@
 # Change Log
 
+## v0.8.3
+
+### Enhancements
+
+* [#25](https://github.com/netboxlabs/netbox-branching/issues/25) - Display a summary of changes to be applied under the sync & merge views
+
+### Bug Fixes
+
+* [#426](https://github.com/netboxlabs/netbox-branching/issues/426) - Allow sync/merge if edited objects have been deleted in main
+* [#448](https://github.com/netboxlabs/netbox-branching/issues/448) - Fix squash merge ordering when new objects reference other new objects
+* [#467](https://github.com/netboxlabs/netbox-branching/issues/467) - Fix GFK dependency detection in squash merge
+* [#468](https://github.com/netboxlabs/netbox-branching/issues/468) - Fix `KeyError` exception when API request omits `commit` field
+
+---
+
 ## v0.8.2
 
 ### Enhancements
