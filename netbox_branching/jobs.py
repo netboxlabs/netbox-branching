@@ -93,6 +93,8 @@ class SyncBranchJob(JobRunner):
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
         except Exception:
+            # TODO: Can JobRunner be extended to handle this more cleanly?
+            # Ensure that signal handlers are reconnected
             self._reconnect_signal_receivers()
             raise
 
