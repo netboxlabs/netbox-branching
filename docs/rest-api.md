@@ -131,3 +131,78 @@ If successful, this will return data about the background job that has been enqu
 ```
 
 This same pattern can be followed to merge and revert branches via their respective API endpoints, listed above.
+
+## Syncing & Merging with Conflicts
+
+If conflicting changes exist on a branch (i.e. the same object has been modified in both main and the branch since the last sync), the `sync/` and `merge/` endpoints will return HTTP `409 Conflict` rather than enqueuing a job. The response body includes a `detail` message and a `conflicts` list describing each conflicting change:
+
+```json title="Response (409 Conflict)"
+{
+    "detail": "All conflicts must be acknowledged before this action can proceed.",
+    "conflicts": [
+        {
+            "id": 6,
+            "object_type": "dcim.site",
+            "object_id": 31,
+            "object_repr": "s1",
+            "action": {
+                "value": "update",
+                "label": "Updated"
+            },
+            "conflicts": ["description", "tags"],
+            "conflicting_data": {
+                "original": {
+                    "description": "",
+                    "tags": []
+                },
+                "branch": {
+                    "description": "abc",
+                    "tags": ["Alpha", "Foxtrot"]
+                },
+                "main": {
+                    "description": "def",
+                    "tags": ["Alpha", "Charlie", "Delta"]
+                }
+            },
+            "last_updated": "2024-08-12T17:07:10.442432Z"
+        }
+    ]
+}
+```
+
+Each entry in `conflicts` corresponds to a `ChangeDiff` record and includes:
+
+| Field | Description |
+|-------|-------------|
+| `id` | The `ChangeDiff` PK |
+| `object_type` | The type of the affected object (e.g. `dcim.site`) |
+| `object_id` | The PK of the affected object |
+| `object_repr` | Human-readable name of the affected object |
+| `action` | The change action on the branch (`create`, `update`, or `delete`) |
+| `conflicts` | List of field names where the branch and main have diverged |
+| `conflicting_data` | Three-way view of the conflicting fields: `original` (at branch creation), `branch` (branch value), `main` (current main value) |
+
+Full details for any conflict can be retrieved via the change diff endpoint:
+
+```no-highlight title="Request"
+curl -X GET \
+-H "Authorization: Token $TOKEN" \
+-H "Accept: application/json; indent=4" \
+http://netbox:8000/api/plugins/branching/changes/6/
+```
+
+### Acknowledging Conflicts
+
+To proceed despite conflicts, include `"acknowledge_conflicts": true` in the request body. This signals that you have reviewed the conflicts and accept that the branch's version of the affected fields will overwrite whatever is currently in main.
+
+```no-highlight title="Request"
+curl -X POST \
+-H "Authorization: Token $TOKEN" \
+-H "Content-Type: application/json" \
+-H "Accept: application/json; indent=4" \
+http://netbox:8000/api/plugins/branching/branches/2/sync/ \
+--data '{"commit": true, "acknowledge_conflicts": true}'
+```
+
+!!! warning
+    Acknowledging conflicts means the branch's version of all conflicting fields will overwrite whatever is currently in main. Review `conflicting_data` carefully before proceeding.

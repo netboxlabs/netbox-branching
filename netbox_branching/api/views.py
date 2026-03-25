@@ -7,6 +7,7 @@ from drf_spectacular.utils import extend_schema
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired
 from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
 from netbox.plugins import get_plugin_config
+from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
 from rest_framework.response import Response
@@ -31,10 +32,30 @@ class BranchViewSet(ModelViewSet):
     serializer_class = serializers.BranchSerializer
     filterset_class = filtersets.BranchFilterSet
 
+    def _check_conflicts(self, branch, serializer):
+        """
+        Return a 409 response if the branch has conflicts and they have not been
+        acknowledged, else None.
+        """
+        if serializer.validated_data.get('acknowledge_conflicts', False):
+            return None
+        conflicts = ChangeDiff.objects.filter(
+            branch=branch, conflicts__isnull=False
+        ).select_related('object_type')
+        if not conflicts.exists():
+            return None
+        return Response(
+            {
+                'detail': 'All conflicts must be acknowledged before this action can proceed.',
+                'conflicts': serializers.ConflictSummarySerializer(conflicts, many=True).data,
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
     @extend_schema(
         methods=['post'],
         request=serializers.CommitSerializer(),
-        responses={200: JobSerializer()},
+        responses={200: JobSerializer(), 409: serializers.ConflictResponseSerializer()},
     )
     @action(detail=True, methods=['post'])
     def sync(self, request, pk):
@@ -51,6 +72,9 @@ class BranchViewSet(ModelViewSet):
         serializer = serializers.CommitSerializer(data=request.data)
         commit = serializer.validated_data.get('commit', True) if serializer.is_valid() else False
 
+        if conflict_response := self._check_conflicts(branch, serializer):
+            return conflict_response
+
         # Enqueue a background job
         job = SyncBranchJob.enqueue(
             instance=branch,
@@ -63,7 +87,7 @@ class BranchViewSet(ModelViewSet):
     @extend_schema(
         methods=['post'],
         request=serializers.CommitSerializer(),
-        responses={200: JobSerializer()},
+        responses={200: JobSerializer(), 409: serializers.ConflictResponseSerializer()},
     )
     @action(detail=True, methods=['post'])
     def merge(self, request, pk):
@@ -79,6 +103,9 @@ class BranchViewSet(ModelViewSet):
 
         serializer = serializers.CommitSerializer(data=request.data)
         commit = serializer.validated_data.get('commit', True) if serializer.is_valid() else False
+
+        if conflict_response := self._check_conflicts(branch, serializer):
+            return conflict_response
 
         # Enqueue a background job
         job = MergeBranchJob.enqueue(

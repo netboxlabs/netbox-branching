@@ -1,5 +1,6 @@
 import json
 
+from core.choices import ObjectChangeActionChoices
 from core.models import Job
 from dcim.models import Site
 from django.contrib.auth import get_user_model
@@ -11,7 +12,7 @@ from users.models import Token
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME
-from netbox_branching.models import Branch
+from netbox_branching.models import Branch, ChangeDiff
 
 
 class BaseAPITestCase:
@@ -264,13 +265,102 @@ class BaseBranchAPITestCase(BaseAPITestCase):
         self.assertEqual(branch.status, self.invalid_status)
 
 
-class BranchSyncAPITestCase(BaseBranchAPITestCase, TransactionTestCase):
+class BranchConflictAPITestMixin:
+    """
+    Tests for conflict handling on sync/merge endpoints.
+    """
+
+    def make_conflict(self, branch, slug_suffix=''):
+        site = Site.objects.create(name=f'Conflict Site{slug_suffix}', slug=f'conflict-site{slug_suffix}')
+        ct = ContentType.objects.get_for_model(Site)
+        diff = ChangeDiff(
+            branch=branch,
+            object_type=ct,
+            object_id=site.pk,
+            object_repr=str(site),
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            original={'description': ''},
+            modified={'description': 'branch value'},
+            current={'description': 'main value'},
+        )
+        diff.save()  # triggers _update_conflicts()
+        return diff
+
+    def test_conflict_returns_409(self):
+        branch = self.make_branch()
+        self.make_conflict(branch)
+
+        response = self.client.post(self.get_url(branch.pk), **self.header)
+
+        self.assertEqual(response.status_code, 409)
+
+    def test_conflict_response_shape(self):
+        branch = self.make_branch()
+        diff = self.make_conflict(branch)
+
+        response = self.client.post(self.get_url(branch.pk), **self.header)
+        self.assertEqual(response.status_code, 409)
+        data = json.loads(response.content)
+
+        self.assertIn('detail', data)
+        self.assertIn('conflicts', data)
+        self.assertEqual(len(data['conflicts']), 1)
+
+        conflict = data['conflicts'][0]
+        self.assertEqual(conflict['id'], diff.pk)
+        self.assertIn('object_type', conflict)
+        self.assertIn('object_id', conflict)
+        self.assertIn('object_repr', conflict)
+        self.assertIn('action', conflict)
+        self.assertIn('conflicts', conflict)
+        self.assertIn('conflicting_data', conflict)
+        self.assertIn('last_updated', conflict)
+
+        conflicting_data = conflict['conflicting_data']
+        self.assertIn('original', conflicting_data)
+        self.assertIn('branch', conflicting_data)
+        self.assertIn('main', conflicting_data)
+        self.assertEqual(conflicting_data['original'], {'description': ''})
+        self.assertEqual(conflicting_data['branch'], {'description': 'branch value'})
+        self.assertEqual(conflicting_data['main'], {'description': 'main value'})
+
+    def test_acknowledged_conflicts_proceeds(self):
+        branch = self.make_branch()
+        self.make_conflict(branch)
+
+        response = self.client.post(
+            self.get_url(branch.pk),
+            data=json.dumps({'commit': False, 'acknowledge_conflicts': True}),
+            content_type='application/json',
+            **self.header
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+    def test_unacknowledged_conflicts_returns_409(self):
+        branch = self.make_branch()
+        self.make_conflict(branch, slug_suffix='-1')
+        self.make_conflict(branch, slug_suffix='-2')
+
+        response = self.client.post(
+            self.get_url(branch.pk),
+            data=json.dumps({'commit': False, 'acknowledge_conflicts': False}),
+            content_type='application/json',
+            **self.header
+        )
+
+        self.assertEqual(response.status_code, 409)
+        data = json.loads(response.content)
+        self.assertEqual(len(data['conflicts']), 2)
+
+
+class BranchSyncAPITestCase(BranchConflictAPITestMixin, BaseBranchAPITestCase, TransactionTestCase):
     action = 'sync'
     valid_status = BranchStatusChoices.READY
     invalid_status = BranchStatusChoices.NEW
 
 
-class BranchMergeAPITestCase(BaseBranchAPITestCase, TransactionTestCase):
+class BranchMergeAPITestCase(BranchConflictAPITestMixin, BaseBranchAPITestCase, TransactionTestCase):
     action = 'merge'
     valid_status = BranchStatusChoices.READY
     invalid_status = BranchStatusChoices.NEW
