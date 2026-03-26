@@ -179,7 +179,6 @@ class ConflictResponseSerializer(serializers.Serializer):
 class CommitSerializer(serializers.Serializer):
     commit = serializers.BooleanField(required=False)
     acknowledge_conflicts = serializers.BooleanField(required=False, default=False)
-    acknowledge_conflicts = serializers.BooleanField(required=False, default=False)
 
 
 class BranchableModelSerializer(serializers.Serializer):
