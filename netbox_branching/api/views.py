@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 from core.api.serializers import JobSerializer
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseBadRequest
@@ -158,7 +160,7 @@ class BranchableModelViewSet(NetBoxReadOnlyModelViewSet):
     """
     List all models that support branching, including models from custom plugins.
     """
-    permission_classes = [IsAuthenticatedOrLoginNotRequired]
+    permission_classes: ClassVar = [IsAuthenticatedOrLoginNotRequired]
 
     def list(self, request):
         data = []
