@@ -7,7 +7,6 @@ from drf_spectacular.utils import extend_schema
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired
 from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
 from netbox.plugins import get_plugin_config
-from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
