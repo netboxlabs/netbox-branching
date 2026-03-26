@@ -184,5 +184,5 @@ class CommitSerializer(serializers.Serializer):
 class BranchableModelSerializer(serializers.Serializer):
     app_label = serializers.CharField(read_only=True)
     model = serializers.CharField(read_only=True)
-    verbose_name = serializers.CharField(read_only=True)
-    verbose_name_plural = serializers.CharField(read_only=True)
+    verbose_name = serializers.CharField(read_only=True, allow_null=True)
+    verbose_name_plural = serializers.CharField(read_only=True, allow_null=True)
