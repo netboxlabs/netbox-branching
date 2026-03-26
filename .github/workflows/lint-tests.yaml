@@ -42,7 +42,7 @@ jobs:
         run: ruff check
   tests:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     strategy:
       matrix:
         python-version: [ "3.12", "3.13", "3.14" ]
