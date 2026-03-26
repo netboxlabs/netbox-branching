@@ -458,8 +458,6 @@ class ChangeDiffView(generic.ObjectView):
         # Safely compute altered field sets only when the required data is present
         altered_in_modified = instance.altered_in_modified if instance.original and instance.modified else set()
         altered_in_current = instance.altered_in_current if instance.original and instance.current else set()
-        altered_fields = sorted([*altered_in_modified, *altered_in_current])
-
         # Compute branch diff (original → modified)
         if instance.original and instance.modified and altered_in_modified:
             branch_diff_removed = {k: instance.original[k] for k in altered_in_modified}
