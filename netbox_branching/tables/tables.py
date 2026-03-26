@@ -103,9 +103,9 @@ class BranchTable(NetBoxTable):
 
 
 class ChangeDiffTable(NetBoxTable):
-    # TODO: Revert to the default "id" column when a detail view for ChangeDiff is implemented
     id = tables.Column(
-        verbose_name=_('ID')
+        verbose_name=_('ID'),
+        linkify=True
     )
     branch = tables.Column(
         verbose_name=_('Branch'),
@@ -145,7 +145,9 @@ class ChangeDiffTable(NetBoxTable):
             'id', 'branch', 'object_type', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff',
             'current_diff', 'last_updated', 'actions',
         )
-        default_columns = ('branch', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff')
+        default_columns = (
+            'id', 'branch', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff',
+        )
 
 
 class ChangesTable(NetBoxTable):
