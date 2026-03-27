@@ -33,6 +33,8 @@ def _analyze_integrity_error(exc):
             'model': _table_to_model(table_match.group(1)) if table_match else None,
             'field': detail_match.group(1) if detail_match else None,
             'value': detail_match.group(2) if detail_match else None,
+            'object_id': None,
+            'content_type_id': None,
         }
 
     return {
@@ -40,6 +42,8 @@ def _analyze_integrity_error(exc):
         'model': None,
         'field': None,
         'value': None,
+        'object_id': None,
+        'content_type_id': None,
     }
 
 

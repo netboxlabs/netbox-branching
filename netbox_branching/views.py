@@ -151,9 +151,9 @@ class BranchJobReportView(generic.ObjectView):
         last_job = instance.jobs.order_by('created').last()
         report_entries = []
         job_type = 'merge'
-        if last_job and last_job.name == 'Sync branch':
+        if last_job and last_job.name == SyncBranchJob.Meta.name:
             job_type = 'sync'
-        elif last_job and last_job.name == 'Revert branch':
+        elif last_job and last_job.name == RevertBranchJob.Meta.name:
             job_type = 'revert'
         if last_job and last_job.data and last_job.data.get('report'):
             for entry in last_job.data['report']:
