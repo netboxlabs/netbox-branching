@@ -157,6 +157,7 @@ class BranchJobReportView(generic.ObjectView):
             job_type = 'sync'
         elif last_job and last_job.name == RevertBranchJob.Meta.name:
             job_type = 'revert'
+        merge_strategy = last_job.data.get('merge_strategy') if last_job and last_job.data else None
         if last_job and last_job.data and last_job.data.get('report'):
             for entry in last_job.data['report']:
                 object_url = None
@@ -171,11 +172,14 @@ class BranchJobReportView(generic.ObjectView):
                         object_str = str(obj)
                     except (ContentType.DoesNotExist, ObjectDoesNotExist, AttributeError):
                         object_str = f'#{obj_id}'
-                get_recs = get_sync_recommendations if job_type == 'sync' else get_merge_recommendations
+                if job_type == 'sync':
+                    recs = get_sync_recommendations(entry)
+                else:
+                    recs = get_merge_recommendations(entry, merge_strategy=merge_strategy)
                 report_entries.append({
                     **entry,
                     'message': get_entry_message(entry),
-                    'recommendations': get_recs(entry),
+                    'recommendations': recs,
                     'object_url': object_url,
                     'object_str': object_str,
                 })
@@ -189,6 +193,7 @@ class BranchJobReportView(generic.ObjectView):
         return {
             'last_job': last_job,
             'job_type': job_type,
+            'merge_strategy': merge_strategy,
             'report_entries': report_entries,
             'changes_summary': changes_summary,
             'has_unsynced_changes': has_unsynced_changes,

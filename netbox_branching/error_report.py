@@ -162,8 +162,11 @@ def get_sync_recommendations(entry):
     return [_('Review the job log for full error details, then retry the sync.')]
 
 
-def get_merge_recommendations(entry):
+def get_merge_recommendations(entry, merge_strategy=None):
     """Compute actionable recommendations for a failed merge or revert operation."""
+    from .choices import BranchMergeStrategyChoices
+    is_squash = merge_strategy == BranchMergeStrategyChoices.SQUASH
+
     error_type = entry.get('type')
     field = entry.get('field', '')
     value = entry.get('value', '')
@@ -178,6 +181,8 @@ def get_merge_recommendations(entry):
         else:
             rename_rec = _('Rename the conflicting object in either the branch or the main schema'
                            ' so the values no longer conflict.')
+        if is_squash:
+            return [rename_rec]
         return [
             rename_rec,
             _('Switch to the Squash merge strategy, which handles these types of conflicts better.'),
@@ -195,6 +200,8 @@ def get_merge_recommendations(entry):
             _('Fix the invalid value on the affected object in the branch before retrying.'),
         ]
 
+    if is_squash:
+        return [_('Review the job log for full error details.')]
     return [
         _('Review the job log for full error details.'),
         _('Switch to the Squash merge strategy, which may resolve some database-level conflicts.'),

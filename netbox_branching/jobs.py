@@ -12,6 +12,7 @@ from netbox.plugins import get_plugin_config
 from netbox.signals import post_clean
 from utilities.exceptions import AbortTransaction
 
+from .choices import BranchMergeStrategyChoices
 from .error_report import build_error_report
 from .signal_receivers import validate_branching_operations
 from .utilities import ListHandler
@@ -186,6 +187,7 @@ class MergeBranchJob(JobRunner):
         branch = self.job.object
         self.job.data['changes_summary'] = _snapshot_changes_summary(branch.get_unmerged_changes())
         self.job.data['has_unsynced_changes'] = branch.get_unsynced_changes().exists()
+        self.job.data['merge_strategy'] = branch.merge_strategy or BranchMergeStrategyChoices.ITERATIVE
 
         # Merge the Branch
         try:

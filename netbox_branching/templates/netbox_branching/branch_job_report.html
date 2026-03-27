@@ -65,6 +65,12 @@
   {# Report tab #}
   <div class="tab-pane show active" id="report" role="tabpanel" aria-labelledby="report-tab">
 
+    {% if merge_strategy %}
+      <p class="text-secondary mb-3">
+        <strong>{% trans "Merge Strategy" %}:</strong> {{ merge_strategy|title }}
+      </p>
+    {% endif %}
+
     {% if has_unsynced_changes %}
       <div class="alert alert-warning d-flex align-items-center" role="alert">
         <span class="text-warning fs-1 me-3">
@@ -196,7 +202,7 @@
                       <strong>{% trans "Recommendations" %}</strong>
                       <ol class="mt-1 mb-0">
                         {% for rec in entry.recommendations %}
-                          <li>{{ rec }}</li>
+                          <li value="{{ forloop.counter }}">{{ rec }}</li>
                           {% if not forloop.last %}
                             <li class="list-unstyled text-muted small fst-italic py-1">— {% trans "or" %} —</li>
                           {% endif %}

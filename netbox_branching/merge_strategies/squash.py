@@ -219,8 +219,8 @@ class SquashMergeStrategy(MergeStrategy):
                     dummy_change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
                 except ValidationError as e:
                     e.netbox_branching_model = model_class
-                    e.netbox_branching_object_id = collapsed.key[1]
-                    e.netbox_branching_content_type_id = collapsed.key[0]
+                    e.netbox_branching_object_id = collapsed.last_change.changed_object_id
+                    e.netbox_branching_content_type_id = collapsed.last_change.changed_object_type_id
                     raise
 
         # Perform cleanup tasks
