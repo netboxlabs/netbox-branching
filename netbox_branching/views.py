@@ -1,10 +1,11 @@
 from collections import defaultdict
 
-from core.choices import ObjectChangeActionChoices
+from core.choices import JobStatusChoices, ObjectChangeActionChoices
 from core.filtersets import ObjectChangeFilterSet
 from core.models import ObjectChange
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Count, Q
 from django.shortcuts import redirect, render
 from django.utils.translation import gettext_lazy as _
@@ -14,8 +15,10 @@ from utilities.views import ViewTab, register_model_view
 
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
+from .error_report import get_entry_message, get_merge_recommendations
 from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
+from .utilities import resolve_changes_summary
 
 #
 # Branches
@@ -64,6 +67,7 @@ class BranchView(generic.ObjectView):
             'stats': stats,
             'latest_change': latest_change,
             'last_job': last_job,
+            'last_job_errored': last_job is not None and last_job.status == JobStatusChoices.STATUS_ERRORED,
             'conflicts_count': ChangeDiff.objects.filter(branch=instance, conflicts__isnull=False).count(),
         }
 
@@ -138,6 +142,54 @@ class BranchChangesAheadView(generic.ObjectChildrenView):
 
     def get_children(self, request, parent):
         return parent.get_unmerged_changes().order_by('time')
+
+
+@register_model_view(Branch, 'job-report')
+class BranchJobReportView(generic.ObjectView):
+    queryset = Branch.objects.all()
+    template_name = 'netbox_branching/branch_job_report.html'
+
+    def get_extra_context(self, request, instance):
+        last_job = instance.jobs.order_by('created').last()
+        report_entries = []
+        job_data = last_job.data if last_job and last_job.data else {}
+        merge_strategy = job_data.get('merge_strategy')
+        if last_job and last_job.data and last_job.data.get('report'):
+            for entry in last_job.data['report']:
+                object_url = None
+                object_str = None
+                ct_id = entry.get('content_type_id')
+                obj_id = entry.get('object_id')
+                if ct_id and obj_id:
+                    try:
+                        ct = ContentType.objects.get_for_id(ct_id)
+                        obj = ct.get_object_for_this_type(pk=obj_id)
+                        object_url = f'{obj.get_absolute_url()}?_branch={instance.schema_id}'
+                        object_str = str(obj)
+                    except (ContentType.DoesNotExist, ObjectDoesNotExist, AttributeError):
+                        object_str = f'#{obj_id}'
+                recs = get_merge_recommendations(entry, merge_strategy=merge_strategy)
+                report_entries.append({
+                    **entry,
+                    'message': get_entry_message(entry),
+                    'recommendations': recs,
+                    'object_url': object_url,
+                    'object_str': object_str,
+                })
+        changes_summary = None
+        stored = last_job.data.get('changes_summary') if last_job and last_job.data else None
+        if stored:
+            changes_summary = resolve_changes_summary(stored)
+        has_unsynced_changes = (
+            last_job and last_job.data and last_job.data.get('has_unsynced_changes', False)
+        )
+        return {
+            'last_job': last_job,
+            'merge_strategy': merge_strategy,
+            'report_entries': report_entries,
+            'changes_summary': changes_summary,
+            'has_unsynced_changes': has_unsynced_changes,
+        }
 
 
 def _get_change_count(obj):

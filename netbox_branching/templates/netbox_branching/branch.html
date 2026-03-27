@@ -33,13 +33,24 @@
 {% endblock %}
 
 {% block content %}
-  {% if last_job.status == 'errored' %}
-    <div class="alert alert-danger" role="alert">
-      <h4 class="alert-title">
-        <i class="mdi mdi-alert"></i>
-        The <a href="{{ last_job.get_absolute_url }}">last job</a> ({{ last_job.name }}) failed with an error:
-      </h4>
-      <div class="text-secondary">{{ last_job.error }}</div>
+  {% if last_job_errored %}
+    <div class="alert alert-danger d-flex justify-content-between align-items-start" role="alert">
+      <div>
+        <h4 class="alert-title">
+          <i class="mdi mdi-alert"></i>
+          The <a href="{{ last_job.get_absolute_url }}" class="alert-link">last job</a> ({{ last_job.name }}) failed with an error.
+        </h4>
+        {% if last_job.data.report %}
+          <div class="text-secondary">{{ last_job.data.report|length }} error{{ last_job.data.report|length|pluralize }} occurred.</div>
+        {% else %}
+          <div class="text-secondary">{{ last_job.error }}</div>
+        {% endif %}
+      </div>
+      {% if last_job.data.report %}
+        <a href="{% url 'plugins:netbox_branching:branch_job-report' pk=object.pk %}" class="btn btn-sm btn-outline-danger ms-3 text-nowrap">
+          <i class="mdi mdi-file-document-outline"></i> {% trans "View Report" %}
+        </a>
+      {% endif %}
     </div>
   {% endif %}
   {% if object.pending_migrations %}

@@ -5,9 +5,11 @@ from enum import StrEnum
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, models
 from netbox.context_managers import event_tracking
 
+from ..error_report import annotate_validation_error
 from .strategy import MergeStrategy
 
 __all__ = (
@@ -214,7 +216,15 @@ class SquashMergeStrategy(MergeStrategy):
 
                 # Create a dummy ObjectChange from the collapsed change and apply it
                 dummy_change = collapsed.generate_object_change()
-                dummy_change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+                try:
+                    dummy_change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+                except ValidationError as e:
+                    annotate_validation_error(
+                        e, model_class,
+                        collapsed.last_change.changed_object_id,
+                        collapsed.last_change.changed_object_type_id,
+                    )
+                    raise
 
         # Perform cleanup tasks
         self._clean(models)
