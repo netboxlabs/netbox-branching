@@ -38,23 +38,30 @@ def _table_to_model(table_name):
 def _analyze_integrity_error(exc):
     """Parse a Django IntegrityError into a structured report entry (factual data only)."""
     cause = exc.__cause__
-    pgcode = getattr(cause, 'pgcode', None)
-    pgerror = getattr(cause, 'pgerror', '') or ''
+    # psycopg3 uses 'sqlstate'; keep 'pgcode' fallback for forward-compatibility.
+    sqlstate = getattr(cause, 'sqlstate', None) or getattr(cause, 'pgcode', None)
+    diag = getattr(cause, 'diag', None)
 
-    if pgcode == PG_UNIQUE_VIOLATION:
-        detail_match = re.search(r'DETAIL:\s+Key \((.+?)\)=\((.+?)\) already exists', pgerror)
-        # Prefer psycopg2 diagnostics for the table name (reliable across pg locales/versions).
-        # Fall back to regex for older drivers that don't expose diag.
-        diag = getattr(cause, 'diag', None)
+    if sqlstate == PG_UNIQUE_VIOLATION:
+        # diag attributes are locale-independent catalog values (psycopg3).
         table_name = getattr(diag, 'table_name', None) if diag else None
-        if not table_name:
-            table_match = re.search(r'relation "([^"]+)"', pgerror)
-            table_name = table_match.group(1) if table_match else None
+
+        # Field name: set for single-column violations; None for composite unique constraints.
+        field = getattr(diag, 'column_name', None) if diag else None
+
+        # Value: not available as a catalog value — parse from diag.message_detail.
+        # This is locale-dependent and returns None on non-English PostgreSQL locales.
+        value = None
+        if field:
+            value_match = re.search(r'Key \((.+?)\)=\((.+?)\)', diag.message_detail or '')
+            if value_match:
+                value = value_match.group(2)
+
         return {
             'type': 'unique_constraint',
             'model': _table_to_model(table_name) if table_name else None,
-            'field': detail_match.group(1) if detail_match else None,
-            'value': detail_match.group(2) if detail_match else None,
+            'field': field,
+            'value': value,
             'object_id': None,
             'content_type_id': None,
         }
