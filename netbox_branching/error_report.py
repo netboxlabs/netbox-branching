@@ -12,7 +12,6 @@ __all__ = (
     'build_error_report',
     'get_entry_message',
     'get_merge_recommendations',
-    'get_sync_recommendations',
 )
 
 
@@ -147,41 +146,6 @@ def get_entry_message(entry):
         return _('Validation error.')
 
     return _('An unexpected database error occurred.')
-
-
-def get_sync_recommendations(entry):
-    """Compute actionable recommendations for a failed sync operation."""
-    error_type = entry.get('type')
-    field = entry.get('field', '')
-    value = entry.get('value', '')
-
-    if error_type == 'unique_constraint':
-        if field and value:
-            return [
-                _('Rename the conflicting object (where %(field)s="%(value)s") in either the branch or the main schema,'
-                  ' then retry the sync.') % {
-                    'field': field,
-                    'value': value,
-                },
-            ]
-        return [
-            _('Rename the conflicting object in either the branch or the main schema so the values no longer conflict,'
-              ' then retry the sync.'),
-        ]
-
-    if error_type == 'validation_error':
-        if field:
-            return [
-                _('Fix the invalid value for field "%(field)s" on the affected object in the branch,'
-                  ' then retry the sync.') % {
-                    'field': field,
-                },
-            ]
-        return [
-            _('Fix the invalid value on the affected object in the branch, then retry the sync.'),
-        ]
-
-    return [_('Review the job log for full error details, then retry the sync.')]
 
 
 def get_merge_recommendations(entry, merge_strategy=None):

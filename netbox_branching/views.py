@@ -15,7 +15,7 @@ from utilities.views import ViewTab, register_model_view
 
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
-from .error_report import get_entry_message, get_merge_recommendations, get_sync_recommendations
+from .error_report import get_entry_message, get_merge_recommendations
 from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
 from .utilities import resolve_changes_summary
@@ -153,7 +153,6 @@ class BranchJobReportView(generic.ObjectView):
         last_job = instance.jobs.order_by('created').last()
         report_entries = []
         job_data = last_job.data if last_job and last_job.data else {}
-        job_type = job_data.get('job_type', 'merge')
         merge_strategy = job_data.get('merge_strategy')
         if last_job and last_job.data and last_job.data.get('report'):
             for entry in last_job.data['report']:
@@ -169,10 +168,7 @@ class BranchJobReportView(generic.ObjectView):
                         object_str = str(obj)
                     except (ContentType.DoesNotExist, ObjectDoesNotExist, AttributeError):
                         object_str = f'#{obj_id}'
-                if job_type == 'sync':
-                    recs = get_sync_recommendations(entry)
-                else:
-                    recs = get_merge_recommendations(entry, merge_strategy=merge_strategy)
+                recs = get_merge_recommendations(entry, merge_strategy=merge_strategy)
                 report_entries.append({
                     **entry,
                     'message': get_entry_message(entry),
@@ -189,7 +185,6 @@ class BranchJobReportView(generic.ObjectView):
         )
         return {
             'last_job': last_job,
-            'job_type': job_type,
             'merge_strategy': merge_strategy,
             'report_entries': report_entries,
             'changes_summary': changes_summary,

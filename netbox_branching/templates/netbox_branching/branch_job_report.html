@@ -10,19 +10,14 @@
     <a href="{{ object.get_absolute_url }}">{{ object.name }}</a>
   </li>
   <li class="breadcrumb-item active" aria-current="page">
-    {% if job_type == 'sync' %}{% trans "Sync Report" %}
-    {% elif job_type == 'revert' %}{% trans "Revert Report" %}
-    {% else %}{% trans "Merge Report" %}{% endif %}
+    {% trans "Merge Report" %}
   </li>
 {% endblock breadcrumbs %}
 
 {% block object_identifier %}{% endblock %}
 
 {% block title %}
-  {{ object.name }} -
-  {% if job_type == 'sync' %}{% trans "Sync Report" %}
-  {% elif job_type == 'revert' %}{% trans "Revert Report" %}
-  {% else %}{% trans "Merge Report" %}{% endif %}
+  {{ object.name }} - {% trans "Merge Report" %}
 {% endblock title %}
 
 {% block subtitle %}
@@ -158,10 +153,10 @@
       </div>
     {% endif %}
 
-    {% if last_job and job_type != 'revert' %}
+    {% if last_job %}
       <div class="card mb-3">
         <div class="card-header d-flex justify-content-between align-items-center">
-          <strong>{% if job_type == 'sync' %}{% trans "Sync Failures" %}{% else %}{% trans "Merge Failures" %}{% endif %}</strong>
+          <strong>{% trans "Merge Failures" %}</strong>
           <span class="text-muted small">
             <a href="{{ last_job.get_absolute_url }}">{{ last_job.name }}</a>
             &mdash; {{ last_job.created|isodatetime }}

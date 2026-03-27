@@ -176,7 +176,6 @@ class MergeBranchJob(JobRunner):
 
         # Snapshot pending changes before merging
         branch = self.job.object
-        self.job.data['job_type'] = 'merge'
         self.job.data['changes_summary'] = _snapshot_changes_summary(branch.get_unmerged_changes())
         self.job.data['has_unsynced_changes'] = branch.get_unsynced_changes().exists()
         self.job.data['merge_strategy'] = branch.merge_strategy or BranchMergeStrategyChoices.ITERATIVE
@@ -215,8 +214,6 @@ class RevertBranchJob(JobRunner):
             branch.revert(user=self.job.user, commit=commit)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
-        except (IntegrityError, ValidationError):
-            raise
 
 
 class MigrateBranchJob(JobRunner):
