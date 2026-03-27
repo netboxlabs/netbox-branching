@@ -27,10 +27,16 @@ def _analyze_integrity_error(exc):
 
     if pgcode == PG_UNIQUE_VIOLATION:
         detail_match = re.search(r'DETAIL:\s+Key \((.+?)\)=\((.+?)\) already exists', pgerror)
-        table_match = re.search(r'relation "([^"]+)"', pgerror)
+        # Prefer psycopg2 diagnostics for the table name (reliable across pg locales/versions).
+        # Fall back to regex for older drivers that don't expose diag.
+        diag = getattr(cause, 'diag', None)
+        table_name = getattr(diag, 'table_name', None) if diag else None
+        if not table_name:
+            table_match = re.search(r'relation "([^"]+)"', pgerror)
+            table_name = table_match.group(1) if table_match else None
         return {
             'type': 'unique_constraint',
-            'model': _table_to_model(table_match.group(1)) if table_match else None,
+            'model': _table_to_model(table_name) if table_name else None,
             'field': detail_match.group(1) if detail_match else None,
             'value': detail_match.group(2) if detail_match else None,
             'object_id': None,

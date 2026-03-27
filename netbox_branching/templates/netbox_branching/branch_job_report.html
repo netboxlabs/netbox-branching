@@ -10,8 +10,8 @@
     <a href="{{ object.get_absolute_url }}">{{ object.name }}</a>
   </li>
   <li class="breadcrumb-item active" aria-current="page">
-    {% if last_job.name == 'Sync branch' %}{% trans "Sync Report" %}
-    {% elif last_job.name == 'Revert branch' %}{% trans "Revert Report" %}
+    {% if job_type == 'sync' %}{% trans "Sync Report" %}
+    {% elif job_type == 'revert' %}{% trans "Revert Report" %}
     {% else %}{% trans "Merge Report" %}{% endif %}
   </li>
 {% endblock breadcrumbs %}
@@ -20,8 +20,8 @@
 
 {% block title %}
   {{ object.name }} -
-  {% if last_job.name == 'Sync branch' %}{% trans "Sync Report" %}
-  {% elif last_job.name == 'Revert branch' %}{% trans "Revert Report" %}
+  {% if job_type == 'sync' %}{% trans "Sync Report" %}
+  {% elif job_type == 'revert' %}{% trans "Revert Report" %}
   {% else %}{% trans "Merge Report" %}{% endif %}
 {% endblock title %}
 

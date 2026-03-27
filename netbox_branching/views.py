@@ -1,6 +1,6 @@
 from collections import defaultdict
 
-from core.choices import ObjectChangeActionChoices
+from core.choices import JobStatusChoices, ObjectChangeActionChoices
 from core.filtersets import ObjectChangeFilterSet
 from core.models import ObjectChange
 from django.contrib import messages
@@ -18,6 +18,7 @@ from .choices import BranchStatusChoices
 from .error_report import get_entry_message, get_merge_recommendations, get_sync_recommendations
 from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
+from .utilities import resolve_changes_summary
 
 #
 # Branches
@@ -66,6 +67,7 @@ class BranchView(generic.ObjectView):
             'stats': stats,
             'latest_change': latest_change,
             'last_job': last_job,
+            'last_job_errored': last_job is not None and last_job.status == JobStatusChoices.STATUS_ERRORED,
             'conflicts_count': ChangeDiff.objects.filter(branch=instance, conflicts__isnull=False).count(),
         }
 
@@ -180,29 +182,13 @@ class BranchJobReportView(generic.ObjectView):
         changes_summary = None
         stored = last_job.data.get('changes_summary') if last_job and last_job.data else None
         if stored:
-            def _resolve(d):
-                result = {}
-                for key, count in d.items():
-                    app_label, model = key.split('.', 1)
-                    try:
-                        ct = ContentType.objects.get_by_natural_key(app_label, model)
-                        result[ct] = count
-                    except ContentType.DoesNotExist:
-                        pass
-                return result
-            changes_summary = {
-                'creates': _resolve(stored.get('creates', {})),
-                'creates_total': stored.get('creates_total', 0),
-                'updates': _resolve(stored.get('updates', {})),
-                'updates_total': stored.get('updates_total', 0),
-                'deletes': _resolve(stored.get('deletes', {})),
-                'deletes_total': stored.get('deletes_total', 0),
-            }
+            changes_summary = resolve_changes_summary(stored)
         has_unsynced_changes = (
             last_job and last_job.data and last_job.data.get('has_unsynced_changes', False)
         )
         return {
             'last_job': last_job,
+            'job_type': job_type,
             'report_entries': report_entries,
             'changes_summary': changes_summary,
             'has_unsynced_changes': has_unsynced_changes,

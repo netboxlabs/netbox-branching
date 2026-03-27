@@ -33,7 +33,7 @@
 {% endblock %}
 
 {% block content %}
-  {% if last_job.status == 'errored' %}
+  {% if last_job_errored %}
     <div class="alert alert-danger d-flex justify-content-between align-items-start" role="alert">
       <div>
         <h4 class="alert-title">
