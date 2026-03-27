@@ -46,16 +46,15 @@ def _analyze_integrity_error(exc):
         # diag attributes are locale-independent catalog values (psycopg3).
         table_name = getattr(diag, 'table_name', None) if diag else None
 
-        # Field name: set for single-column violations; None for composite unique constraints.
-        field = getattr(diag, 'column_name', None) if diag else None
-
-        # Value: not available as a catalog value — parse from diag.message_detail.
-        # This is locale-dependent and returns None on non-English PostgreSQL locales.
+        # Format: "Key (field)=(value) already exists." — locale-dependent; returns None
+        # for non-English PostgreSQL locales, falling back to the generic message.
+        field = None
         value = None
-        if field:
-            value_match = re.search(r'Key \((.+?)\)=\((.+?)\)', diag.message_detail or '')
-            if value_match:
-                value = value_match.group(2)
+        if diag and diag.message_detail:
+            detail_match = re.search(r'Key \((.+?)\)=\((.+?)\)', diag.message_detail)
+            if detail_match:
+                field = detail_match.group(1)
+                value = detail_match.group(2)
 
         return {
             'type': 'unique_constraint',
