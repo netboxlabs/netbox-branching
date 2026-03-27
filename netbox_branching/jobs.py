@@ -140,21 +140,12 @@ class SyncBranchJob(JobRunner):
         # Disconnect changelog handlers
         self._disconnect_signal_receivers()
 
-        # Snapshot pending changes before syncing
-        branch = self.job.object
-        self.job.data['changes_summary'] = _snapshot_changes_summary(branch.get_unsynced_changes())
-
         # Sync the branch
         try:
+            branch = self.job.object
             branch.sync(user=self.job.user, commit=commit)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
-        except (IntegrityError, ValidationError) as e:
-            # TODO: Can JobRunner be extended to handle this more cleanly?
-            # Ensure that signal handlers are reconnected
-            self._reconnect_signal_receivers()
-            self.job.data['report'].append(build_error_report(e))
-            raise
         except Exception:
             # TODO: Can JobRunner be extended to handle this more cleanly?
             # Ensure that signal handlers are reconnected
@@ -185,6 +176,7 @@ class MergeBranchJob(JobRunner):
 
         # Snapshot pending changes before merging
         branch = self.job.object
+        self.job.data['job_type'] = 'merge'
         self.job.data['changes_summary'] = _snapshot_changes_summary(branch.get_unmerged_changes())
         self.job.data['has_unsynced_changes'] = branch.get_unsynced_changes().exists()
         self.job.data['merge_strategy'] = branch.merge_strategy or BranchMergeStrategyChoices.ITERATIVE

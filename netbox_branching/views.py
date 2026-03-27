@@ -152,12 +152,9 @@ class BranchJobReportView(generic.ObjectView):
     def get_extra_context(self, request, instance):
         last_job = instance.jobs.order_by('created').last()
         report_entries = []
-        job_type = 'merge'
-        if last_job and last_job.name == SyncBranchJob.Meta.name:
-            job_type = 'sync'
-        elif last_job and last_job.name == RevertBranchJob.Meta.name:
-            job_type = 'revert'
-        merge_strategy = last_job.data.get('merge_strategy') if last_job and last_job.data else None
+        job_data = last_job.data if last_job and last_job.data else {}
+        job_type = job_data.get('job_type', 'merge')
+        merge_strategy = job_data.get('merge_strategy')
         if last_job and last_job.data and last_job.data.get('report'):
             for entry in last_job.data['report']:
                 object_url = None
