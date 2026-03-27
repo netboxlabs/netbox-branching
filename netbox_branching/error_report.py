@@ -180,7 +180,7 @@ def get_merge_recommendations(entry):
                            ' so the values no longer conflict.')
         return [
             rename_rec,
-            _('Switch to the Squash merge strategy, which handles unique constraint conflicts automatically.'),
+            _('Switch to the Squash merge strategy, which handles these types of conflicts better.'),
         ]
 
     if error_type == 'validation_error':
