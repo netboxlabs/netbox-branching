@@ -1,7 +1,10 @@
+from typing import ClassVar
+
 from core.api.serializers import JobSerializer
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseBadRequest
 from drf_spectacular.utils import extend_schema
+from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired
 from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
 from netbox.plugins import get_plugin_config
 from rest_framework import status
@@ -9,11 +12,12 @@ from rest_framework.decorators import action
 from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
-from rest_framework.viewsets import ModelViewSet
+from rest_framework.viewsets import ModelViewSet, ViewSet
 
 from netbox_branching import filtersets
 from netbox_branching.jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
+from netbox_branching.utilities import get_branchable_object_types
 
 from . import serializers
 
@@ -177,3 +181,27 @@ class ChangeDiffViewSet(NetBoxReadOnlyModelViewSet):
     queryset = ChangeDiff.objects.all()
     serializer_class = serializers.ChangeDiffSerializer
     filterset_class = filtersets.ChangeDiffFilterSet
+
+
+class BranchableModelViewSet(ViewSet):
+    """
+    List all models that support branching, including models from custom plugins.
+    """
+    permission_classes: ClassVar = [IsAuthenticatedOrLoginNotRequired]
+
+    def list(self, request):
+        data = []
+        for ot in get_branchable_object_types().order_by('app_label', 'model'):
+            entry = {
+                'app_label': ot.app_label,
+                'model': ot.model,
+                'verbose_name': None,
+                'verbose_name_plural': None,
+            }
+            if model_class := ot.model_class():
+                entry['verbose_name'] = model_class._meta.verbose_name
+                entry['verbose_name_plural'] = model_class._meta.verbose_name_plural
+            data.append(entry)
+
+        serializer = serializers.BranchableModelSerializer(data, many=True)
+        return Response(serializer.data)
