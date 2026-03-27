@@ -75,11 +75,7 @@ def get_job_log(job):
     """
     Initialize and return the job log.
     """
-    job.data = {
-        'log': [],
-        'report': [],
-        'changes_summary': None,
-    }
+    job.data = {'log': []}
     return job.data['log']
 
 
@@ -176,6 +172,7 @@ class MergeBranchJob(JobRunner):
 
         # Snapshot pending changes before merging
         branch = self.job.object
+        self.job.data['report'] = []
         self.job.data['changes_summary'] = _snapshot_changes_summary(branch.get_unmerged_changes())
         self.job.data['has_unsynced_changes'] = branch.get_unsynced_changes().exists()
         self.job.data['merge_strategy'] = branch.merge_strategy or BranchMergeStrategyChoices.ITERATIVE

@@ -8,7 +8,6 @@ from django.utils.translation import gettext as _
 from .choices import BranchMergeStrategyChoices
 
 __all__ = (
-    'annotate_validation_error',
     'build_error_report',
     'get_entry_message',
     'get_merge_recommendations',
