@@ -158,10 +158,10 @@
       </div>
     {% endif %}
 
-    {% if last_job %}
+    {% if last_job and job_type != 'revert' %}
       <div class="card mb-3">
         <div class="card-header d-flex justify-content-between align-items-center">
-          <strong>{% if last_job.name == 'Sync branch' %}{% trans "Sync Failures" %}{% else %}{% trans "Merge Failures" %}{% endif %}</strong>
+          <strong>{% if job_type == 'sync' %}{% trans "Sync Failures" %}{% else %}{% trans "Merge Failures" %}{% endif %}</strong>
           <span class="text-muted small">
             <a href="{{ last_job.get_absolute_url }}">{{ last_job.name }}</a>
             &mdash; {{ last_job.created|isodatetime }}

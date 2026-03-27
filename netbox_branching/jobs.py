@@ -223,8 +223,7 @@ class RevertBranchJob(JobRunner):
             branch.revert(user=self.job.user, commit=commit)
         except AbortTransaction:
             logger.info("Dry run completed; rolling back changes")
-        except (IntegrityError, ValidationError) as e:
-            self.job.data['report'].append(build_error_report(e))
+        except (IntegrityError, ValidationError):
             raise
 
 

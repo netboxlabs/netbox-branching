@@ -30,6 +30,7 @@ from utilities.querysets import RestrictedQuerySet
 from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
+from netbox_branching.error_report import annotate_validation_error
 from netbox_branching.merge_strategies import get_merge_strategy
 from netbox_branching.signals import *
 from netbox_branching.utilities import (
@@ -438,9 +439,9 @@ class Branch(JobsMixin, PrimaryModel):
                     try:
                         change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
                     except ValidationError as e:
-                        e.netbox_branching_model = model_class
-                        e.netbox_branching_object_id = change.changed_object_id
-                        e.netbox_branching_content_type_id = change.changed_object_type_id
+                        annotate_validation_error(
+                            e, model_class, change.changed_object_id, change.changed_object_type_id
+                        )
                         raise
                 if not commit:
                     raise AbortTransaction()

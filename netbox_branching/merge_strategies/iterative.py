@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS
 from netbox.context_managers import event_tracking
 
+from ..error_report import annotate_validation_error
 from .strategy import MergeStrategy
 
 __all__ = (
@@ -32,9 +33,7 @@ class IterativeMergeStrategy(MergeStrategy):
                 try:
                     change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
                 except ValidationError as e:
-                    e.netbox_branching_model = model_class
-                    e.netbox_branching_object_id = change.changed_object_id
-                    e.netbox_branching_content_type_id = change.changed_object_type_id
+                    annotate_validation_error(e, model_class, change.changed_object_id, change.changed_object_type_id)
                     raise
 
         self._clean(models)
@@ -55,9 +54,7 @@ class IterativeMergeStrategy(MergeStrategy):
                 try:
                     change.undo(branch, logger=logger)
                 except ValidationError as e:
-                    e.netbox_branching_model = model_class
-                    e.netbox_branching_object_id = change.changed_object_id
-                    e.netbox_branching_content_type_id = change.changed_object_type_id
+                    annotate_validation_error(e, model_class, change.changed_object_id, change.changed_object_type_id)
                     raise
 
         # Perform cleanup tasks

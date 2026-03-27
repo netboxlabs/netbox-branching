@@ -5,7 +5,23 @@ from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.utils.translation import gettext as _
 
-__all__ = ('build_error_report', 'get_entry_message', 'get_merge_recommendations', 'get_sync_recommendations')
+from .choices import BranchMergeStrategyChoices
+
+__all__ = (
+    'annotate_validation_error',
+    'build_error_report',
+    'get_entry_message',
+    'get_merge_recommendations',
+    'get_sync_recommendations',
+)
+
+
+def annotate_validation_error(exc, model_class, object_id, content_type_id):
+    """Attach branch operation context to a ValidationError before re-raising."""
+    exc.netbox_branching_model = model_class
+    exc.netbox_branching_object_id = object_id
+    exc.netbox_branching_content_type_id = content_type_id
+
 
 # PostgreSQL error codes
 PG_UNIQUE_VIOLATION = '23505'
@@ -61,14 +77,14 @@ def _analyze_validation_error(exc):
     is_uniqueness = False
     first_field = None
 
-    if hasattr(exc, 'message_dict'):
-        first_field = next(iter(exc.message_dict), None)
-        for errors in exc.message_dict.values():
-            if any('already exists' in e for e in errors):
+    if hasattr(exc, 'error_dict'):
+        first_field = next(iter(exc.error_dict), None)
+        for field_errors in exc.error_dict.values():
+            if any(e.code in ('unique', 'unique_together') for e in field_errors):
                 is_uniqueness = True
                 break
-    elif hasattr(exc, 'messages') and exc.messages:
-        is_uniqueness = any('already exists' in m for m in exc.messages)
+    elif hasattr(exc, 'error_list') and exc.error_list:
+        is_uniqueness = any(e.code in ('unique', 'unique_together') for e in exc.error_list)
 
     return {
         'type': 'unique_constraint' if is_uniqueness else 'validation_error',
@@ -164,7 +180,6 @@ def get_sync_recommendations(entry):
 
 def get_merge_recommendations(entry, merge_strategy=None):
     """Compute actionable recommendations for a failed merge or revert operation."""
-    from .choices import BranchMergeStrategyChoices
     is_squash = merge_strategy == BranchMergeStrategyChoices.SQUASH
 
     error_type = entry.get('type')
