@@ -14,4 +14,5 @@ urlpatterns = [
 
     # Change diffs
     path('changes/', views.ChangeDiffListView.as_view(), name='changediff_list'),
+    path('changes/<int:pk>/', include(get_model_urls('netbox_branching', 'changediff'))),
 ]

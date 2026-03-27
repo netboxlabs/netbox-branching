@@ -13,8 +13,11 @@ from netbox_branching.models import Branch, BranchEvent, ChangeDiff
 __all__ = (
     'BranchEventSerializer',
     'BranchSerializer',
+    'BranchableModelSerializer',
     'ChangeDiffSerializer',
     'CommitSerializer',
+    'ConflictResponseSerializer',
+    'ConflictSummarySerializer',
 )
 
 
@@ -138,5 +141,48 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
         return data
 
 
+class ConflictSummarySerializer(serializers.ModelSerializer):
+    """
+    Compact read-only representation of a conflicting ChangeDiff, included inline
+    in HTTP 409 responses from the sync and merge actions.
+    """
+    object_type = ContentTypeField(read_only=True)
+    action = ChoiceField(choices=ObjectChangeActionChoices, read_only=True)
+    conflicting_data = serializers.SerializerMethodField()
+
+    class Meta:
+        model = ChangeDiff
+        fields = ('id', 'object_type', 'object_id', 'object_repr', 'action', 'conflicts', 'conflicting_data',
+                  'last_updated')
+
+    def get_conflicting_data(self, obj):
+        """
+        Return the original, branch, and main values for only the conflicting fields.
+        """
+        if not obj.conflicts:
+            return None
+        return {
+            'original': {k: v for k, v in (obj.original or {}).items() if k in obj.conflicts},
+            'branch': {k: v for k, v in (obj.modified or {}).items() if k in obj.conflicts},
+            'main': {k: v for k, v in (obj.current or {}).items() if k in obj.conflicts},
+        }
+
+
+class ConflictResponseSerializer(serializers.Serializer):
+    """
+    Shape of the HTTP 409 response body returned by the sync and merge actions.
+    """
+    detail = serializers.CharField()
+    conflicts = ConflictSummarySerializer(many=True)
+
+
 class CommitSerializer(serializers.Serializer):
     commit = serializers.BooleanField(required=False)
+    acknowledge_conflicts = serializers.BooleanField(required=False, default=False)
+
+
+class BranchableModelSerializer(serializers.Serializer):
+    app_label = serializers.CharField(read_only=True)
+    model = serializers.CharField(read_only=True)
+    verbose_name = serializers.CharField(read_only=True, allow_null=True)
+    verbose_name_plural = serializers.CharField(read_only=True, allow_null=True)

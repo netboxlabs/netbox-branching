@@ -517,3 +517,35 @@ class ChangeDiffListView(generic.ObjectListView):
     filterset = filtersets.ChangeDiffFilterSet
     filterset_form = forms.ChangeDiffFilterForm
     table = tables.ChangeDiffTable
+
+
+@register_model_view(ChangeDiff)
+class ChangeDiffView(generic.ObjectView):
+    queryset = ChangeDiff.objects.all()
+
+    def get_extra_context(self, request, instance):
+        # Safely compute altered field sets only when the required data is present
+        altered_in_modified = instance.altered_in_modified if instance.original and instance.modified else set()
+        altered_in_current = instance.altered_in_current if instance.original and instance.current else set()
+        # Compute branch diff (original → modified)
+        if instance.original and instance.modified and altered_in_modified:
+            branch_diff_removed = {k: instance.original[k] for k in altered_in_modified}
+            branch_diff_added = {k: instance.modified[k] for k in altered_in_modified}
+        else:
+            branch_diff_removed = branch_diff_added = None
+
+        # Compute main diff (original → current)
+        if instance.original and instance.current and altered_in_current:
+            main_diff_removed = {k: instance.original[k] for k in altered_in_current}
+            main_diff_added = {k: instance.current[k] for k in altered_in_current}
+        else:
+            main_diff_removed = main_diff_added = None
+
+        return {
+            'altered_in_modified': altered_in_modified,
+            'altered_in_current': altered_in_current,
+            'branch_diff_removed': branch_diff_removed,
+            'branch_diff_added': branch_diff_added,
+            'main_diff_removed': main_diff_removed,
+            'main_diff_added': main_diff_added,
+        }

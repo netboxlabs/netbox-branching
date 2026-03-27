@@ -6,6 +6,7 @@ from core.models import ObjectChange as ObjectChange_
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.fields import ArrayField
 from django.db import DEFAULT_DB_ALIAS, models
+from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
@@ -186,6 +187,9 @@ class ChangeDiff(models.Model):
 
     def __str__(self):
         return f'{self.get_action_display()} {self.object_type.name} {self.object_repr} ({self.object_id})'
+
+    def get_absolute_url(self):
+        return reverse('plugins:netbox_branching:changediff', args=[self.pk])
 
     def save(self, *args, **kwargs):
         self._update_conflicts()
