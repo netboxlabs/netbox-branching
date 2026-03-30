@@ -1,11 +1,12 @@
 import django_filters
-from core.choices import ObjectChangeActionChoices
-from core.models import ObjectType
 from django.contrib.auth import get_user_model
 from django.db.models import Q
 from django.utils.translation import gettext as _
 from netbox.filtersets import BaseFilterSet, NetBoxModelFilterSet
 from utilities import filters
+
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectType
 
 from .choices import *
 from .models import *
@@ -37,7 +38,7 @@ class BranchFilterSet(NetBoxModelFilterSet):
 
     class Meta:
         model = Branch
-        fields = ('id', 'name', 'description', 'owner_id')
+        fields = ('id', 'name', 'description')
 
     def search(self, queryset, name, value):
         if not value.strip():

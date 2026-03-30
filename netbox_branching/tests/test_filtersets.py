@@ -5,6 +5,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelatio
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import ForeignKey, ManyToManyField, ManyToManyRel, ManyToOneRel, OneToOneRel
 from django.test import TestCase
+from django.contrib.auth import get_user_model
 from django.utils.module_loading import import_string
 
 try:
@@ -13,7 +14,6 @@ except ImportError:
     TaggableManager = None
 
 from core.choices import ObjectChangeActionChoices
-from django.contrib.auth import get_user_model
 
 from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.filtersets import BranchEventFilterSet, BranchFilterSet, ChangeDiffFilterSet

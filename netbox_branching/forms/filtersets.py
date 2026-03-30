@@ -1,11 +1,12 @@
-from core.choices import ObjectChangeActionChoices
-from core.models import ObjectType
 from django import forms
 from django.contrib.auth import get_user_model
 from django.utils.translation import gettext as _
 from netbox.forms import NetBoxModelFilterSetForm
 from utilities.forms.fields import ContentTypeMultipleChoiceField, DynamicModelMultipleChoiceField, TagFilterField
 from utilities.forms.rendering import FieldSet
+
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectType
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
