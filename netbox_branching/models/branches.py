@@ -300,6 +300,20 @@ class Branch(JobsMixin, PrimaryModel):
             return False
         return self.last_sync < timezone.now() - timedelta(days=changelog_retention)
 
+    @property
+    def is_stale_warning(self):
+        """
+        Indicates whether the branch is approaching the staleness threshold and at risk of becoming stale.
+        """
+        if self.last_sync is None or self.is_stale:
+            return False
+        if not (changelog_retention := get_config().CHANGELOG_RETENTION):
+            return False
+        if not (warning_threshold := get_plugin_config('netbox_branching', 'stale_warning_threshold')):
+            return False
+        cutoff = timezone.now() - timedelta(days=changelog_retention - warning_threshold)
+        return self.last_sync < cutoff
+
     #
     # Migration handling
     #

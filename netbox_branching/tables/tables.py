@@ -76,6 +76,11 @@ class BranchTable(NetBoxTable):
         false_mark=None,
         verbose_name=_('Stale')
     )
+    is_stale_warning = columns.BooleanColumn(
+        true_mark=mark_safe('<span class="text-warning"><i class="mdi mdi-alert"></i></span>'),
+        false_mark=None,
+        verbose_name=_('Stale warning')
+    )
     conflicts = ConflictsColumn(
         verbose_name=_('Conflicts')
     )
@@ -89,8 +94,8 @@ class BranchTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = Branch
         fields = (
-            'pk', 'id', 'name', 'is_active', 'status', 'is_stale', 'conflicts', 'schema_id', 'description', 'owner',
-            'tags', 'created', 'last_updated',
+            'pk', 'id', 'name', 'is_active', 'status', 'is_stale', 'is_stale_warning', 'conflicts', 'schema_id',
+            'description', 'owner', 'tags', 'created', 'last_updated',
         )
         default_columns = (
             'pk', 'name', 'is_active', 'status', 'is_stale', 'owner', 'conflicts', 'schema_id', 'description',
