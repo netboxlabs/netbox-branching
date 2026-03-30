@@ -1,6 +1,7 @@
 from itertools import chain
 
 import django_filters
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import ForeignKey, ManyToManyField, ManyToManyRel, ManyToOneRel, OneToOneRel
@@ -121,7 +122,6 @@ class BranchFilterSetTestCase(TestCase, BaseFilterSetTests):
 
     # Fields intentionally absent from BranchFilterSet
     ignore_fields = (
-        'owner',
         'schema_id',
         'applied_migrations',
         'merged_time',
@@ -131,9 +131,15 @@ class BranchFilterSetTestCase(TestCase, BaseFilterSetTests):
 
     @classmethod
     def setUpTestData(cls):
+        User = get_user_model()
+        cls.users = (
+            User.objects.create_user(username='user1'),
+            User.objects.create_user(username='user2'),
+        )
+
         branches = (
-            Branch(name='Branch 1', description='foobar1'),
-            Branch(name='Branch 2', description='foobar2'),
+            Branch(name='Branch 1', description='foobar1', owner=cls.users[0]),
+            Branch(name='Branch 2', description='foobar2', owner=cls.users[1]),
             Branch(name='Branch 3', description='foobar3'),
         )
         for branch in branches:
@@ -157,6 +163,14 @@ class BranchFilterSetTestCase(TestCase, BaseFilterSetTests):
 
     def test_status(self):
         params = {'status': [BranchStatusChoices.READY, BranchStatusChoices.MERGED]}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    def test_owner_id(self):
+        params = {'owner_id': [self.users[0].pk]}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 1)
+
+    def test_owner(self):
+        params = {'owner': [self.users[0].username, self.users[1].username]}
         self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
 
     def test_q_name(self):
