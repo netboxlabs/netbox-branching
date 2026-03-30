@@ -305,12 +305,16 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Indicates whether the branch is approaching the staleness threshold and at risk of becoming stale.
         """
-        if self.last_sync is None or self.is_stale:
+        if self.last_sync is None:
             return False
         if not (changelog_retention := get_config().CHANGELOG_RETENTION):
             return False
-        cutoff = timezone.now() - timedelta(days=changelog_retention - STALE_WARNING_THRESHOLD)
-        return self.last_sync < cutoff
+        if changelog_retention <= STALE_WARNING_THRESHOLD:
+            return False
+        now = timezone.now()
+        if self.last_sync < now - timedelta(days=changelog_retention):
+            return False  # Already stale
+        return self.last_sync < now - timedelta(days=changelog_retention - STALE_WARNING_THRESHOLD)
 
     #
     # Migration handling
