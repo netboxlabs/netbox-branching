@@ -39,9 +39,6 @@ class AppConfig(PluginConfig):
         # Job timeout in seconds for long-running operations (sync, merge, revert)
         'job_timeout': 3600,
 
-        # The number of days before staleness at which to display a warning (0 to disable)
-        'stale_warning_threshold': 7,
-
         # Branch action validators
         'sync_validators': [],
         'merge_validators': [],

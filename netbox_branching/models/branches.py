@@ -28,7 +28,7 @@ from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet
 
 from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
-from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
+from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES, STALE_WARNING_THRESHOLD
 from netbox_branching.contextvars import active_branch
 from netbox_branching.merge_strategies import get_merge_strategy
 from netbox_branching.signals import *
@@ -309,9 +309,7 @@ class Branch(JobsMixin, PrimaryModel):
             return False
         if not (changelog_retention := get_config().CHANGELOG_RETENTION):
             return False
-        if not (warning_threshold := get_plugin_config('netbox_branching', 'stale_warning_threshold')):
-            return False
-        cutoff = timezone.now() - timedelta(days=changelog_retention - warning_threshold)
+        cutoff = timezone.now() - timedelta(days=changelog_retention - STALE_WARNING_THRESHOLD)
         return self.last_sync < cutoff
 
     #
