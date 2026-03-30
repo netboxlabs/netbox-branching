@@ -1,11 +1,11 @@
 from itertools import chain
 
 import django_filters
+from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.fields import GenericForeignKey, GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import ForeignKey, ManyToManyField, ManyToManyRel, ManyToOneRel, OneToOneRel
 from django.test import TestCase
-from django.contrib.auth import get_user_model
 from django.utils.module_loading import import_string
 
 try:
