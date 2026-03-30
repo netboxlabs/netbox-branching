@@ -170,7 +170,7 @@ class BranchFilterSetTestCase(TestCase, BaseFilterSetTests):
         self.assertEqual(self.filterset(params, self.queryset).qs.count(), 1)
 
     def test_owner(self):
-        params = {'owner': ['user1', 'user2']}
+        params = {'owner': [self.users[0].username, self.users[1].username]}
         self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
 
     def test_q_name(self):
