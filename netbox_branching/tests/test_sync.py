@@ -215,6 +215,12 @@ class SyncTestCase(TransactionTestCase):
         with event_tracking(self.request):
             Site.objects.get(id=site_id).delete()
 
+        # Verify the ChangeDiff has conflicts populated (branch updated, main deleted)
+        content_type = ContentType.objects.get_for_model(Site)
+        diff = ChangeDiff.objects.get(branch=branch, object_type=content_type, object_id=site_id)
+        self.assertIsNotNone(diff.conflicts)
+        self.assertIn('description', diff.conflicts)
+
         # Sync branch: applies the deletion from main
         branch.sync(user=self.user, commit=True)
 
