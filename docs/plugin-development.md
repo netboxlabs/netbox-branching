@@ -28,6 +28,8 @@ Models that do **not** use `ChangeLoggingMixin` are ineligible for branching sup
 - Junction/through tables managed entirely by many-to-many fields
 - Models you explicitly register as exempt (see below)
 
+**Multi-table inheritance is not supported.** Models that use Django's [multi-table inheritance](https://docs.djangoproject.com/en/6.0/topics/db/models/#multi-table-inheritance) are not compatible with NetBox Branching. Each model in a branch must map to a single, self-contained table.
+
 These models are still accessible from within a branch, but changes to them made inside a branch are **not isolated** — they affect the main schema immediately, just as if no branch were active.
 
 ### Models That Should Not Be Branched
