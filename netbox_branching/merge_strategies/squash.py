@@ -3,6 +3,7 @@ Squash merge strategy implementation with functions for collapsing and ordering 
 """
 from enum import StrEnum
 
+from dcim.models.cables import Cable, trace_paths
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import DEFAULT_DB_ALIAS, models
@@ -198,6 +199,7 @@ class SquashMergeStrategy(MergeStrategy):
 
         # Apply collapsed changes in order
         logger.info(f"Applying {len(ordered_changes)} collapsed changes...")
+        created_cable_ids = []
         for i, collapsed in enumerate(ordered_changes, 1):
             model_class = collapsed.model_class
             models.add(model_class)
@@ -215,6 +217,17 @@ class SquashMergeStrategy(MergeStrategy):
                 # Create a dummy ObjectChange from the collapsed change and apply it
                 dummy_change = collapsed.generate_object_change()
                 dummy_change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+
+            # Track Cable CREATEs for path retracing after all changes are applied
+            if collapsed.final_action == ActionType.CREATE and issubclass(model_class, Cable):
+                created_cable_ids.append(collapsed.key[1])
+
+        # Retrace cable paths for any cables created during merge.
+        # Squash merge applies Cable CREATEs via DeserializedObject.save() which bypasses
+        # Cable.save() and therefore the trace_paths signal. We trigger it manually after
+        # all CableTerminations have been applied.
+        if created_cable_ids:
+            self._retrace_cable_paths(created_cable_ids, logger)
 
         # Perform cleanup tasks
         self._clean(models)
@@ -257,6 +270,25 @@ class SquashMergeStrategy(MergeStrategy):
 
         # Perform cleanup tasks
         self._clean(models)
+
+    @staticmethod
+    def _retrace_cable_paths(cable_ids, logger):
+        """
+        Trigger cable path retracing for the given Cable IDs.
+
+        Squash merge applies Cable CREATEs via DeserializedObject.save(), which calls
+        Model.save_base(raw=True) and bypasses Cable.save(). This means the trace_paths
+        signal is never sent, so CablePath records are not created. This method manually
+        sends that signal after all CableTerminations have been applied.
+        """
+        for cable_id in cable_ids:
+            try:
+                cable = Cable.objects.get(pk=cable_id)
+                cable._terminations_modified = True
+                trace_paths.send(Cable, instance=cable, created=True)
+                logger.debug(f"Retraced cable paths for Cable {cable_id}")
+            except Cable.DoesNotExist:
+                logger.warning(f"Cable {cable_id} not found for cable path retracing")
 
     @staticmethod
     def _get_fk_references(model_class, data, changed_objects):
