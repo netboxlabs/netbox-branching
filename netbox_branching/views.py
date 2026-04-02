@@ -15,6 +15,7 @@ from utilities.views import ViewTab, register_model_view
 
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
+from .constants import QUERY_PARAM
 from .error_report import get_entry_message, get_merge_recommendations
 from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
@@ -162,7 +163,7 @@ class BranchJobReportView(generic.ObjectView):
                     ct = ContentType.objects.get_for_id(ct_id)
                     obj = ct.get_object_for_this_type(pk=obj_id)
                     if hasattr(obj, 'get_absolute_url'):
-                        object_url = f'{obj.get_absolute_url()}?_branch={instance.schema_id}'
+                        object_url = f'{obj.get_absolute_url()}?{QUERY_PARAM}={instance.schema_id}'
                     object_str = str(obj)
                 except (ContentType.DoesNotExist, ObjectDoesNotExist):
                     object_str = f'#{obj_id}'
