@@ -9,12 +9,8 @@ __all__ = (
     'INCLUDE_MODELS',
     'QUERY_PARAM',
     'SKIP_INDEXES',
-    'STALE_WARNING_THRESHOLD',
 )
 
-
-# Number of days before staleness at which to display a stale warning
-STALE_WARNING_THRESHOLD = 7
 
 # HTTP cookie
 COOKIE_NAME = 'active_branch'

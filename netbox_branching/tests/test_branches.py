@@ -165,31 +165,31 @@ class BranchTestCase(TransactionTestCase):
         self.assertTrue(branch.is_stale)
 
     @override_settings(CHANGELOG_RETENTION=10)
-    def test_is_stale_warning(self):
+    def test_stale_warning(self):
         branch = Branch(name='Branch 1')
         branch.save(provision=False)
 
-        # Not yet in warning window (2 days ago, threshold is 3 days before expiry)
+        # Not yet in warning window (2 days ago, 8 days remaining > 7-day default threshold)
         branch.last_sync = timezone.now() - timedelta(days=2)
         branch.save()
-        self.assertFalse(branch.is_stale_warning)
+        self.assertIsNone(branch.stale_warning)
 
-        # Within warning window (4 days ago, within last 7 days of 10-day retention)
+        # Within warning window (4 days ago, 6 days remaining <= 7-day default threshold)
         branch.last_sync = timezone.now() - timedelta(days=4)
         branch.save()
-        self.assertTrue(branch.is_stale_warning)
+        self.assertEqual(branch.stale_warning, 6)
 
         # Already stale (11 days ago) — warning should not show
         branch.last_sync = timezone.now() - timedelta(days=11)
         branch.save()
-        self.assertFalse(branch.is_stale_warning)
+        self.assertIsNone(branch.stale_warning)
 
     @override_settings(CHANGELOG_RETENTION=7)
-    def test_is_stale_warning_threshold_equals_retention(self):
-        """When CHANGELOG_RETENTION <= STALE_WARNING_THRESHOLD, warning should never show."""
+    def test_stale_warning_threshold_equals_retention(self):
+        """When stale_warning_threshold equals CHANGELOG_RETENTION, warning shows for all non-stale branches."""
         branch = Branch(name='Branch 1')
         branch.save(provision=False)
 
         branch.last_sync = timezone.now() - timedelta(days=6)
         branch.save()
-        self.assertFalse(branch.is_stale_warning)
+        self.assertEqual(branch.stale_warning, 1)

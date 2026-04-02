@@ -80,6 +80,24 @@ Note that a valid prefix is required, as the randomly-generated branch ID alone 
 
 ---
 
+## `stale_warning_threshold`
+
+Default: `7`
+
+The number of days before a branch becomes stale at which a warning is displayed on the branch detail page. Set to `0` to disable the warning entirely.
+
+For example, if `CHANGELOG_RETENTION` is set to 30 days and `stale_warning_threshold` is set to 7, the warning will appear when a branch has not been synced within the last 23 days (i.e. 7 or fewer days remain before the branch becomes stale).
+
+```python
+PLUGINS_CONFIG = {
+    'netbox_branching': {
+        'stale_warning_threshold': 14,
+    }
+}
+```
+
+---
+
 ## `sync_validators`
 
 Default: `[]` (empty list)

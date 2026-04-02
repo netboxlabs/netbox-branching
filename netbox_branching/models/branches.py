@@ -28,7 +28,7 @@ from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet
 
 from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
-from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES, STALE_WARNING_THRESHOLD
+from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
 from netbox_branching.merge_strategies import get_merge_strategy
 from netbox_branching.signals import *
@@ -287,34 +287,40 @@ class Branch(JobsMixin, PrimaryModel):
             last_time = event.time
         return history
 
+    def _days_until_stale(self):
+        """
+        Return the number of days remaining until the branch becomes stale, or None if indeterminate
+        (branch not yet provisioned or changelog retention is disabled). Returns a negative number if
+        the branch is already stale.
+        """
+        if self.last_sync is None:
+            return None
+        if not (changelog_retention := get_config().CHANGELOG_RETENTION):
+            return None
+        stale_at = self.last_sync + timedelta(days=changelog_retention)
+        return (stale_at - timezone.now()).days
+
     @property
     def is_stale(self):
         """
         Indicates whether the branch is too far out of date to be synced.
         """
-        if self.last_sync is None:
-            # Branch has not yet been provisioned
-            return False
-        if not (changelog_retention := get_config().CHANGELOG_RETENTION):
-            # Changelog retention is disabled
-            return False
-        return self.last_sync < timezone.now() - timedelta(days=changelog_retention)
+        days = self._days_until_stale()
+        return days is not None and days < 0
 
     @property
-    def is_stale_warning(self):
+    def stale_warning(self):
         """
-        Indicates whether the branch is approaching the staleness threshold and at risk of becoming stale.
+        Return the number of days remaining until the branch becomes stale if within the warning
+        window, else None.
         """
-        if self.last_sync is None:
-            return False
-        if not (changelog_retention := get_config().CHANGELOG_RETENTION):
-            return False
-        if changelog_retention <= STALE_WARNING_THRESHOLD:
-            return False
-        now = timezone.now()
-        if self.last_sync < now - timedelta(days=changelog_retention):
-            return False  # Already stale
-        return self.last_sync < now - timedelta(days=changelog_retention - STALE_WARNING_THRESHOLD)
+        days = self._days_until_stale()
+        if days is None or days <= 0:
+            return None
+        threshold = get_plugin_config('netbox_branching', 'stale_warning_threshold')
+        if not threshold or days > threshold:
+            return None
+        return days
 
     #
     # Migration handling

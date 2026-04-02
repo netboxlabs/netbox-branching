@@ -42,15 +42,17 @@
       <div class="text-secondary">{{ last_job.error }}</div>
     </div>
   {% endif %}
-  {% if object.is_stale_warning %}
+  {% with days_remaining=object.stale_warning %}
+  {% if days_remaining %}
     <div class="alert alert-warning d-flex align-items-center" role="alert">
       <i class="mdi mdi-alert fs-1 text-warning me-3"></i>
       <div>
         <h4 class="alert-title text-warning mb-0">{% trans "Branch is at risk of becoming stale" %}</h4>
-        {% blocktrans %}This branch has not been synced recently and is at risk of becoming stale. Sync the branch to avoid losing the ability to merge.{% endblocktrans %}
+        {% blocktrans count days=days_remaining %}This branch will become stale in {{ days }} day. Sync the branch to avoid losing the ability to merge.{% plural %}This branch will become stale in {{ days }} days. Sync the branch to avoid losing the ability to merge.{% endblocktrans %}
       </div>
     </div>
   {% endif %}
+  {% endwith %}
   {% if object.pending_migrations %}
     <div class="alert alert-warning d-flex justify-content-between align-items-center" role="alert">
       <i class="mdi mdi-alert fs-1 text-warning"></i>
@@ -112,7 +114,7 @@
                   <span class="text-danger" title="{% trans "Branch is stale and can no longer be synced" %}">
                     <i class="mdi mdi-alert-circle"></i>
                   </span>
-                {% elif object.is_stale_warning %}
+                {% elif object.stale_warning %}
                   <span class="text-warning" title="{% trans "Branch is at risk of becoming stale" %}">
                     <i class="mdi mdi-alert"></i>
                   </span>
