@@ -33,6 +33,7 @@ _REC_TRY_SQUASH_DB = _l(
 )
 
 __all__ = (
+    'annotate_validation_error',
     'build_error_report',
     'get_entry_message',
     'get_merge_recommendations',
