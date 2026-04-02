@@ -176,7 +176,7 @@ class BranchJobReportView(generic.ObjectView):
         return entries
 
     def get_extra_context(self, request, instance):
-        last_job = instance.jobs.filter(name='Merge branch').order_by('created').last()
+        last_job = instance.jobs.filter(name=MergeBranchJob.Meta.name).order_by('created').last()
         job_data = last_job.data if last_job and last_job.data else {}
         merge_strategy = job_data.get('merge_strategy')
         report_entries = self._build_report_entries(instance, last_job, merge_strategy) if last_job and job_data else []
