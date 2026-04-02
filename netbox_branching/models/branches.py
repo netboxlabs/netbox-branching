@@ -1,5 +1,6 @@
 import importlib
 import logging
+import math
 import random
 import string
 from collections import defaultdict
@@ -298,7 +299,7 @@ class Branch(JobsMixin, PrimaryModel):
         if not (changelog_retention := get_config().CHANGELOG_RETENTION):
             return None
         stale_at = self.last_sync + timedelta(days=changelog_retention)
-        return (stale_at - timezone.now()).days
+        return math.ceil((stale_at - timezone.now()).total_seconds() / 86400)
 
     @property
     def is_stale(self):
