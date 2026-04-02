@@ -155,7 +155,11 @@
       </div>
     {% endif %}
 
-    {% if last_job %}
+    {% if not last_job %}
+      <div class="card mb-3">
+        <div class="card-body text-secondary">{% trans "No merge has been run for this branch." %}</div>
+      </div>
+    {% elif report_entries %}
       <div class="card mb-3">
         <div class="card-header d-flex justify-content-between align-items-center">
           <strong>{% trans "Merge Failures" %}</strong>
@@ -165,67 +169,79 @@
             {% if last_job.user %} {% trans "by" %} {{ last_job.user }}{% endif %}
           </span>
         </div>
-        {% if report_entries %}
-          <table class="table table-hover mb-0">
-            <thead>
-              <tr>
-                <th>{% trans "Type" %}</th>
-                <th>{% trans "Object" %}</th>
-                <th>{% trans "Field" %}</th>
-                <th>{% trans "Value" %}</th>
-                <th>{% trans "Error" %}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for entry in report_entries %}
-                <tr>
-                  <td>{% if entry.model %}{% badge entry.model|title "secondary" %}{% else %}—{% endif %}</td>
-                  <td>
-                    {% if entry.object_url %}
-                      <a href="{{ entry.object_url }}">{{ entry.object_str }}</a>
-                    {% elif entry.object_str %}
-                      {{ entry.object_str }}
-                    {% else %}
-                      —
-                    {% endif %}
-                  </td>
-                  <td>{{ entry.field|default:"—" }}</td>
-                  <td>{% if entry.value %}<code>{{ entry.value }}</code>{% else %}—{% endif %}</td>
-                  <td>{{ entry.message }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        {% else %}
-          <div class="card-body text-secondary">{{ last_job.error }}</div>
-        {% endif %}
-      </div>
-      {% if report_entries %}
-        <div class="card mb-3">
-          <div class="card-header">
-            <strong>{% trans "Recommendations" %}</strong>
-          </div>
-          <div class="list-group list-group-flush">
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>{% trans "Type" %}</th>
+              <th>{% trans "Object" %}</th>
+              <th>{% trans "Field" %}</th>
+              <th>{% trans "Value" %}</th>
+              <th>{% trans "Error" %}</th>
+            </tr>
+          </thead>
+          <tbody>
             {% for entry in report_entries %}
-              <div class="list-group-item">
-                {% if entry.object_str or entry.model %}
-                  <p class="mb-1 fw-semibold">
-                    {% if entry.model %}{% badge entry.model|title "secondary" %} {% endif %}{{ entry.object_str }}
-                  </p>
-                {% endif %}
-                <ol class="mb-0">
-                  {% for rec in entry.recommendations %}
-                    <li value="{{ forloop.counter }}">{{ rec }}</li>
-                    {% if not forloop.last %}
-                      <li class="list-unstyled text-muted small fst-italic py-1">— {% trans "or" %} —</li>
-                    {% endif %}
-                  {% endfor %}
-                </ol>
-              </div>
+              <tr>
+                <td>{% if entry.model %}{% badge entry.model|title "secondary" %}{% else %}—{% endif %}</td>
+                <td>
+                  {% if entry.object_url %}
+                    <a href="{{ entry.object_url }}">{{ entry.object_str }}</a>
+                  {% elif entry.object_str %}
+                    {{ entry.object_str }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td>{{ entry.field|default:"—" }}</td>
+                <td>{% if entry.value %}<code>{{ entry.value }}</code>{% else %}—{% endif %}</td>
+                <td>{{ entry.message }}</td>
+              </tr>
             {% endfor %}
-          </div>
+          </tbody>
+        </table>
+      </div>
+      <div class="card mb-3">
+        <div class="card-header">
+          <strong>{% trans "Recommendations" %}</strong>
         </div>
-      {% endif %}
+        <div class="list-group list-group-flush">
+          {% for entry in report_entries %}
+            <div class="list-group-item">
+              {% if entry.object_str or entry.model %}
+                <p class="mb-1 fw-semibold">
+                  {% if entry.model %}{% badge entry.model|title "secondary" %} {% endif %}{{ entry.object_str }}
+                </p>
+              {% endif %}
+              <ol class="mb-0">
+                {% for rec in entry.recommendations %}
+                  <li value="{{ forloop.counter }}">{{ rec }}</li>
+                  {% if not forloop.last %}
+                    <li class="list-unstyled text-muted small fst-italic py-1">— {% trans "or" %} —</li>
+                  {% endif %}
+                {% endfor %}
+              </ol>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    {% elif last_job.error %}
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <strong>{% trans "Merge Failures" %}</strong>
+          <span class="text-muted small">
+            <a href="{{ last_job.get_absolute_url }}">{{ last_job.name }}</a>
+            &mdash; {{ last_job.created|isodatetime }}
+            {% if last_job.user %} {% trans "by" %} {{ last_job.user }}{% endif %}
+          </span>
+        </div>
+        <div class="card-body text-secondary">{{ last_job.error }}</div>
+      </div>
+    {% else %}
+      <div class="card mb-3">
+        <div class="card-body text-success">
+          <i class="mdi mdi-check-bold"></i> {% trans "Merge completed successfully." %}
+        </div>
+      </div>
     {% endif %}
 
     <div class="text-end mb-3">
