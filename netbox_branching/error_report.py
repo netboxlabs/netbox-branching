@@ -46,7 +46,6 @@ def annotate_validation_error(exc, model_class, object_id, content_type_id):
     exc.netbox_branching_content_type_id = content_type_id
 
 
-
 def _analyze_integrity_error(exc, table_model_map):
     """Parse a Django IntegrityError into a structured report entry (factual data only)."""
     cause = exc.__cause__
