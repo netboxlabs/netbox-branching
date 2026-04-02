@@ -95,11 +95,13 @@ def _analyze_validation_error(exc):
     first_field = None
 
     if hasattr(exc, 'error_dict'):
-        first_field = next(iter(exc.error_dict), None)
-        for field_errors in exc.error_dict.values():
+        for field, field_errors in exc.error_dict.items():
             if any(e.code in ('unique', 'unique_together') for e in field_errors):
                 is_uniqueness = True
+                first_field = field
                 break
+        if not is_uniqueness:
+            first_field = next(iter(exc.error_dict), None)
     elif hasattr(exc, 'error_list') and exc.error_list:
         is_uniqueness = any(e.code in ('unique', 'unique_together') for e in exc.error_list)
 
