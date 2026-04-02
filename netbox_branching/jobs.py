@@ -31,7 +31,9 @@ def get_job_log(job):
     """
     Initialize and return the job log.
     """
-    job.data = {'log': []}
+    if job.data is None:
+        job.data = {}
+    job.data.setdefault('log', [])
     return job.data['log']
 
 
