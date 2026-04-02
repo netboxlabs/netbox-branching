@@ -1,5 +1,4 @@
 import re
-from functools import lru_cache
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
@@ -47,14 +46,8 @@ def annotate_validation_error(exc, model_class, object_id, content_type_id):
     exc.netbox_branching_content_type_id = content_type_id
 
 
-@lru_cache(maxsize=None)
-def _table_to_model(table_name):
-    """Return the verbose_name for a Django model given its DB table name, or None."""
-    table_map = {model._meta.db_table: model._meta.verbose_name for model in apps.get_models()}
-    return table_map.get(table_name)
 
-
-def _analyze_integrity_error(exc):
+def _analyze_integrity_error(exc, table_model_map):
     """Parse a Django IntegrityError into a structured report entry (factual data only)."""
     cause = exc.__cause__
     # psycopg3 uses 'sqlstate'; keep 'pgcode' fallback for forward-compatibility.
@@ -77,7 +70,7 @@ def _analyze_integrity_error(exc):
 
         return {
             'type': 'unique_constraint',
-            'model': _table_to_model(table_name) if table_name else None,
+            'model': table_model_map.get(table_name) if table_name else None,
             'field': field,
             'value': value,
             'object_id': None,
@@ -126,8 +119,9 @@ def build_error_report(exc):
     Analyze an exception and return a structured report entry dict containing:
     type, model, field, value, object_id, content_type_id.
     """
+    table_model_map = {model._meta.db_table: model._meta.verbose_name for model in apps.get_models()}
     if isinstance(exc, IntegrityError):
-        return _analyze_integrity_error(exc)
+        return _analyze_integrity_error(exc, table_model_map)
     if isinstance(exc, ValidationError):
         return _analyze_validation_error(exc)
     return {
