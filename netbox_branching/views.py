@@ -149,40 +149,40 @@ class BranchJobReportView(generic.ObjectView):
     queryset = Branch.objects.all()
     template_name = 'netbox_branching/branch_job_report.html'
 
+    def _build_report_entries(self, instance, last_job, merge_strategy):
+        """Resolve each raw report entry into a display-ready dict with message, recommendations, and object info."""
+        entries = []
+        for entry in last_job.data.get('report', []):
+            object_url = None
+            object_str = None
+            ct_id = entry.get('content_type_id')
+            obj_id = entry.get('object_id')
+            if ct_id and obj_id:
+                try:
+                    ct = ContentType.objects.get_for_id(ct_id)
+                    obj = ct.get_object_for_this_type(pk=obj_id)
+                    if hasattr(obj, 'get_absolute_url'):
+                        object_url = f'{obj.get_absolute_url()}?_branch={instance.schema_id}'
+                    object_str = str(obj)
+                except (ContentType.DoesNotExist, ObjectDoesNotExist):
+                    object_str = f'#{obj_id}'
+            entries.append({
+                **entry,
+                'message': get_entry_message(entry),
+                'recommendations': get_merge_recommendations(entry, merge_strategy=merge_strategy),
+                'object_url': object_url,
+                'object_str': object_str,
+            })
+        return entries
+
     def get_extra_context(self, request, instance):
         last_job = instance.jobs.order_by('created').last()
-        report_entries = []
         job_data = last_job.data if last_job and last_job.data else {}
         merge_strategy = job_data.get('merge_strategy')
-        if last_job and last_job.data and last_job.data.get('report'):
-            for entry in last_job.data['report']:
-                object_url = None
-                object_str = None
-                ct_id = entry.get('content_type_id')
-                obj_id = entry.get('object_id')
-                if ct_id and obj_id:
-                    try:
-                        ct = ContentType.objects.get_for_id(ct_id)
-                        obj = ct.get_object_for_this_type(pk=obj_id)
-                        object_url = f'{obj.get_absolute_url()}?_branch={instance.schema_id}'
-                        object_str = str(obj)
-                    except (ContentType.DoesNotExist, ObjectDoesNotExist, AttributeError):
-                        object_str = f'#{obj_id}'
-                recs = get_merge_recommendations(entry, merge_strategy=merge_strategy)
-                report_entries.append({
-                    **entry,
-                    'message': get_entry_message(entry),
-                    'recommendations': recs,
-                    'object_url': object_url,
-                    'object_str': object_str,
-                })
-        changes_summary = None
-        stored = last_job.data.get('changes_summary') if last_job and last_job.data else None
-        if stored:
-            changes_summary = resolve_changes_summary(stored)
-        has_unsynced_changes = (
-            last_job and last_job.data and last_job.data.get('has_unsynced_changes', False)
-        )
+        report_entries = self._build_report_entries(instance, last_job, merge_strategy) if last_job and job_data else []
+        stored = job_data.get('changes_summary')
+        changes_summary = resolve_changes_summary(stored) if stored else None
+        has_unsynced_changes = bool(job_data.get('has_unsynced_changes', False))
         return {
             'last_job': last_job,
             'merge_strategy': merge_strategy,

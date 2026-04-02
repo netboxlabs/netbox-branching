@@ -1,11 +1,37 @@
 import re
+from functools import lru_cache
 
 from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.utils.translation import gettext as _
+from django.utils.translation import gettext_lazy as _l
 
 from .choices import BranchMergeStrategyChoices
+from .constants import PG_UNIQUE_VIOLATION
+
+# Recommendation message templates — separated from decision logic in get_merge_recommendations()
+_REC_RENAME_WITH_FIELD = _l(
+    'Rename the conflicting object (where %(field)s="%(value)s") in either the branch'
+    ' or the main schema.'
+)
+_REC_RENAME_GENERIC = _l(
+    'Rename the conflicting object in either the branch or the main schema'
+    ' so the values no longer conflict.'
+)
+_REC_TRY_SQUASH_UNIQUE = _l(
+    'Switch to the Squash merge strategy, which handles these types of conflicts better.'
+)
+_REC_FIX_FIELD = _l(
+    'Fix the invalid value for field "%(field)s" on the affected object in the branch before retrying.'
+)
+_REC_FIX_GENERIC = _l(
+    'Fix the invalid value on the affected object in the branch before retrying.'
+)
+_REC_REVIEW_LOG = _l('Review the job log for full error details.')
+_REC_TRY_SQUASH_DB = _l(
+    'Switch to the Squash merge strategy, which may resolve some database-level conflicts.'
+)
 
 __all__ = (
     'build_error_report',
@@ -21,16 +47,11 @@ def annotate_validation_error(exc, model_class, object_id, content_type_id):
     exc.netbox_branching_content_type_id = content_type_id
 
 
-# PostgreSQL error codes
-PG_UNIQUE_VIOLATION = '23505'
-
-
+@lru_cache(maxsize=None)
 def _table_to_model(table_name):
     """Return the verbose_name for a Django model given its DB table name, or None."""
-    for model in apps.get_models():
-        if model._meta.db_table == table_name:
-            return model._meta.verbose_name
-    return None
+    table_map = {model._meta.db_table: model._meta.verbose_name for model in apps.get_models()}
+    return table_map.get(table_name)
 
 
 def _analyze_integrity_error(exc):
@@ -157,36 +178,18 @@ def get_merge_recommendations(entry, merge_strategy=None):
 
     if error_type == 'unique_constraint':
         if field and value:
-            rename_rec = _('Rename the conflicting object (where %(field)s="%(value)s") in either the branch'
-                           ' or the main schema.') % {
-                'field': field,
-                'value': value,
-            }
+            rename_rec = _REC_RENAME_WITH_FIELD % {'field': field, 'value': value}
         else:
-            rename_rec = _('Rename the conflicting object in either the branch or the main schema'
-                           ' so the values no longer conflict.')
+            rename_rec = _REC_RENAME_GENERIC
         if is_squash:
             return [rename_rec]
-        return [
-            rename_rec,
-            _('Switch to the Squash merge strategy, which handles these types of conflicts better.'),
-        ]
+        return [rename_rec, _REC_TRY_SQUASH_UNIQUE]
 
     if error_type == 'validation_error':
         if field:
-            return [
-                _('Fix the invalid value for field "%(field)s" on the affected object in the branch'
-                  ' before retrying.') % {
-                    'field': field,
-                },
-            ]
-        return [
-            _('Fix the invalid value on the affected object in the branch before retrying.'),
-        ]
+            return [_REC_FIX_FIELD % {'field': field}]
+        return [_REC_FIX_GENERIC]
 
     if is_squash:
-        return [_('Review the job log for full error details.')]
-    return [
-        _('Review the job log for full error details.'),
-        _('Switch to the Squash merge strategy, which may resolve some database-level conflicts.'),
-    ]
+        return [_REC_REVIEW_LOG]
+    return [_REC_REVIEW_LOG, _REC_TRY_SQUASH_DB]

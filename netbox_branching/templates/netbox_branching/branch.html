@@ -38,10 +38,10 @@
       <div>
         <h4 class="alert-title">
           <i class="mdi mdi-alert"></i>
-          The <a href="{{ last_job.get_absolute_url }}" class="alert-link">last job</a> ({{ last_job.name }}) failed with an error.
+          {% blocktrans with url=last_job.get_absolute_url name=last_job.name %}The <a href="{{ url }}" class="alert-link">last job</a> ({{ name }}) failed with an error.{% endblocktrans %}
         </h4>
         {% if last_job.data.report %}
-          <div class="text-secondary">{{ last_job.data.report|length }} error{{ last_job.data.report|length|pluralize }} occurred.</div>
+          <div class="text-secondary">{% blocktrans count count=last_job.data.report|length %}{{ count }} error occurred.{% plural %}{{ count }} errors occurred.{% endblocktrans %}</div>
         {% else %}
           <div class="text-secondary">{{ last_job.error }}</div>
         {% endif %}
