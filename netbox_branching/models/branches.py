@@ -57,6 +57,9 @@ def _migration_only_affects_non_branchable(migration):
     Return True if all model-specific operations in a migration affect only non-branchable
     models. Such migrations should be faked on branch schemas to prevent RunSQL operations
     from inadvertently acting on the main (public) schema via the search_path.
+
+    Migrations with no model-specific operations (e.g. pure RunSQL) are not faked, as we
+    cannot determine their intent without executing them.
     """
     from netbox_branching.utilities import supports_branching
 
@@ -69,8 +72,10 @@ def _migration_only_affects_non_branchable(migration):
         try:
             model = apps.get_model(migration.app_label, model_name)
         except LookupError:
-            logger.warning(f"Could not find model {migration.app_label}.{model_name} for migration {migration}")
-            continue
+            # If we can't resolve the model (e.g. removed in a squashed migration),
+            # conservatively treat it as branchable and don't fake.
+            logger.warning(f"Could not find model {migration.app_label}.{model_name} for migration {migration}; skipping fake")
+            return False
         if supports_branching(model):
             return False
     return has_model_operations
@@ -523,7 +528,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         def migration_progress_callback(action, migration=None, fake=False):
             if action == "apply_start":
-                logger.info(f"Applying migration {migration}")
+                if fake:
+                    logger.debug(f"Faking migration {migration} (no branchable models affected)")
+                else:
+                    logger.info(f"Applying migration {migration}")
             elif action == "apply_success" and migration is not None:
                 self.applied_migrations.append(migration)
 
@@ -545,14 +553,15 @@ class Branch(JobsMixin, PrimaryModel):
                 # on the main schema via the search_path. See GitHub issue #423.
                 full_plan = executor.migration_plan(executor.loader.graph.leaf_nodes(), clean_start=True)
                 migrations_to_run = {m for m, _ in plan}
+                # _create_project_state is a private Django API (MigrationExecutor). It builds
+                # the current ProjectState from all applied migrations, which apply_migration
+                # requires as its starting point. There is no public equivalent as of Django 5.x.
                 state = executor._create_project_state(with_applied_migrations=True)
                 for migration, _ in full_plan:
                     if not migrations_to_run:
                         break
                     if migration in migrations_to_run:
                         fake = _migration_only_affects_non_branchable(migration)
-                        if fake:
-                            logger.debug(f"Faking migration {migration} (no branchable models affected)")
                         state = executor.apply_migration(state, migration, fake=fake)
                         migrations_to_run.remove(migration)
             except Exception as e:
