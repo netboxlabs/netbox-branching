@@ -74,7 +74,7 @@ def _migration_only_affects_non_branchable(migration):
         except LookupError:
             # If we can't resolve the model (e.g. removed in a squashed migration),
             # conservatively treat it as branchable and don't fake.
-            logger.warning(f"Could not find model {migration.app_label}.{model_name} for migration {migration}; skipping fake")
+            logger.warning(f"Could not resolve model {migration.app_label}.{model_name}; not faking {migration}")
             return False
         if supports_branching(model):
             return False
