@@ -1,6 +1,7 @@
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectType
 from django import forms
+from django.contrib.auth import get_user_model
 from django.utils.translation import gettext as _
 from netbox.forms import NetBoxModelFilterSetForm
 from utilities.forms.fields import ContentTypeMultipleChoiceField, DynamicModelMultipleChoiceField, TagFilterField
@@ -19,12 +20,17 @@ class BranchFilterForm(NetBoxModelFilterSetForm):
     model = Branch
     fieldsets = (
         FieldSet('q', 'filter_id', 'tag'),
-        FieldSet('status', 'last_sync', name=_('Branch')),
+        FieldSet('status', 'last_sync', 'owner_id', name=_('Branch')),
     )
     status = forms.MultipleChoiceField(
         label=_('Status'),
         choices=BranchStatusChoices,
         required=False
+    )
+    owner_id = DynamicModelMultipleChoiceField(
+        queryset=get_user_model().objects.all(),
+        required=False,
+        label=_('Owner')
     )
     tag = TagFilterField(model)
 

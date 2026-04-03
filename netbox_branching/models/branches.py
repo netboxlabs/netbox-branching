@@ -1,5 +1,6 @@
 import importlib
 import logging
+import math
 import random
 import string
 from collections import defaultdict
@@ -305,18 +306,40 @@ class Branch(JobsMixin, PrimaryModel):
             last_time = event.time
         return history
 
+    def _days_until_stale(self):
+        """
+        Return the number of days remaining until the branch becomes stale, or None if indeterminate
+        (branch not yet provisioned or changelog retention is disabled). Returns a negative number if
+        the branch is already stale.
+        """
+        if self.last_sync is None:
+            return None
+        if not (changelog_retention := get_config().CHANGELOG_RETENTION):
+            return None
+        stale_at = self.last_sync + timedelta(days=changelog_retention)
+        return math.ceil((stale_at - timezone.now()).total_seconds() / 86400)
+
     @property
     def is_stale(self):
         """
         Indicates whether the branch is too far out of date to be synced.
         """
-        if self.last_sync is None:
-            # Branch has not yet been provisioned
-            return False
-        if not (changelog_retention := get_config().CHANGELOG_RETENTION):
-            # Changelog retention is disabled
-            return False
-        return self.last_sync < timezone.now() - timedelta(days=changelog_retention)
+        days = self._days_until_stale()
+        return days is not None and days < 0
+
+    @property
+    def stale_warning(self):
+        """
+        Return the number of days remaining until the branch becomes stale if within the warning
+        window, else None.
+        """
+        days = self._days_until_stale()
+        if days is None or days <= 0:
+            return None
+        threshold = get_plugin_config('netbox_branching', 'stale_warning_threshold')
+        if not threshold or days > threshold:
+            return None
+        return days
 
     #
     # Migration handling
