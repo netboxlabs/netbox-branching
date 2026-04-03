@@ -7,7 +7,7 @@ __all__ = (
     'BRANCH_PROVISIONED',
     'BRANCH_REVERTED',
     'BRANCH_SYNCED',
-    'enrich_events_with_branch_context',
+    'add_branch_context',
 )
 
 # Branch events
@@ -18,7 +18,7 @@ BRANCH_MERGED = 'branch_merged'
 BRANCH_REVERTED = 'branch_reverted'
 
 
-def enrich_events_with_branch_context(events):
+def add_branch_context(events):
     """
     Pre-process queued events to inject active branch context into event data before
     they are dispatched by process_event_queue. This enables:

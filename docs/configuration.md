@@ -6,7 +6,7 @@ To include branch context in notifications and scripts triggered by event rules,
 
 ```python
 EVENTS_PIPELINE = [
-    'netbox_branching.events.enrich_events_with_branch_context',
+    'netbox_branching.events.add_branch_context',
     'extras.events.process_event_queue',
 ]
 ```
