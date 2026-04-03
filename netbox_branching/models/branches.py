@@ -62,14 +62,14 @@ def _migration_only_affects_non_branchable(migration):
 
     has_model_operations = False
     for operation in migration.operations:
-        model_name = getattr(operation, 'model_name', None)
-        if model_name is None:
+        if (model_name := getattr(operation, 'model_name', None)) is None:
             continue
         has_model_operations = True
         # If any operation targets a branchable model, don't fake this migration
         try:
             model = apps.get_model(migration.app_label, model_name)
         except LookupError:
+            logger.warning(f"Could not find model {migration.app_label}.{model_name} for migration {migration}")
             continue
         if supports_branching(model):
             return False
