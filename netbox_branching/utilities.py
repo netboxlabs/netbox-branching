@@ -38,6 +38,7 @@ __all__ = (
     'get_tables_to_replicate',
     'is_api_request',
     'record_applied_change',
+    'resolve_changes_summary',
     'supports_branching',
     'track_branch_connection',
     'update_object',
@@ -312,6 +313,34 @@ def get_active_branch(request):
         except ObjectDoesNotExist:
             pass
     return None
+
+
+def resolve_changes_summary(stored):
+    """
+    Convert a stored changes summary (with 'app_label.model' string keys) into a display-ready
+    dict keyed by ContentType objects. Used by views to render job report data.
+    """
+    from django.contrib.contenttypes.models import ContentType
+
+    def _resolve(d):
+        result = {}
+        for key, count in d.items():
+            app_label, model = key.split('.', 1)
+            try:
+                ct = ContentType.objects.get_by_natural_key(app_label, model)
+                result[ct] = count
+            except ContentType.DoesNotExist:
+                pass
+        return result
+
+    return {
+        'creates': _resolve(stored.get('creates', {})),
+        'creates_total': stored.get('creates_total', 0),
+        'updates': _resolve(stored.get('updates', {})),
+        'updates_total': stored.get('updates_total', 0),
+        'deletes': _resolve(stored.get('deletes', {})),
+        'deletes_total': stored.get('deletes_total', 0),
+    }
 
 
 def get_sql_results(cursor):
