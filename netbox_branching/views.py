@@ -59,16 +59,20 @@ class BranchView(generic.ObjectView):
             }
             latest_change = instance.get_changes().order_by('time').last()
             last_job = instance.jobs.order_by('created').last()
+            last_merge_job = instance.jobs.filter(name=MergeBranchJob.Meta.name).order_by('created').last()
         else:
             stats = {}
             latest_change = None
             last_job = None
+            last_merge_job = None
 
         return {
             'stats': stats,
             'latest_change': latest_change,
             'last_job': last_job,
             'last_job_errored': last_job is not None and last_job.status == JobStatusChoices.STATUS_ERRORED,
+            'last_merge_job': last_merge_job,
+            'last_merge_job_errored': last_merge_job is not None and last_merge_job == last_job and last_merge_job.status == JobStatusChoices.STATUS_ERRORED,
             'conflicts_count': ChangeDiff.objects.filter(branch=instance, conflicts__isnull=False).count(),
         }
 
@@ -161,7 +165,11 @@ class BranchJobReportView(generic.ObjectView):
             if ct_id and obj_id:
                 try:
                     ct = ContentType.objects.get_for_id(ct_id)
-                    obj = ct.get_object_for_this_type(pk=obj_id)
+                    try:
+                        obj = ct.get_object_for_this_type(pk=obj_id)
+                    except ObjectDoesNotExist:
+                        # Object may only exist in the branch schema (e.g. created in branch, conflicts on merge)
+                        obj = ct.model_class()._default_manager.using(instance.connection_name).get(pk=obj_id)
                     if hasattr(obj, 'get_absolute_url'):
                         object_url = f'{obj.get_absolute_url()}?{QUERY_PARAM}={instance.schema_id}'
                     object_str = str(obj)

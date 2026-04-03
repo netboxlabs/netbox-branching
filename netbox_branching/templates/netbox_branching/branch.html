@@ -46,7 +46,7 @@
           <div class="text-secondary">{{ last_job.error }}</div>
         {% endif %}
       </div>
-      {% if last_job.data.report %}
+      {% if last_merge_job_errored and last_merge_job.data.report %}
         <a href="{% url 'plugins:netbox_branching:branch_job-report' pk=object.pk %}" class="btn btn-sm btn-outline-danger ms-3 text-nowrap">
           <i class="mdi mdi-file-document-outline"></i> {% trans "View Report" %}
         </a>
