@@ -72,7 +72,11 @@ class BranchView(generic.ObjectView):
             'last_job': last_job,
             'last_job_errored': last_job is not None and last_job.status == JobStatusChoices.STATUS_ERRORED,
             'last_merge_job': last_merge_job,
-            'last_merge_job_errored': last_merge_job is not None and last_merge_job == last_job and last_merge_job.status == JobStatusChoices.STATUS_ERRORED,
+            'last_merge_job_errored': (
+                last_merge_job is not None
+                and last_merge_job == last_job
+                and last_merge_job.status == JobStatusChoices.STATUS_ERRORED
+            ),
             'conflicts_count': ChangeDiff.objects.filter(branch=instance, conflicts__isnull=False).count(),
         }
 

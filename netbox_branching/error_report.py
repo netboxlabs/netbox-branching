@@ -60,9 +60,9 @@ def _get_field_from_constraint(table_name, constraint_name):
                 return constraint.fields[0] if len(constraint.fields) == 1 else None
         for field in model._meta.get_fields():
             col = getattr(field, 'column', None)
-            if col and getattr(field, 'unique', False):
-                if constraint_name in (f'{table_name}_{col}_key', f'{table_name}_{col}_uniq'):
-                    return field.name
+            auto_names = (f'{table_name}_{col}_key', f'{table_name}_{col}_uniq')
+            if col and getattr(field, 'unique', False) and constraint_name in auto_names:
+                return field.name
         break
     return None
 
