@@ -7,6 +7,7 @@ __all__ = (
     'BRANCH_PROVISIONED',
     'BRANCH_REVERTED',
     'BRANCH_SYNCED',
+    'add_branch_context',
 )
 
 # Branch events
@@ -15,6 +16,28 @@ BRANCH_DEPROVISIONED = 'branch_deprovisioned'
 BRANCH_SYNCED = 'branch_synced'
 BRANCH_MERGED = 'branch_merged'
 BRANCH_REVERTED = 'branch_reverted'
+
+
+def add_branch_context(events):
+    """
+    Pre-process queued events to inject active branch context into event data before
+    they are dispatched by process_event_queue. Scripts triggered by event rules can
+    access branch info via data['active_branch'] (#485).
+    """
+    from .contextvars import active_branch as active_branch_var
+
+    branch = active_branch_var.get()
+    if branch is None:
+        return
+
+    branch_attrs = {
+        'id': branch.pk,
+        'name': branch.name,
+        'schema_id': branch.schema_id,
+    }
+
+    for event in events:
+        event['data']['active_branch'] = branch_attrs
 
 
 # Register core events
