@@ -8,11 +8,11 @@ from datetime import timedelta
 from functools import cached_property, partial
 
 from core.models import ObjectChange as ObjectChange_
+from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
-from django.apps import apps
 from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.db.models.signals import post_save
