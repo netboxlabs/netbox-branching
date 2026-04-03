@@ -173,10 +173,18 @@ class BranchJobReportView(generic.ObjectView):
                     if hasattr(obj, 'get_absolute_url'):
                         object_url = f'{obj.get_absolute_url()}?{QUERY_PARAM}={instance.schema_id}'
                     object_str = str(obj)
+                    if not entry.get('value') and (field := entry.get('field')):
+                        value = getattr(obj, field, None)
+                    else:
+                        value = entry.get('value')
                 except (ContentType.DoesNotExist, ObjectDoesNotExist):
                     object_str = f'#{obj_id}'
+                    value = entry.get('value')
+            else:
+                value = entry.get('value')
             entries.append({
                 **entry,
+                'value': value,
                 'message': get_entry_message(entry),
                 'recommendations': get_merge_recommendations(entry, merge_strategy=merge_strategy),
                 'object_url': object_url,

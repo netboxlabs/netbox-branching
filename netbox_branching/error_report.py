@@ -47,6 +47,26 @@ def annotate_validation_error(exc, model_class, object_id, content_type_id):
     exc.netbox_branching_content_type_id = content_type_id
 
 
+def _get_field_from_constraint(table_name, constraint_name):
+    """
+    Return the field name for a single-column unique constraint given its table and constraint name.
+    Returns None for composite constraints or if the constraint cannot be found.
+    """
+    for model in apps.get_models():
+        if model._meta.db_table != table_name:
+            continue
+        for constraint in model._meta.constraints:
+            if constraint.name == constraint_name and hasattr(constraint, 'fields'):
+                return constraint.fields[0] if len(constraint.fields) == 1 else None
+        for field in model._meta.get_fields():
+            col = getattr(field, 'column', None)
+            if col and getattr(field, 'unique', False):
+                if constraint_name in (f'{table_name}_{col}_key', f'{table_name}_{col}_uniq'):
+                    return field.name
+        break
+    return None
+
+
 def _analyze_integrity_error(exc, table_model_map):
     """Parse a Django IntegrityError into a structured report entry (factual data only)."""
     cause = exc.__cause__
@@ -58,14 +78,18 @@ def _analyze_integrity_error(exc, table_model_map):
         # diag attributes are locale-independent catalog values (psycopg3).
         table_name = getattr(diag, 'table_name', None) if diag else None
 
-        # Format: "Key (field)=(value) already exists." — locale-dependent; returns None
-        # for non-English PostgreSQL locales, falling back to the generic message.
-        field = None
+        # Try constraint_name first (locale-independent) to get the field name.
+        constraint_name = getattr(diag, 'constraint_name', None) if diag else None
+        field = _get_field_from_constraint(table_name, constraint_name) if constraint_name and table_name else None
+
+        # Parse message_detail for the value (no locale-independent source exists).
+        # Also used as fallback for field if constraint lookup didn't resolve it.
         value = None
         if diag and diag.message_detail:
             detail_match = re.search(r'Key \((.+?)\)=\((.+?)\)', diag.message_detail)
             if detail_match:
-                field = detail_match.group(1)
+                if not field:
+                    field = detail_match.group(1)
                 value = detail_match.group(2)
 
         return {
