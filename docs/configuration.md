@@ -1,5 +1,26 @@
 # Configuration Parameters
 
+## NetBox `EVENTS_PIPELINE` (required for branch context in event rules)
+
+To include branch context in notifications and scripts triggered by event rules, add the plugin's enrichment function to NetBox's [`EVENTS_PIPELINE`](https://netboxlabs.com/docs/netbox/en/stable/configuration/miscellaneous/#events_pipeline) setting **before** `extras.events.process_event_queue`:
+
+```python
+EVENTS_PIPELINE = [
+    'netbox_branching.events.enrich_events_with_branch_context',
+    'extras.events.process_event_queue',
+]
+```
+
+When active, this enriches each queued event with the branch that was active when the change was made:
+
+- **Scripts** (#485): the script's `data` dict will contain an `active_branch` key with `id`, `name`, and `schema_id` fields (or `None` if the change was made on main).
+- **Notifications** (#486): the notification's object representation will include the branch name, e.g. `Router-1 (branch: my-branch)`, allowing recipients to distinguish branch changes from main-branch changes.
+
+!!! note
+    This must be placed **before** `extras.events.process_event_queue` in the list. Entries added after it will have no effect on event rule processing.
+
+---
+
 ## `exempt_models`
 
 Default: `[]` (empty list)
