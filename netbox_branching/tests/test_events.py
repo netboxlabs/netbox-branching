@@ -1,60 +1,91 @@
-from utilities.testing import TestCase
+import uuid
+
+import django_rq
+from core.events import OBJECT_CREATED
+from core.models import ObjectType
+from dcim.models import Site
+from django.contrib.auth import get_user_model
+from django.test import RequestFactory, TransactionTestCase, override_settings
+from django.urls import reverse
+from extras.choices import EventRuleActionChoices
+from extras.events import enqueue_event, flush_events
+from extras.models import EventRule, Webhook
 
 from netbox_branching.choices import BranchStatusChoices
-from netbox_branching.events import add_branch_context
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch
 
+User = get_user_model()
 
-class AddBranchContextTestCase(TestCase):
+ENRICHED_PIPELINE = [
+    'netbox_branching.events.add_branch_context',
+    'extras.events.process_event_queue',
+]
 
-    @classmethod
-    def setUpTestData(cls):
-        cls.branch = Branch(name='Test Branch')
-        cls.branch.status = BranchStatusChoices.READY
-        cls.branch.save(provision=False)
 
-    def test_no_branch_active(self):
-        """Events are not modified when no branch is active."""
-        event = {'data': {'display': 'Site 1', 'name': 'Site 1'}}
-        add_branch_context([event])
-        self.assertNotIn('active_branch', event['data'])
-        self.assertEqual(event['data']['display'], 'Site 1')
+class AddBranchContextTestCase(TransactionTestCase):
+    serialized_rollback = True
 
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', is_superuser=True)
+
+        self.branch = Branch(name='Test Branch')
+        self.branch.status = BranchStatusChoices.READY
+        self.branch.save(provision=False)
+
+        self.queue = django_rq.get_queue('default')
+        self.queue.empty()
+
+        self.request = RequestFactory().get(reverse('home'))
+        self.request.id = uuid.uuid4()
+        self.request.user = self.user
+
+        self.site_type = ObjectType.objects.get_for_model(Site)
+
+    def _enqueue_site_event(self, site):
+        queue = {}
+        enqueue_event(queue, instance=site, request=self.request, event_type=OBJECT_CREATED)
+        return list(queue.values())
+
+    def _make_webhook_rule(self):
+        webhook = Webhook.objects.create(name='Test Webhook', payload_url='http://localhost/')
+        webhook_type = ObjectType.objects.get_for_model(Webhook)
+        rule = EventRule.objects.create(
+            name='Test Rule',
+            event_types=[OBJECT_CREATED],
+            action_type=EventRuleActionChoices.WEBHOOK,
+            action_object_type=webhook_type,
+            action_object_id=webhook.pk,
+        )
+        rule.object_types.set([self.site_type])
+        return rule
+
+    @override_settings(EVENTS_PIPELINE=ENRICHED_PIPELINE)
     def test_branch_active_injects_context(self):
-        """active_branch is injected into event data when a branch is active."""
-        event = {'data': {'display': 'Site 1'}}
+        """Webhook job data includes active_branch when a branch is active during flush_events."""
+        self._make_webhook_rule()
+        site = Site.objects.create(name='Site 1', slug='site-1')
+        events = self._enqueue_site_event(site)
+
         with activate_branch(self.branch):
-            add_branch_context([event])
-        self.assertEqual(event['data']['active_branch'], {
+            flush_events(events)
+
+        self.assertEqual(self.queue.count, 1)
+        data = self.queue.jobs[0].kwargs['data']
+        self.assertEqual(data['active_branch'], {
             'id': self.branch.pk,
             'name': self.branch.name,
             'schema_id': self.branch.schema_id,
         })
 
-    def test_branch_active_annotates_display(self):
-        """The display field is annotated with the branch name when a branch is active."""
-        event = {'data': {'display': 'Site 1'}}
-        with activate_branch(self.branch):
-            add_branch_context([event])
-        self.assertEqual(event['data']['display'], f'Site 1 (branch: {self.branch.name})')
+    @override_settings(EVENTS_PIPELINE=ENRICHED_PIPELINE)
+    def test_no_branch_active_no_enrichment(self):
+        """Event data is not modified when no branch is active during flush_events."""
+        self._make_webhook_rule()
+        site = Site.objects.create(name='Site 1', slug='site-1')
+        events = self._enqueue_site_event(site)
+        flush_events(events)
 
-    def test_branch_active_no_display_field(self):
-        """Events without a display field are handled without error."""
-        event = {'data': {'name': 'Site 1'}}
-        with activate_branch(self.branch):
-            add_branch_context([event])
-        self.assertEqual(event['data']['active_branch']['name'], self.branch.name)
-        self.assertNotIn('display', event['data'])
-
-    def test_multiple_events_all_enriched(self):
-        """All events in the list are enriched when a branch is active."""
-        events = [
-            {'data': {'display': 'Site 1'}},
-            {'data': {'display': 'Site 2'}},
-        ]
-        with activate_branch(self.branch):
-            add_branch_context(events)
-        for event in events:
-            self.assertIn('active_branch', event['data'])
-            self.assertIn(f'(branch: {self.branch.name})', event['data']['display'])
+        self.assertEqual(self.queue.count, 1)
+        data = self.queue.jobs[0].kwargs['data']
+        self.assertIsNone(data.get('active_branch'))

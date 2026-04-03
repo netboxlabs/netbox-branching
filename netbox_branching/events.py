@@ -21,10 +21,8 @@ BRANCH_REVERTED = 'branch_reverted'
 def add_branch_context(events):
     """
     Pre-process queued events to inject active branch context into event data before
-    they are dispatched by process_event_queue. This enables:
-
-    - Scripts triggered by event rules to access branch info via data['active_branch'] (#485)
-    - Notifications to show the originating branch in their object representation (#486)
+    they are dispatched by process_event_queue. Scripts triggered by event rules can
+    access branch info via data['active_branch'] (#485).
     """
     from .contextvars import active_branch as active_branch_var
 
@@ -39,10 +37,7 @@ def add_branch_context(events):
     }
 
     for event in events:
-        data = event['data']
-        data['active_branch'] = branch_attrs
-        if display := data.get('display'):
-            data['display'] = f'{display} (branch: {branch.name})'
+        event['data']['active_branch'] = branch_attrs
 
 
 # Register core events
