@@ -8,6 +8,7 @@ from datetime import timedelta
 from functools import cached_property, partial
 
 from core.models import ObjectChange as ObjectChange_
+from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.postgres.fields import ArrayField
@@ -49,6 +50,35 @@ __all__ = (
     'Branch',
     'BranchEvent',
 )
+
+
+def _migration_only_affects_non_branchable(migration):
+    """
+    Return True if all model-specific operations in a migration affect only non-branchable
+    models. Such migrations should be faked on branch schemas to prevent RunSQL operations
+    from inadvertently acting on the main (public) schema via the search_path.
+
+    Migrations with no model-specific operations (e.g. pure RunSQL) are not faked, as we
+    cannot determine their intent without executing them.
+    """
+    from netbox_branching.utilities import supports_branching
+
+    has_model_operations = False
+    for operation in migration.operations:
+        if (model_name := getattr(operation, 'model_name', None)) is None:
+            continue
+        has_model_operations = True
+        # If any operation targets a branchable model, don't fake this migration
+        try:
+            model = apps.get_model(migration.app_label, model_name)
+        except LookupError:
+            # If we can't resolve the model (e.g. removed in a squashed migration),
+            # conservatively treat it as branchable and don't fake.
+            logger.warning(f"Could not resolve model {migration.app_label}.{model_name}; not faking {migration}")
+            return False
+        if supports_branching(model):
+            return False
+    return has_model_operations
 
 
 class Branch(JobsMixin, PrimaryModel):
@@ -498,7 +528,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         def migration_progress_callback(action, migration=None, fake=False):
             if action == "apply_start":
-                logger.info(f"Applying migration {migration}")
+                if fake:
+                    logger.debug(f"Faking migration {migration} (no branchable models affected)")
+                else:
+                    logger.info(f"Applying migration {migration}")
             elif action == "apply_success" and migration is not None:
                 self.applied_migrations.append(migration)
 
@@ -515,8 +548,22 @@ class Branch(JobsMixin, PrimaryModel):
         targets = executor.loader.graph.leaf_nodes()
         if plan := executor.migration_plan(targets):
             try:
-                # Run migrations
-                executor.migrate(targets, plan)
+                # Apply each migration individually, faking those that only affect
+                # non-branchable models to prevent RunSQL from inadvertently operating
+                # on the main schema via the search_path. See GitHub issue #423.
+                full_plan = executor.migration_plan(executor.loader.graph.leaf_nodes(), clean_start=True)
+                migrations_to_run = {m for m, _ in plan}
+                # _create_project_state is a private Django API (MigrationExecutor). It builds
+                # the current ProjectState from all applied migrations, which apply_migration
+                # requires as its starting point. There is no public equivalent as of Django 5.x.
+                state = executor._create_project_state(with_applied_migrations=True)
+                for migration, _ in full_plan:
+                    if not migrations_to_run:
+                        break
+                    if migration in migrations_to_run:
+                        fake = _migration_only_affects_non_branchable(migration)
+                        state = executor.apply_migration(state, migration, fake=fake)
+                        migrations_to_run.remove(migration)
             except Exception as e:
                 if err_message := str(e):
                     logger.error(err_message)
