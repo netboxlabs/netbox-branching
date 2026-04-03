@@ -53,7 +53,6 @@ class AppConfig(PluginConfig):
     def ready(self):
         super().ready()
         from django.core.signals import request_finished, request_started
-        from utilities.permissions import ModelAction, register_model_actions
 
         from . import constants, events, search, signal_receivers, webhook_callbacks  # noqa: F401
         from .models import Branch
@@ -88,15 +87,6 @@ class AppConfig(PluginConfig):
                 except ImportError:
                     raise ImproperlyConfigured(f"Branch {action} validator not found: {validator_path}")
                 Branch.register_preaction_check(func, action)
-
-        # Register custom permission actions
-        register_model_actions(Branch, [
-            ModelAction('sync', help_text='Synchronize branch with main schema'),
-            ModelAction('merge', help_text='Merge branch changes into main'),
-            ModelAction('migrate', help_text='Apply pending migrations to branch'),
-            ModelAction('revert', help_text='Revert a merged branch'),
-            ModelAction('archive', help_text='Archive a merged branch'),
-        ])
 
 
 config = AppConfig
