@@ -12,7 +12,8 @@ from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, connection, connections, models, router, transaction
+from django.apps import apps
+from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.db.models.signals import post_save
 from django.db.utils import ProgrammingError
@@ -51,12 +52,14 @@ __all__ = (
 )
 
 
-def _migration_only_affects_non_branchable(migration, connection_alias):
+def _migration_only_affects_non_branchable(migration):
     """
     Return True if all model-specific operations in a migration affect only non-branchable
     models. Such migrations should be faked on branch schemas to prevent RunSQL operations
     from inadvertently acting on the main (public) schema via the search_path.
     """
+    from netbox_branching.utilities import supports_branching
+
     has_model_operations = False
     for operation in migration.operations:
         model_name = getattr(operation, 'model_name', None)
@@ -64,7 +67,11 @@ def _migration_only_affects_non_branchable(migration, connection_alias):
             continue
         has_model_operations = True
         # If any operation targets a branchable model, don't fake this migration
-        if router.allow_migrate(connection_alias, migration.app_label, model_name=model_name.lower()) is not False:
+        try:
+            model = apps.get_model(migration.app_label, model_name)
+        except LookupError:
+            continue
+        if supports_branching(model):
             return False
     return has_model_operations
 
@@ -543,7 +550,7 @@ class Branch(JobsMixin, PrimaryModel):
                     if not migrations_to_run:
                         break
                     if migration in migrations_to_run:
-                        fake = _migration_only_affects_non_branchable(migration, connection.alias)
+                        fake = _migration_only_affects_non_branchable(migration)
                         if fake:
                             logger.debug(f"Faking migration {migration} (no branchable models affected)")
                         state = executor.apply_migration(state, migration, fake=fake)
