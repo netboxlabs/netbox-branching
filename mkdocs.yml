@@ -46,6 +46,7 @@ nav:
     - Plugin Development: 'plugin-development.md'
     - NetBox Docker: 'netbox-docker.md'
     - REST API: 'rest-api.md'
+    - Event Rules: 'event-rules.md'
     - Configuration: 'configuration.md'
     - Data Model:
         - Branch: 'models/branch.md'
