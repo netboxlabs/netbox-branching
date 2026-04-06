@@ -1,8 +1,8 @@
 # Configuration Parameters
 
-## NetBox `EVENTS_PIPELINE` (required for branch context in scripts)
+## NetBox `EVENTS_PIPELINE` (required for branch context in event processing)
 
-To include branch context in scripts triggered by event rules, add the plugin's `add_branch_context` function to NetBox's [`EVENTS_PIPELINE`](https://netboxlabs.com/docs/netbox/en/stable/configuration/miscellaneous/#events_pipeline) setting **before** `extras.events.process_event_queue`:
+To include branch context in event rule processing, add the plugin's `add_branch_context` function to NetBox's [`EVENTS_PIPELINE`](https://netboxlabs.com/docs/netbox/en/stable/configuration/miscellaneous/#events_pipeline) setting **before** `extras.events.process_event_queue`:
 
 ```python
 EVENTS_PIPELINE = [
@@ -11,7 +11,43 @@ EVENTS_PIPELINE = [
 ]
 ```
 
-When active, this injects an `active_branch` key into each queued event's data payload with `id`, `name`, and `schema_id` fields (or absent if the change was made on main). Scripts triggered by event rules can access it via `data.get('active_branch')`.
+When active, this injects an `active_branch` key into each queued event's data payload with `id`, `name`, and `schema_id` fields (or `null` if the change was made on main). This context is available across all event rule action types — webhooks, scripts, and notifications.
+
+- Scripts can access branch info via `data.get('active_branch')`
+- Webhooks receive the `active_branch` key in the posted payload
+- Event rule **conditions** can filter on `active_branch` to control whether the rule fires at all
+
+### Condition examples
+
+Only fire when a change was made on a branch (any branch):
+
+```json
+{
+    "and": [
+        {"attr": "active_branch", "value": null, "negate": true}
+    ]
+}
+```
+
+Only fire when a change was made on main (no active branch):
+
+```json
+{
+    "and": [
+        {"attr": "active_branch", "value": null}
+    ]
+}
+```
+
+Only fire for a specific branch by name:
+
+```json
+{
+    "and": [
+        {"attr": "active_branch.name", "value": "my-branch"}
+    ]
+}
+```
 
 !!! note
     This must be placed **before** `extras.events.process_event_queue` in the list. Entries added after it will have no effect on event rule processing.

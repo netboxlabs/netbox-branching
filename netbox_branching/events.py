@@ -24,20 +24,14 @@ def add_branch_context(events):
     they are dispatched by process_event_queue. Scripts triggered by event rules can
     access branch info via data['active_branch'] (#485).
     """
-    from .contextvars import active_branch as active_branch_var
-
-    branch = active_branch_var.get()
-    if branch is None:
-        return
-
-    branch_attrs = {
-        'id': branch.pk,
-        'name': branch.name,
-        'schema_id': branch.schema_id,
-    }
-
     for event in events:
-        event['data']['active_branch'] = branch_attrs
+        request = event.get('request')
+        branch = getattr(request, 'active_branch', None) if request else None
+        event['data']['active_branch'] = {
+            'id': branch.pk,
+            'name': branch.name,
+            'schema_id': branch.schema_id,
+        } if branch else None
 
 
 # Register core events
