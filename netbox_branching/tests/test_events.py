@@ -13,7 +13,7 @@ from extras.models import EventRule, Webhook
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
-from netbox_branching.utilities import activate_branch
+
 
 User = get_user_model()
 
@@ -65,10 +65,10 @@ class AddBranchContextTestCase(TransactionTestCase):
         """Webhook job data includes active_branch when a branch is active during flush_events."""
         self._make_webhook_rule()
         site = Site.objects.create(name='Site 1', slug='site-1')
+        self.request.active_branch = self.branch
         events = self._enqueue_site_event(site)
 
-        with activate_branch(self.branch):
-            flush_events(events)
+        flush_events(events)
 
         self.assertEqual(self.queue.count, 1)
         data = self.queue.jobs[0].kwargs['data']
