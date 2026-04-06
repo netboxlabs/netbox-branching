@@ -14,7 +14,6 @@ from extras.models import EventRule, Webhook
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
 
-
 User = get_user_model()
 
 ENRICHED_PIPELINE = [
