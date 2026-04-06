@@ -1,6 +1,7 @@
 """
 Iterative merge strategy implementation.
 """
+from core.choices import ObjectChangeActionChoices
 from django.db import DEFAULT_DB_ALIAS
 from netbox.context_managers import event_tracking
 
@@ -22,8 +23,35 @@ class IterativeMergeStrategy(MergeStrategy):
         """
         models = set()
 
+        # Track (model, pk) pairs for objects whose CREATE was skipped, so that any subsequent
+        # UPDATE/DELETE changes for the same object can also be skipped safely.
+        skipped_objects = set()
+
         for change in changes:
-            models.add(change.changed_object_type.model_class())
+            model = change.changed_object_type.model_class()
+            models.add(model)
+            obj_key = (model, change.changed_object_id)
+
+            if change.action == ObjectChangeActionChoices.ACTION_CREATE:
+                # If the object no longer exists in the branch schema it was cascade-deleted during
+                # a sync (e.g. its FK parent was deleted in main). Skip and record so that any
+                # later UPDATE/DELETE changes for the same object are also skipped.
+                if not model.objects.using(branch.connection_name).filter(pk=change.changed_object_id).exists():
+                    logger.debug(
+                        f'Skipping CREATE for {model._meta.verbose_name} ID {change.changed_object_id} '
+                        f'(object no longer exists in branch)'
+                    )
+                    skipped_objects.add(obj_key)
+                    continue
+
+            elif obj_key in skipped_objects:
+                # A previous CREATE for this object was skipped; skip subsequent changes too.
+                logger.debug(
+                    f'Skipping {change.get_action_display()} for {model._meta.verbose_name} '
+                    f'ID {change.changed_object_id} (CREATE was skipped)'
+                )
+                continue
+
             with event_tracking(request):
                 request.id = change.request_id
                 request.user = change.user

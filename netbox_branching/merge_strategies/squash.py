@@ -183,6 +183,25 @@ class SquashMergeStrategy(MergeStrategy):
                     )
                     collapsed.final_action = ActionType.SKIP
 
+    @staticmethod
+    def _skip_creates_missing_in_branch(branch, collapsed_changes, logger):
+        """
+        Mark any collapsed CREATE as SKIP if the object no longer exists in the branch schema.
+        This handles the case where an object was created in the branch but then cascade-deleted
+        during a sync (e.g. because its FK parent was deleted in main).
+        """
+        for collapsed in collapsed_changes.values():
+            if collapsed.final_action == ActionType.CREATE:
+                exists = collapsed.model_class.objects.using(branch.connection_name).filter(
+                    pk=collapsed.key[1]
+                ).exists()
+                if not exists:
+                    logger.info(
+                        f"  Skipping CREATE for {collapsed.model_class.__name__}:{collapsed.key[1]} "
+                        f"(object no longer exists in branch)"
+                    )
+                    collapsed.final_action = ActionType.SKIP
+
     def merge(self, branch, changes, request, logger, user):
         """
         Apply changes after collapsing them by object and ordering by dependencies.
@@ -192,6 +211,7 @@ class SquashMergeStrategy(MergeStrategy):
         logger.info("Collapsing ObjectChanges by object (incremental)...")
         collapsed_changes, _ = SquashMergeStrategy._collapse_changes(changes, logger)
         SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
+        SquashMergeStrategy._skip_creates_missing_in_branch(branch, collapsed_changes, logger)
 
         # Order collapsed changes based on dependencies
         ordered_changes = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger)
