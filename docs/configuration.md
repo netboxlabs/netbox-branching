@@ -2,7 +2,7 @@
 
 ## NetBox `EVENTS_PIPELINE` (required for branch context in scripts)
 
-To include branch context in scripts triggered by event rules, add the plugin's enrichment function to NetBox's [`EVENTS_PIPELINE`](https://netboxlabs.com/docs/netbox/en/stable/configuration/miscellaneous/#events_pipeline) setting **before** `extras.events.process_event_queue`:
+To include branch context in scripts triggered by event rules, add the plugin's `add_branch_context` function to NetBox's [`EVENTS_PIPELINE`](https://netboxlabs.com/docs/netbox/en/stable/configuration/miscellaneous/#events_pipeline) setting **before** `extras.events.process_event_queue`:
 
 ```python
 EVENTS_PIPELINE = [
