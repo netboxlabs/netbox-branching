@@ -12,6 +12,7 @@ from dcim.models import (
     DeviceRole,
     DeviceType,
     Interface,
+    Location,
     Manufacturer,
     Region,
     Site,
@@ -1012,6 +1013,128 @@ class BaseMergeTests:
         # Verify cable paths were recalculated — not left empty after merge (#150 regression)
         # A successful cable connection creates two CablePath records (one per endpoint)
         self.assertEqual(CablePath.objects.count(), 2, 'Cable paths not populated after merge')
+
+    def test_merge_after_sync_cascade_delete_of_branch_only_object(self):
+        """
+        Test that merge succeeds when a branch-only object was cascade-deleted during sync.
+
+        Scenario (refs: #478):
+          1. Create Site s1 in main
+          2. Create branch
+          3. In branch: create Location l1 with site=s1
+          4. In main: delete s1 (CASCADE to l1)
+          5. Sync: s1 deletion applied to branch; l1 cascade-deleted from branch
+                   schema with no ObjectChange recorded for it.
+          6. Merge: should succeed — the orphaned CREATE for l1 is skipped.
+          7. Verify l1 does NOT exist in main (it was never created there).
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # Create site in main before branch provisioning
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+        site_id = site.id
+
+        branch = self._create_and_provision_branch()
+
+        # In branch: create a location referencing s1
+        with activate_branch(branch), event_tracking(request):
+            location = Location.objects.create(
+                name='Location 1',
+                slug='location-1',
+                site=Site.objects.get(id=site_id),
+                status='active',
+            )
+            location_id = location.id
+
+        self._assert_object_changes(branch, Location, location_id, 1, ['create'])
+
+        # In main: delete s1 (cascades to l1 in the branch schema during sync)
+        with event_tracking(request):
+            Site.objects.get(id=site_id).delete()
+
+        # Sync: applies s1 deletion; l1 is cascade-deleted from the branch schema
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertFalse(Location.objects.filter(id=location_id).exists())
+
+        # The CREATE ObjectChange for l1 is still in the branch log
+        self._assert_object_changes(branch, Location, location_id, 1, ['create'])
+
+        # Merge should succeed — the stale CREATE is skipped
+        branch.merge(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        # l1 was never created in main
+        self.assertFalse(Location.objects.filter(id=location_id).exists())
+
+    def test_merge_after_sync_cascade_delete_of_branch_modified_object(self):
+        """
+        Test that merge succeeds when a branch-only object was created, modified,
+        then cascade-deleted during sync.
+
+        Scenario (refs: #478):
+          1. Create Site s1 in main
+          2. Create branch
+          3. In branch: create Location l1 with site=s1, then update its description
+          4. In main: delete s1 (CASCADE to l1)
+          5. Sync: l1 cascade-deleted from branch (CREATE + UPDATE in log,
+                   no DELETE ObjectChange recorded).
+          6. Merge: should succeed — both the CREATE and the subsequent UPDATE are skipped.
+          7. Verify l1 does NOT exist in main.
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+        site_id = site.id
+
+        branch = self._create_and_provision_branch()
+
+        # In branch: create l1, then update it
+        with activate_branch(branch), event_tracking(request):
+            location = Location.objects.create(
+                name='Location 1',
+                slug='location-1',
+                site=Site.objects.get(id=site_id),
+                status='active',
+            )
+            location_id = location.id
+
+            location = Location.objects.get(id=location_id)
+            location.snapshot()
+            location.description = 'Updated in branch'
+            location.save()
+
+        self._assert_object_changes(branch, Location, location_id, 2, ['create', 'update'])
+
+        # In main: delete s1 (cascades to l1 during sync)
+        with event_tracking(request):
+            Site.objects.get(id=site_id).delete()
+
+        # Sync: l1 cascade-deleted from branch; CREATE + UPDATE remain in log
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertFalse(Location.objects.filter(id=location_id).exists())
+
+        self._assert_object_changes(branch, Location, location_id, 2, ['create', 'update'])
+
+        # Merge should succeed — the stale CREATE and UPDATE are both skipped
+        branch.merge(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        # l1 was never created in main
+        self.assertFalse(Location.objects.filter(id=location_id).exists())
 
     def test_merge_delete_after_main_delete(self):
         """
