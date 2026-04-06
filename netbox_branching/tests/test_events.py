@@ -88,3 +88,17 @@ class AddBranchContextTestCase(TransactionTestCase):
         self.assertEqual(self.queue.count, 1)
         data = self.queue.jobs[0].kwargs['data']
         self.assertIsNone(data.get('active_branch'))
+
+    @override_settings(EVENTS_PIPELINE=ENRICHED_PIPELINE)
+    def test_no_request_in_event(self):
+        """active_branch is None when the event carries no request (e.g. background-triggered events)."""
+        self._make_webhook_rule()
+        site = Site.objects.create(name='Site 1', slug='site-1')
+        events = self._enqueue_site_event(site)
+        for event in events:
+            event.pop('request', None)
+        flush_events(events)
+
+        self.assertEqual(self.queue.count, 1)
+        data = self.queue.jobs[0].kwargs['data']
+        self.assertIsNone(data.get('active_branch'))

@@ -14,7 +14,7 @@ EVENTS_PIPELINE = [
 When active, this injects an `active_branch` key into each queued event's data payload with `id`, `name`, and `schema_id` fields (or `null` if the change was made on main). See [Event Rules](event-rules.md) for usage details.
 
 !!! note
-    This must be placed **before** `extras.events.process_event_queue` in the list. Entries added after it will have no effect on event rule processing.
+    This must be placed **before** `extras.events.process_event_queue` in the list to take effect.
 
 ---
 
