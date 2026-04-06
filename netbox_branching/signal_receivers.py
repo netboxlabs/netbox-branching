@@ -11,7 +11,7 @@ from django.dispatch import receiver
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from extras.events import process_event_rules
-from extras.models import EventRule
+from extras.models import EventRule, Notification
 from netbox.signals import post_clean
 from utilities.exceptions import AbortRequest
 from utilities.serialization import serialize_object
@@ -250,6 +250,21 @@ signals.post_deprovision.connect(partial(handle_branch_event, event_type=BRANCH_
 signals.post_sync.connect(partial(handle_branch_event, event_type=BRANCH_SYNCED), weak=False)
 signals.post_merge.connect(partial(handle_branch_event, event_type=BRANCH_MERGED), weak=False)
 signals.post_revert.connect(partial(handle_branch_event, event_type=BRANCH_REVERTED), weak=False)
+
+
+@receiver(post_save, sender=Notification)
+def annotate_notification_branch(sender, instance, **kwargs):
+    """
+    After a Notification is saved, append the active branch name to its object_repr if a branch
+    is active. Notification.save() always overwrites object_repr with str(object), so this must
+    run post-save and use .update() to avoid re-triggering save().
+    """
+    branch = active_branch.get()
+    if branch is None:
+        return
+    Notification.objects.filter(pk=instance.pk).update(
+        object_repr=f'{instance.object_repr} (branch: {branch.name})'
+    )
 
 
 @receiver(pre_delete, sender=Branch)
