@@ -2,7 +2,7 @@
 Iterative merge strategy implementation.
 """
 from core.choices import ObjectChangeActionChoices
-from django.db import DEFAULT_DB_ALIAS, models
+from django.db import DEFAULT_DB_ALIAS
 from netbox.context_managers import event_tracking
 
 from .strategy import MergeStrategy
@@ -26,14 +26,6 @@ class IterativeMergeStrategy(MergeStrategy):
         # Track (model, pk) pairs for objects whose CREATE was skipped, so that any subsequent
         # UPDATE/DELETE changes for the same object can also be skipped safely.
         skipped_objects = set()
-
-        # Pre-scan: collect all (model, pk) pairs being created in this merge so we can distinguish
-        # between FK parents that will be created here vs. parents already missing from main.
-        objects_being_created = {
-            (c.changed_object_type.model_class(), c.changed_object_id)
-            for c in changes
-            if c.action == ObjectChangeActionChoices.ACTION_CREATE
-        }
 
         for change in changes:
             model = change.changed_object_type.model_class()
