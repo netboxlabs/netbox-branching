@@ -52,20 +52,6 @@ class IterativeMergeStrategy(MergeStrategy):
                     skipped_objects.add(obj_key)
                     continue
 
-                # If a FK parent was deleted from main without a sync, the object still exists in
-                # the branch but cannot be created in main. Also cascade-skip if a parent's CREATE
-                # was itself skipped.
-                missing_parent = self._get_missing_fk_parent(
-                    model, change.postchange_data, objects_being_created, skipped_objects
-                )
-                if missing_parent:
-                    logger.debug(
-                        f'Skipping CREATE for {model._meta.verbose_name} ID {change.changed_object_id} '
-                        f'(FK parent {missing_parent} missing from main)'
-                    )
-                    skipped_objects.add(obj_key)
-                    continue
-
             elif obj_key in skipped_objects:
                 # A previous CREATE for this object was skipped; skip subsequent changes too.
                 logger.debug(
@@ -80,32 +66,6 @@ class IterativeMergeStrategy(MergeStrategy):
                 change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
 
         self._clean(models)
-
-    @staticmethod
-    def _get_missing_fk_parent(model_class, postchange_data, objects_being_created, skipped_objects):
-        """
-        Check whether any required FK parent for a CREATE is unavailable in main. Returns a string
-        description of the first missing parent found, or None if all parents are present.
-
-        A parent is considered missing if it:
-        - Is not being created as part of this merge, or its CREATE was skipped, AND
-        - Does not exist in main (DEFAULT_DB_ALIAS)
-        """
-        if not postchange_data:
-            return None
-        for field in model_class._meta.get_fields():
-            if not isinstance(field, models.ForeignKey):
-                continue
-            fk_value = postchange_data.get(field.name)
-            if not fk_value:
-                continue
-            parent_key = (field.related_model, fk_value)
-            # If the parent is being created by this merge and wasn't skipped, it will exist in main.
-            if parent_key in objects_being_created and parent_key not in skipped_objects:
-                continue
-            if not field.related_model.objects.using(DEFAULT_DB_ALIAS).filter(pk=fk_value).exists():
-                return f'{field.related_model._meta.verbose_name} ID {fk_value}'
-        return None
 
     def revert(self, branch, changes, request, logger, user):
         """
