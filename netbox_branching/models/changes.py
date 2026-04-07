@@ -106,8 +106,11 @@ class ObjectChange(ObjectChange_):
 
         # Reverting a modification to an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
-            instance = model.objects.using(using).get(pk=self.changed_object_id)
-            update_object(instance, self.diff()['pre'], using=using)
+            try:
+                instance = model.objects.using(using).get(pk=self.changed_object_id)
+                update_object(instance, self.diff()['pre'], using=using)
+            except model.DoesNotExist:
+                logger.debug(f'{model._meta.verbose_name} ID {self.changed_object_id} does not exist; skipping')
 
         # Restoring a deleted object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
