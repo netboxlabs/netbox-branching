@@ -39,7 +39,7 @@ class IterativeMergeStrategy(MergeStrategy):
                 # a sync (e.g. its FK parent was deleted in main). Skip and record so that any
                 # later UPDATE/DELETE changes for the same object are also skipped.
                 if not model_class.objects.using(branch.connection_name).filter(pk=change.changed_object_id).exists():
-                    logger.debug(
+                    logger.info(
                         f'Skipping CREATE for {model_class._meta.verbose_name} ID {change.changed_object_id} '
                         f'(object no longer exists in branch)'
                     )
