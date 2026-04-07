@@ -7,6 +7,7 @@ __all__ = (
     'EXEMPT_MODELS',
     'EXEMPT_PATHS',
     'INCLUDE_MODELS',
+    'PG_UNIQUE_VIOLATION',
     'QUERY_PARAM',
     'SKIP_INDEXES',
 )
@@ -62,6 +63,10 @@ EXEMPT_MODELS = (
     'netbox_branching.*',
     'netbox_changes.*',
 )
+
+# PostgreSQL error code for unique constraint violations, used in error_report.py
+# to detect and generate human-readable messages for duplicate-value merge failures.
+PG_UNIQUE_VIOLATION = '23505'
 
 # Indexes to ignore as they are removed in a NetBox v4.3 migration, but might be present
 # in earlier NetBox releases.
