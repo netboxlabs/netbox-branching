@@ -202,39 +202,6 @@ class SquashMergeStrategy(MergeStrategy):
                     )
                     collapsed.final_action = ActionType.SKIP
 
-    @staticmethod
-    def _skip_creates_missing_fk_in_main(collapsed_changes, logger):
-        """
-        Mark any collapsed CREATE as SKIP if a required FK parent is missing from main and is not
-        being created as part of this merge. This handles the no-sync case where a parent object
-        was deleted from main after the branch was created without a subsequent sync.
-
-        Also cascades: if a parent's CREATE was already marked SKIP, the child is skipped too.
-        """
-        for collapsed in collapsed_changes.values():
-            if collapsed.final_action != ActionType.CREATE:
-                continue
-            for field in collapsed.model_class._meta.get_fields():
-                if not isinstance(field, models.ForeignKey):
-                    continue
-                fk_value = (collapsed.postchange_data or {}).get(field.name)
-                if not fk_value:
-                    continue
-                related_ct = ContentType.objects.get_for_model(field.related_model)
-                app_label, model_name = related_ct.natural_key()
-                parent_key = (f'{app_label}.{model_name}', fk_value)
-                parent_collapsed = collapsed_changes.get(parent_key)
-                # If the parent is being created by this merge and wasn't skipped, it will exist.
-                if parent_collapsed and parent_collapsed.final_action != ActionType.SKIP:
-                    continue
-                if not field.related_model.objects.using(DEFAULT_DB_ALIAS).filter(pk=fk_value).exists():
-                    logger.info(
-                        f'  Skipping CREATE for {collapsed.model_class.__name__}:{collapsed.key[1]} '
-                        f'(FK parent {field.related_model._meta.verbose_name} ID {fk_value} missing from main)'
-                    )
-                    collapsed.final_action = ActionType.SKIP
-                    break
-
     def merge(self, branch, changes, request, logger, user):
         """
         Apply changes after collapsing them by object and ordering by dependencies.
@@ -245,7 +212,6 @@ class SquashMergeStrategy(MergeStrategy):
         collapsed_changes, _ = SquashMergeStrategy._collapse_changes(changes, logger)
         SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
         SquashMergeStrategy._skip_creates_missing_in_branch(branch, collapsed_changes, logger)
-        SquashMergeStrategy._skip_creates_missing_fk_in_main(collapsed_changes, logger)
 
         # Order collapsed changes based on dependencies
         ordered_changes = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger)
