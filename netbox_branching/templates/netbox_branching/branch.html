@@ -33,15 +33,37 @@
 {% endblock %}
 
 {% block content %}
-  {% if last_job.status == 'errored' %}
-    <div class="alert alert-danger" role="alert">
-      <h4 class="alert-title">
-        <i class="mdi mdi-alert"></i>
-        The <a href="{{ last_job.get_absolute_url }}">last job</a> ({{ last_job.name }}) failed with an error:
-      </h4>
-      <div class="text-secondary">{{ last_job.error }}</div>
+  {% if last_job_errored %}
+    <div class="alert alert-danger d-flex justify-content-between align-items-start" role="alert">
+      <div>
+        <h4 class="alert-title">
+          <i class="mdi mdi-alert"></i>
+          {% blocktrans with url=last_job.get_absolute_url name=last_job.name %}The <a href="{{ url }}" class="alert-link">last job</a> ({{ name }}) failed with an error.{% endblocktrans %}
+        </h4>
+        {% if last_job.data.report %}
+          <div class="text-secondary">{% blocktrans count count=last_job.data.report|length %}{{ count }} error occurred.{% plural %}{{ count }} errors occurred.{% endblocktrans %}</div>
+        {% else %}
+          <div class="text-secondary">{{ last_job.error }}</div>
+        {% endif %}
+      </div>
+      {% if last_merge_job_errored and last_merge_job.data.report %}
+        <a href="{% url 'plugins:netbox_branching:branch_job-report' pk=object.pk %}" class="btn btn-sm btn-outline-danger ms-3 text-nowrap">
+          <i class="mdi mdi-file-document-outline"></i> {% trans "View Report" %}
+        </a>
+      {% endif %}
     </div>
   {% endif %}
+  {% with days_remaining=object.stale_warning %}
+  {% if days_remaining %}
+    <div class="alert alert-warning d-flex align-items-center" role="alert">
+      <i class="mdi mdi-alert fs-1 text-warning me-3"></i>
+      <div>
+        <h4 class="alert-title text-warning mb-0">{% trans "Branch is at risk of becoming stale" %}</h4>
+        {% blocktrans count days=days_remaining %}This branch will become stale in {{ days }} day. Sync the branch to avoid losing the ability to merge.{% plural %}This branch will become stale in {{ days }} days. Sync the branch to avoid losing the ability to merge.{% endblocktrans %}
+      </div>
+    </div>
+  {% endif %}
+  {% endwith %}
   {% if object.pending_migrations %}
     <div class="alert alert-warning d-flex justify-content-between align-items-center" role="alert">
       <i class="mdi mdi-alert fs-1 text-warning"></i>
@@ -102,6 +124,10 @@
                 {% if object.is_stale %}
                   <span class="text-danger" title="{% trans "Branch is stale and can no longer be synced" %}">
                     <i class="mdi mdi-alert-circle"></i>
+                  </span>
+                {% elif object.stale_warning %}
+                  <span class="text-warning" title="{% trans "Branch is at risk of becoming stale" %}">
+                    <i class="mdi mdi-alert"></i>
                   </span>
                 {% endif %}
                 <div class="small text-muted">{{ object.last_sync|timesince }} {% trans "ago" %}</div>

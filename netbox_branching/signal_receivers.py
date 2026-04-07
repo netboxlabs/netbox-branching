@@ -140,6 +140,17 @@ def record_change_diff(instance, **kwargs):
             current=instance.postchange_data_clean or None
         )
 
+        # When main deletes an object, recompute conflicts for any branch edits on that object,
+        # as the branch-UPDATE + main-DELETE combination is not caught by the bulk update above.
+        if instance.action == ObjectChangeActionChoices.ACTION_DELETE:
+            for diff in ChangeDiff.objects.filter(
+                object_type=content_type,
+                object_id=object_id,
+                branch__status=BranchStatusChoices.READY,
+                action=ObjectChangeActionChoices.ACTION_UPDATE,
+            ):
+                diff.save()
+
     # If this is a branch-aware change, create or update ChangeDiff for this object.
     else:
 

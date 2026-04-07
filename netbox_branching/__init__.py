@@ -12,7 +12,7 @@ class AppConfig(PluginConfig):
     name = 'netbox_branching'
     verbose_name = 'NetBox Branching'
     description = 'A git-like branching implementation for NetBox'
-    version = '0.8.2'
+    version = '0.8.3'
     base_url = 'branching'
     # Remember to update COMPATIBILITY.md when modifying the minimum/maximum supported NetBox versions.
     min_version = '4.4.1'
@@ -45,6 +45,9 @@ class AppConfig(PluginConfig):
         'migrate_validators': [],
         'revert_validators': [],
         'archive_validators': [],
+
+        # Number of days before staleness at which to display a stale warning
+        'stale_warning_threshold': 7,
     }
 
     def ready(self):

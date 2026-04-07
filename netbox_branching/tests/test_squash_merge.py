@@ -465,3 +465,150 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
         # Verify both objects are removed
         self.assertFalse(Interface.objects.filter(id=iface_id).exists())
         self.assertFalse(IPAddress.objects.filter(id=ip_id).exists())
+
+    def test_merge_gfk_interface_updated_after_ip_assignment(self):
+        """
+        Regression test for GitHub issue #467.
+
+        ObjectChange serializes the ContentType FK as 'assigned_object_type_id' (with
+        the _id suffix), not 'assigned_object_type'. Without the fix, _get_fk_references
+        returns nothing for GFK fields and the dependency is never added to the graph.
+
+        The bug is triggered when Interface.last_change.time > IPAddress.last_change.time,
+        so the default time-based ordering puts IPAddress before Interface. The fix
+        detects the GFK dependency and forces Interface to be created first.
+
+        Sequence:
+          T1: Create IPAddress (unassigned)
+          T2: Create Interface
+          T3: Update IPAddress  → assign GFK to Interface   (IP.last_change = T3)
+          T4: Update Interface  → any field change           (Interface.last_change = T4 > T3)
+
+        Without the fix: both are CREATEs; Interface (T4) sorts after IPAddress (T3) → ValidationError.
+        With the fix: GFK dependency detected → Interface forced before IPAddress → success.
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Test Site', slug='test-site-gfk467')
+            device = Device.objects.create(
+                name='Test Device',
+                site=site,
+                device_type=self.device_type,
+                role=self.device_role,
+            )
+
+        branch = self._create_and_provision_branch()
+
+        request2 = RequestFactory().get(reverse('home'))
+        request2.id = uuid.uuid4()
+        request2.user = self.user
+
+        with activate_branch(branch), event_tracking(request2):
+            # T1: Create IPAddress unassigned
+            ip = IPAddress.objects.create(address='10.0.0.3/24')
+            ip_id = ip.id
+
+            # T2: Create Interface
+            iface = Interface.objects.create(device=device, name='eth0', type='virtual')
+            iface_id = iface.id
+
+            # T3: Update IPAddress → assign GFK to Interface (IP.last_change = T3)
+            ip.snapshot()
+            ip.assigned_object = iface
+            ip.save()
+
+            # T4: Update Interface → makes Interface.last_change = T4 > T3
+            # Without the GFK dependency fix, Interface (T4) sorts AFTER IPAddress (T3),
+            # causing a ValidationError when the merge tries to apply IPAddress first.
+            iface.snapshot()
+            iface.description = 'updated after ip assignment'
+            iface.save()
+
+        branch.merge(user=self.user, commit=True)
+
+        self.assertTrue(Interface.objects.filter(id=iface_id).exists())
+        self.assertTrue(IPAddress.objects.filter(id=ip_id).exists())
+        merged_ip = IPAddress.objects.get(id=ip_id)
+        self.assertEqual(merged_ip.assigned_object_id, iface_id)
+        self.assertEqual(
+            merged_ip.assigned_object_type,
+            ContentType.objects.get_for_model(Interface)
+        )
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        branch.revert(user=self.user, commit=True)
+
+        self.assertFalse(Interface.objects.filter(id=iface_id).exists())
+        self.assertFalse(IPAddress.objects.filter(id=ip_id).exists())
+
+    def test_merge_and_revert_update_on_object_deleted_in_main(self):
+        """
+        Test that squash merge and revert skip an UPDATE for an object that was deleted in main
+        and synced into the branch.
+
+        Scenario:
+        1. Create site in main
+        2. Create branch
+        3. Modify site in branch
+        4. Delete site in main
+        5. Sync branch (applies main's DELETE to branch schema, no ObjectChange recorded)
+        6. Squash merge — branch ObjectChanges only contain the UPDATE; object is gone from main.
+           The UPDATE should be skipped rather than raising DoesNotExist.
+        7. Revert — same: the UPDATE should be skipped.
+        """
+        # Create site in main
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            site_id = site.id
+
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # Modify site in branch
+        request2 = RequestFactory().get(reverse('home'))
+        request2.id = uuid.uuid4()
+        request2.user = self.user
+
+        with activate_branch(branch), event_tracking(request2):
+            site = Site.objects.get(id=site_id)
+            site.snapshot()
+            site.description = 'Modified in branch'
+            site.save()
+
+        # Delete site in main
+        request3 = RequestFactory().get(reverse('home'))
+        request3.id = uuid.uuid4()
+        request3.user = self.user
+
+        with event_tracking(request3):
+            Site.objects.get(id=site_id).delete()
+
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+        # Sync branch — applies the main DELETE to the branch schema
+        branch.sync(user=self.user, commit=True)
+
+        # Branch ObjectChanges only contain the original UPDATE (sync doesn't record changes)
+        self.assertEqual(branch.get_unmerged_changes().count(), 1)
+        self.assertEqual(branch.get_unmerged_changes().first().action, 'update')
+
+        # Merge should succeed: the UPDATE is skipped because the object no longer exists in main
+        branch.merge(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+        # Revert should also succeed: again the UPDATE is skipped
+        branch.revert(user=self.user, commit=True)
+
+        self.assertFalse(Site.objects.filter(id=site_id).exists())

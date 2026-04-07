@@ -1,6 +1,7 @@
 import django_filters
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectType
+from django.contrib.auth import get_user_model
 from django.db.models import Q
 from django.utils.translation import gettext as _
 from netbox.filtersets import BaseFilterSet, NetBoxModelFilterSet
@@ -22,6 +23,17 @@ class BranchFilterSet(NetBoxModelFilterSet):
         null_value=None
     )
     last_sync = filters.MultiValueDateTimeFilter()
+    owner_id = django_filters.ModelMultipleChoiceFilter(
+        field_name='owner',
+        queryset=get_user_model().objects.all(),
+        label=_('Owner (ID)'),
+    )
+    owner = django_filters.ModelMultipleChoiceFilter(
+        field_name='owner__username',
+        queryset=get_user_model().objects.all(),
+        to_field_name='username',
+        label=_('Owner (username)'),
+    )
 
     class Meta:
         model = Branch

@@ -215,6 +215,12 @@ class SyncTestCase(TransactionTestCase):
         with event_tracking(self.request):
             Site.objects.get(id=site_id).delete()
 
+        # Verify the ChangeDiff has conflicts populated (branch updated, main deleted)
+        content_type = ContentType.objects.get_for_model(Site)
+        diff = ChangeDiff.objects.get(branch=branch, object_type=content_type, object_id=site_id)
+        self.assertIsNotNone(diff.conflicts)
+        self.assertIn('description', diff.conflicts)
+
         # Sync branch: applies the deletion from main
         branch.sync(user=self.user, commit=True)
 
@@ -859,5 +865,46 @@ class SyncTestCase(TransactionTestCase):
         self.assertEqual(branch.status, BranchStatusChoices.READY)
 
         # Object remains gone from branch schema
+        with activate_branch(branch):
+            self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+    def test_sync_update_in_main_while_deleted_in_branch(self):
+        """
+        Test sync when an object was deleted in branch, but then updated in main.
+        The UPDATE from main is skipped gracefully; the branch deletion stands.
+        Refs: #426
+        """
+        # Create site in main before branch provisioning
+        with event_tracking(self.request):
+            site = Site.objects.create(
+                name='Contested Site', slug='contested-site', description='Original'
+            )
+            site_id = site.id
+
+        # Create branch (inherits the site)
+        branch = self._create_and_provision_branch()
+
+        # In branch: delete the site
+        with activate_branch(branch), event_tracking(self.request):
+            Site.objects.get(id=site_id).delete()
+
+        # Verify site is gone from branch schema
+        with activate_branch(branch):
+            self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+        # In main: update the site
+        with event_tracking(self.request):
+            site_in_main = Site.objects.get(id=site_id)
+            site_in_main.snapshot()
+            site_in_main.description = 'Updated in main'
+            site_in_main.save()
+
+        # Sync should succeed — the UPDATE from main is skipped since object is gone from branch
+        branch.sync(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+        # Object remains absent from branch schema (branch deletion stands)
         with activate_branch(branch):
             self.assertFalse(Site.objects.filter(id=site_id).exists())
