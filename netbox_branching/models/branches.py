@@ -15,6 +15,7 @@ from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
 from django.db.migrations.executor import MigrationExecutor
+from django.db.migrations.operations.special import SeparateDatabaseAndState
 from django.db.models.signals import post_save
 from django.db.utils import ProgrammingError
 from django.test import RequestFactory
@@ -42,6 +43,7 @@ from netbox_branching.utilities import (
     get_sql_results,
     get_tables_to_replicate,
     record_applied_change,
+    supports_branching,
 )
 
 from .changes import ObjectChange
@@ -52,7 +54,7 @@ __all__ = (
 )
 
 
-def _migration_only_affects_non_branchable(migration):
+def _fake_for_branch(migration):
     """
     Return True if all model-specific operations in a migration affect only non-branchable
     models. Such migrations should be faked on branch schemas to prevent RunSQL operations
@@ -60,11 +62,17 @@ def _migration_only_affects_non_branchable(migration):
 
     Migrations with no model-specific operations (e.g. pure RunSQL) are not faked, as we
     cannot determine their intent without executing them.
-    """
-    from netbox_branching.utilities import supports_branching
 
+    SeparateDatabaseAndState operations are not supported and will be skipped with an error.
+    """
     has_model_operations = False
     for operation in migration.operations:
+        if isinstance(operation, SeparateDatabaseAndState):
+            logger.error(
+                f"Migration {migration} contains SeparateDatabaseAndState, which is not supported "
+                f"for branch schema migration. This migration will not be faked."
+            )
+            return False
         if (model_name := getattr(operation, 'model_name', None)) is None:
             continue
         has_model_operations = True
@@ -561,7 +569,7 @@ class Branch(JobsMixin, PrimaryModel):
                     if not migrations_to_run:
                         break
                     if migration in migrations_to_run:
-                        fake = _migration_only_affects_non_branchable(migration)
+                        fake = _fake_for_branch(migration)
                         state = executor.apply_migration(state, migration, fake=fake)
                         migrations_to_run.remove(migration)
             except Exception as e:
