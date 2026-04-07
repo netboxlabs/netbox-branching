@@ -50,6 +50,7 @@
         {% for field in form.hidden_fields %}
           {{ field }}
         {% endfor %}
+        <input type="hidden" name="return_url" value="{{ return_url }}">
 
         {# Form buttons #}
         <div class="text-end">

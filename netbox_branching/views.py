@@ -550,14 +550,14 @@ class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
                     )
             return redirect(self.get_return_url(request))
 
-        # Show confirmation page — validate PKs through the form, filter to pending branches
+        # Show confirmation page — validate PKs through the form, filter to branches that can actually be migrated
         form = forms.BulkMigrateBranchForm(request.POST)
         if not form.is_valid():
             return redirect(self.get_return_url(request))
 
         branches = [
             branch for branch in form.cleaned_data['pk']
-            if branch.status == BranchStatusChoices.PENDING_MIGRATIONS
+            if branch.status == BranchStatusChoices.PENDING_MIGRATIONS and branch.can_migrate
         ]
         table = self.table(branches, orderable=False)
 
