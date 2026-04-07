@@ -527,28 +527,45 @@ class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
         return redirect(self.get_return_url(request))
 
     def post(self, request):
-        pk_list = [int(pk) for pk in request.POST.getlist('pk')]
-
         if '_confirm' in request.POST:
-            branches = Branch.objects.filter(pk__in=pk_list, status=BranchStatusChoices.PENDING_MIGRATIONS)
-            count = branches.count()
-            for branch in branches:
-                MigrateBranchJob.enqueue(instance=branch, user=request.user)
-            messages.success(
-                request,
-                _('Queued migration jobs for {count} branch(es).').format(count=count)
-            )
+            form = forms.BulkMigrateBranchForm(request.POST)
+            if form.is_valid():
+                branches = [
+                    branch for branch in form.cleaned_data['pk']
+                    if branch.status == BranchStatusChoices.PENDING_MIGRATIONS and branch.can_migrate
+                ]
+                skipped = len(form.cleaned_data['pk']) - len(branches)
+                count = len(branches)
+                for branch in branches:
+                    MigrateBranchJob.enqueue(instance=branch, user=request.user)
+                if count:
+                    messages.success(
+                        request,
+                        _('Queued migration jobs for {count} branch(es).').format(count=count)
+                    )
+                if skipped:
+                    messages.warning(
+                        request,
+                        _('Skipped {skipped} branch(es) that cannot be migrated.').format(skipped=skipped)
+                    )
             return redirect(self.get_return_url(request))
 
-        # Show confirmation page — only include branches that can actually be migrated
-        branches = Branch.objects.filter(pk__in=pk_list, status=BranchStatusChoices.PENDING_MIGRATIONS)
+        # Show confirmation page — validate PKs through the form, filter to pending branches
+        form = forms.BulkMigrateBranchForm(request.POST)
+        if not form.is_valid():
+            return redirect(self.get_return_url(request))
+
+        branches = [
+            branch for branch in form.cleaned_data['pk']
+            if branch.status == BranchStatusChoices.PENDING_MIGRATIONS
+        ]
         table = self.table(branches, orderable=False)
 
         if not table.rows:
             messages.warning(request, _('No branches with pending migrations were selected.'))
             return redirect(self.get_return_url(request))
 
-        form = forms.BulkMigrateBranchForm(initial={'pk': list(branches.values_list('pk', flat=True))})
+        form = forms.BulkMigrateBranchForm(initial={'pk': [b.pk for b in branches]})
 
         return render(request, self.template_name, {
             'form': form,

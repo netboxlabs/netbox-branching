@@ -70,6 +70,65 @@ class BranchTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         get_queue('default').connection.flushall()
 
 
+class BranchBulkMigrateViewTestCase(TestCase):
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_user(username='bulkmigrate_super', is_superuser=True)
+        cls.unprivileged_user = User.objects.create_user(username='bulkmigrate_noperms')
+
+        cls.pending1 = Branch(name='Pending Branch 1', status=BranchStatusChoices.PENDING_MIGRATIONS)
+        cls.pending2 = Branch(name='Pending Branch 2', status=BranchStatusChoices.PENDING_MIGRATIONS)
+        cls.ready = Branch(name='Ready Branch', status=BranchStatusChoices.READY)
+        Branch.objects.bulk_create([cls.pending1, cls.pending2, cls.ready])
+
+    def setUp(self):
+        self.client.force_login(self.superuser)
+        self.url = reverse('plugins:netbox_branching:branch_bulk_migrate')
+
+    def tearDown(self):
+        get_queue('default').connection.flushall()
+
+    def test_confirmation_page_shows_only_pending_branches(self):
+        response = self.client.post(self.url, {
+            'pk': [self.pending1.pk, self.pending2.pk, self.ready.pk],
+            'return_url': '/plugins/branching/branches/',
+        })
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn('Pending Branch 1', content)
+        self.assertIn('Pending Branch 2', content)
+        self.assertNotIn('Ready Branch', content)
+
+    def test_confirm_enqueues_jobs_and_redirects(self):
+        response = self.client.post(self.url, {
+            '_confirm': '1',
+            'pk': [self.pending1.pk, self.pending2.pk],
+            'return_url': '/plugins/branching/branches/',
+        })
+        self.assertRedirects(response, '/plugins/branching/branches/', fetch_redirect_response=False)
+        self.assertEqual(get_queue('default').count, 2)
+        msg_texts = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any('2' in t and 'branch' in t.lower() for t in msg_texts))
+
+    def test_empty_selection_redirects_with_warning(self):
+        response = self.client.post(self.url, {
+            'pk': [self.ready.pk],
+            'return_url': '/plugins/branching/branches/',
+        })
+        self.assertRedirects(response, '/plugins/branching/branches/', fetch_redirect_response=False)
+        msg_texts = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any('pending' in t.lower() for t in msg_texts))
+
+    def test_permission_required(self):
+        self.client.force_login(self.unprivileged_user)
+        response = self.client.post(self.url, {
+            'pk': [self.pending1.pk],
+            'return_url': '/plugins/branching/branches/',
+        })
+        self.assertNotEqual(response.status_code, 200)
+
+
 class ObjectValidationTestCase(TransactionTestCase):
     """
     Test validation behavior for operations on objects that have been deleted in main.
