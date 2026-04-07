@@ -1,4 +1,5 @@
 import uuid
+from unittest.mock import patch
 
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange
@@ -96,18 +97,20 @@ class BranchBulkMigrateViewTestCase(TestCase):
         })
         self.assertEqual(response.status_code, 200)
         content = response.content.decode()
-        self.assertIn('Pending Branch 1', content)
-        self.assertIn('Pending Branch 2', content)
-        self.assertNotIn('Ready Branch', content)
+        # The form's hidden pk fields should only carry pending branch PKs
+        self.assertIn(f'value="{self.pending1.pk}"', content)
+        self.assertIn(f'value="{self.pending2.pk}"', content)
+        self.assertNotIn(f'value="{self.ready.pk}"', content)
 
     def test_confirm_enqueues_jobs_and_redirects(self):
-        response = self.client.post(self.url, {
-            '_confirm': '1',
-            'pk': [self.pending1.pk, self.pending2.pk],
-            'return_url': '/plugins/branching/branches/',
-        })
+        with patch('netbox_branching.views.MigrateBranchJob.enqueue') as mock_enqueue:
+            response = self.client.post(self.url, {
+                '_confirm': '1',
+                'pk': [self.pending1.pk, self.pending2.pk],
+                'return_url': '/plugins/branching/branches/',
+            })
         self.assertRedirects(response, '/plugins/branching/branches/', fetch_redirect_response=False)
-        self.assertEqual(get_queue('default').count, 2)
+        self.assertEqual(mock_enqueue.call_count, 2)
         msg_texts = [str(m) for m in get_messages(response.wsgi_request)]
         self.assertTrue(any('2' in t and 'branch' in t.lower() for t in msg_texts))
 
