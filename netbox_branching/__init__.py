@@ -45,6 +45,9 @@ class AppConfig(PluginConfig):
         'migrate_validators': [],
         'revert_validators': [],
         'archive_validators': [],
+
+        # Number of days before staleness at which to display a stale warning
+        'stale_warning_threshold': 7,
     }
 
     def ready(self):

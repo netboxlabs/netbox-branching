@@ -1,0 +1,285 @@
+{% extends 'generic/object.html' %}
+{% load helpers %}
+{% load i18n %}
+
+{% block breadcrumbs %}
+  <li class="breadcrumb-item">
+    <a href="{% url 'plugins:netbox_branching:branch_list' %}">{% trans "Branches" %}</a>
+  </li>
+  <li class="breadcrumb-item">
+    <a href="{{ object.get_absolute_url }}">{{ object.name }}</a>
+  </li>
+  <li class="breadcrumb-item active" aria-current="page">
+    {% trans "Merge Report" %}
+  </li>
+{% endblock breadcrumbs %}
+
+{% block object_identifier %}{% endblock %}
+
+{% block title %}
+  {{ object.name }} - {% trans "Merge Report" %}
+{% endblock title %}
+
+{% block subtitle %}
+  <div class="text-secondary fs-5">
+    <ul class="list-inline">
+      {% if last_job.user %}
+        <li class="list-inline-item">
+          <i class="mdi mdi-account-outline"></i> {{ last_job.user }}
+        </li>
+      {% endif %}
+      {% if last_job.created %}
+        <li class="list-inline-item">
+          <i class="mdi mdi-calendar-clock"></i> {{ last_job.created|isodatetime:"minutes" }}
+        </li>
+      {% endif %}
+    </ul>
+  </div>
+{% endblock subtitle %}
+
+{% block control-buttons %}{% endblock %}
+
+{% block tabs %}
+  <ul class="nav nav-tabs">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" id="report-tab" data-bs-toggle="tab" data-bs-target="#report"
+              type="button" role="tab" aria-controls="report" aria-selected="true">
+        {% trans "Report" %}
+      </button>
+    </li>
+    <li class="nav-item" role="presentation">
+      <button class="nav-link" id="logs-tab" data-bs-toggle="tab" data-bs-target="#logs"
+              type="button" role="tab" aria-controls="logs" aria-selected="false">
+        {% trans "Logs" %}
+      </button>
+    </li>
+  </ul>
+{% endblock tabs %}
+
+{% block content %}
+  {# Report tab #}
+  <div class="tab-pane show active" id="report" role="tabpanel" aria-labelledby="report-tab">
+
+    {% if has_unsynced_changes %}
+      <div class="alert alert-warning d-flex align-items-center" role="alert">
+        <span class="text-warning fs-1 me-3">
+          <i class="mdi mdi-alert"></i>
+        </span>
+        <span class="flex-fill">
+          <strong>{% trans "Branch was out of sync at time of merge." %}</strong>
+          {% trans "There were pending changes from main that had not been synced into this branch. Syncing before merging reduces the risk of conflicts." %}
+        </span>
+      </div>
+    {% endif %}
+
+    {% if merge_strategy or changes_summary.creates or changes_summary.updates or changes_summary.deletes %}
+      <div class="card mb-3">
+        <div class="card-header">
+          <strong>{% trans "Changes" %}</strong>
+        </div>
+        {% if merge_strategy %}
+          <table class="table table-hover attr-table mb-0">
+            <tr>
+              <th scope="row">{% trans "Merge Strategy" %}</th>
+              <td>{{ merge_strategy|title }}</td>
+            </tr>
+          </table>
+        {% endif %}
+        <div class="card-body p-0">
+          <div class="list-group list-group-flush">
+            {% if changes_summary.creates %}
+              <div class="list-group-item">
+                <a class="d-flex justify-content-between align-items-center text-decoration-none text-body"
+                   data-bs-toggle="collapse" href="#report-creates" role="button" aria-expanded="true" aria-controls="report-creates">
+                  <span>{% trans "Creates" %}</span>
+                  <span class="badge bg-success rounded-pill text-white">{{ changes_summary.creates_total }}</span>
+                </a>
+                <div class="collapse show" id="report-creates">
+                  <table class="table table-hover table-borderless mb-0">
+                    <tbody>
+                      {% for ct, count in changes_summary.creates.items %}
+                        <tr>
+                          <td>{{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}</td>
+                          <td class="text-end">{{ count }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            {% endif %}
+            {% if changes_summary.updates %}
+              <div class="list-group-item">
+                <a class="d-flex justify-content-between align-items-center text-decoration-none text-body"
+                   data-bs-toggle="collapse" href="#report-updates" role="button" aria-expanded="true" aria-controls="report-updates">
+                  <span>{% trans "Updates" %}</span>
+                  <span class="badge bg-primary rounded-pill text-white">{{ changes_summary.updates_total }}</span>
+                </a>
+                <div class="collapse show" id="report-updates">
+                  <table class="table table-hover table-borderless mb-0">
+                    <tbody>
+                      {% for ct, count in changes_summary.updates.items %}
+                        <tr>
+                          <td>{{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}</td>
+                          <td class="text-end">{{ count }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            {% endif %}
+            {% if changes_summary.deletes %}
+              <div class="list-group-item">
+                <a class="d-flex justify-content-between align-items-center text-decoration-none text-body"
+                   data-bs-toggle="collapse" href="#report-deletes" role="button" aria-expanded="true" aria-controls="report-deletes">
+                  <span>{% trans "Deletes" %}</span>
+                  <span class="badge bg-danger rounded-pill text-white">{{ changes_summary.deletes_total }}</span>
+                </a>
+                <div class="collapse show" id="report-deletes">
+                  <table class="table table-hover table-borderless mb-0">
+                    <tbody>
+                      {% for ct, count in changes_summary.deletes.items %}
+                        <tr>
+                          <td>{{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}</td>
+                          <td class="text-end">{{ count }}</td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    {% endif %}
+
+    {% if not last_job %}
+      <div class="card mb-3">
+        <div class="card-body text-secondary">{% trans "No merge has been run for this branch." %}</div>
+      </div>
+    {% elif report_entries %}
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <strong>{% trans "Merge Failures" %}</strong>
+          <span class="text-muted small">
+            <a href="{{ last_job.get_absolute_url }}">{{ last_job.name }}</a>
+            &mdash; {{ last_job.created|isodatetime }}
+            {% if last_job.user %} {% trans "by" %} {{ last_job.user }}{% endif %}
+          </span>
+        </div>
+        <table class="table table-hover mb-0">
+          <thead>
+            <tr>
+              <th>{% trans "Type" %}</th>
+              <th>{% trans "Object" %}</th>
+              <th>{% trans "Field" %}</th>
+              <th>{% trans "Value" %}</th>
+              <th>{% trans "Error" %}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for entry in report_entries %}
+              <tr>
+                <td>{% if entry.model %}{% badge entry.model|title "secondary" %}{% else %}—{% endif %}</td>
+                <td>
+                  {% if entry.object_url %}
+                    <a href="{{ entry.object_url }}">{{ entry.object_str }}</a>
+                  {% elif entry.object_str %}
+                    {{ entry.object_str }}
+                  {% else %}
+                    —
+                  {% endif %}
+                </td>
+                <td>{{ entry.field|default:"—" }}</td>
+                <td>{% if entry.value %}<code>{{ entry.value }}</code>{% else %}—{% endif %}</td>
+                <td>{{ entry.message }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="card mb-3">
+        <div class="card-header">
+          <strong>{% trans "Recommendations" %}</strong>
+        </div>
+        <div class="list-group list-group-flush">
+          {% for entry in report_entries %}
+            <div class="list-group-item">
+              {% if entry.object_str or entry.model %}
+                <p class="mb-1 fw-semibold">
+                  {% if entry.model %}{% badge entry.model|title "secondary" %} {% endif %}{{ entry.object_str }}
+                </p>
+              {% endif %}
+              <ol class="mb-0">
+                {% for rec in entry.recommendations %}
+                  <li value="{{ forloop.counter }}">{{ rec }}</li>
+                  {% if not forloop.last %}
+                    <li class="list-unstyled text-muted small fst-italic py-1">— {% trans "or" %} —</li>
+                  {% endif %}
+                {% endfor %}
+              </ol>
+            </div>
+          {% endfor %}
+        </div>
+      </div>
+    {% elif last_job.error %}
+      <div class="card mb-3">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <strong>{% trans "Merge Failures" %}</strong>
+          <span class="text-muted small">
+            <a href="{{ last_job.get_absolute_url }}">{{ last_job.name }}</a>
+            &mdash; {{ last_job.created|isodatetime }}
+            {% if last_job.user %} {% trans "by" %} {{ last_job.user }}{% endif %}
+          </span>
+        </div>
+        <div class="card-body text-secondary">{{ last_job.error }}</div>
+      </div>
+    {% else %}
+      <div class="card mb-3">
+        <div class="card-body text-success">
+          <i class="mdi mdi-check-bold"></i> {% trans "Merge completed successfully." %}
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="text-end mb-3">
+      <a href="{{ object.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Back to Branch" %}</a>
+    </div>
+
+  </div>
+  {# /Report tab #}
+
+  {# Logs tab #}
+  <div class="tab-pane" id="logs" role="tabpanel" aria-labelledby="logs-tab">
+    {% if last_job.data.log %}
+      <div class="card">
+        <table class="table table-hover table-sm mb-0">
+          <thead>
+            <tr>
+              <th class="text-end text-muted" style="width: 3rem">#</th>
+              <th>{% trans "Message" %}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for entry in last_job.data.log %}
+              <tr>
+                <td class="text-end text-muted small">{{ forloop.counter }}</td>
+                <td class="font-monospace small">{{ entry }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="text-muted p-3">{% trans "No log entries available." %}</div>
+    {% endif %}
+
+    <div class="text-end mt-3 mb-3">
+      <a href="{{ object.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Back to Branch" %}</a>
+    </div>
+  </div>
+  {# /Logs tab #}
+
+{% endblock content %}
