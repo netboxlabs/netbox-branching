@@ -158,6 +158,13 @@ class Branch(JobsMixin, PrimaryModel):
 
     class Meta:
         ordering = ('name',)
+        permissions = [
+            ('sync', 'Synchronize branch with main schema'),
+            ('merge', 'Merge branch changes into main'),
+            ('migrate', 'Apply pending migrations to branch'),
+            ('revert', 'Revert a merged branch'),
+            ('archive', 'Archive a merged branch'),
+        ]
         verbose_name = _('branch')
         verbose_name_plural = _('branches')
 
