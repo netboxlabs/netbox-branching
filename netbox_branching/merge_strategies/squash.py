@@ -180,8 +180,8 @@ class SquashMergeStrategy(MergeStrategy):
                 ).exists()
                 if not exists:
                     logger.info(
-                        f'  Skipping UPDATE for {collapsed.model_class.__name__}:{collapsed.key[1]} '
-                        f'(object deleted in main)'
+                        f"  Skipping UPDATE for {collapsed.model_class.__name__}:{collapsed.key[1]} "
+                        f"(object deleted in main)"
                     )
                     collapsed.final_action = ActionType.SKIP
 

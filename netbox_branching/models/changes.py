@@ -40,6 +40,14 @@ class ObjectChange(ObjectChange_):
     def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None, skip_missing=False):
         """
         Apply the change using the specified database connection.
+
+        Args:
+            branch: The Branch instance the change belongs to.
+            using: The database alias to use for write operations.
+            logger: Optional logger instance; defaults to a module-level logger.
+            skip_missing: If True, silently skip the change when the target object does not exist
+                (UPDATE/DELETE) or cannot be created due to a missing dependency (CREATE). If False,
+                such conditions raise an exception.
         """
         logger = logger or logging.getLogger('netbox_branching.models.ObjectChange.apply')
         model = self.changed_object_type.model_class()
