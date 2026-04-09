@@ -11,7 +11,8 @@ from django.shortcuts import redirect, render
 from django.utils.translation import gettext_lazy as _
 from netbox.plugins import get_plugin_config
 from netbox.views import generic
-from utilities.views import ViewTab, register_model_view
+from netbox.views.generic.base import BaseMultiObjectView
+from utilities.views import GetReturnURLMixin, ViewTab, register_model_view
 
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
@@ -19,6 +20,7 @@ from .constants import QUERY_PARAM
 from .error_report import get_entry_message, get_merge_recommendations
 from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
+from .object_actions import BulkMigrate
 from .utilities import resolve_changes_summary
 
 #
@@ -34,6 +36,7 @@ class BranchListView(generic.ObjectListView):
     filterset = filtersets.BranchFilterSet
     filterset_form = forms.BranchFilterForm
     table = tables.BranchTable
+    actions = (*generic.ObjectListView.actions, BulkMigrate)
 
 
 @register_model_view(Branch)
@@ -510,6 +513,65 @@ class BranchBulkDeleteView(generic.BulkDeleteView):
     queryset = Branch.objects.all()
     filterset = filtersets.BranchFilterSet
     table = tables.BranchTable
+
+
+class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
+    queryset = Branch.objects.all()
+    table = tables.BranchTable
+    template_name = 'netbox_branching/branch_bulk_migrate.html'
+
+    def get_required_permission(self):
+        return 'netbox_branching.migrate_branch'
+
+    def get(self, request):
+        return redirect(self.get_return_url(request))
+
+    def post(self, request):
+        if '_confirm' in request.POST:
+            form = forms.BulkMigrateBranchForm(request.POST)
+            if form.is_valid():
+                branches = [
+                    branch for branch in form.cleaned_data['pk']
+                    if branch.status == BranchStatusChoices.PENDING_MIGRATIONS and branch.can_migrate
+                ]
+                skipped = len(form.cleaned_data['pk']) - len(branches)
+                count = len(branches)
+                for branch in branches:
+                    MigrateBranchJob.enqueue(instance=branch, user=request.user)
+                if count:
+                    messages.success(
+                        request,
+                        _('Queued migration jobs for {count} branch(es).').format(count=count)
+                    )
+                if skipped:
+                    messages.warning(
+                        request,
+                        _('Skipped {skipped} branch(es) that cannot be migrated.').format(skipped=skipped)
+                    )
+            return redirect(self.get_return_url(request))
+
+        # Show confirmation page — validate PKs through the form, filter to branches that can actually be migrated
+        form = forms.BulkMigrateBranchForm(request.POST)
+        if not form.is_valid():
+            return redirect(self.get_return_url(request))
+
+        branches = [
+            branch for branch in form.cleaned_data['pk']
+            if branch.status == BranchStatusChoices.PENDING_MIGRATIONS and branch.can_migrate
+        ]
+        table = self.table(branches, orderable=False)
+
+        if not table.rows:
+            messages.warning(request, _('No branches with pending migrations were selected.'))
+            return redirect(self.get_return_url(request))
+
+        form = forms.BulkMigrateBranchForm(initial={'pk': [b.pk for b in branches]})
+
+        return render(request, self.template_name, {
+            'form': form,
+            'table': table,
+            'return_url': self.get_return_url(request),
+        })
 
 
 #
