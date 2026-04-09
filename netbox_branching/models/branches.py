@@ -479,7 +479,7 @@ class Branch(JobsMixin, PrimaryModel):
                 action=ObjectChangeActionChoices.ACTION_DELETE,
                 changed_object_type=ct,
                 changed_object_id=obj.pk,
-                changed_object_repr=str(obj),
+                object_repr=str(obj),
                 prechange_data=prechange_data,
                 postchange_data=None,
                 user=user,
