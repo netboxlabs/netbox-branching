@@ -434,12 +434,7 @@ class Branch(JobsMixin, PrimaryModel):
         When a parent object is deleted in main and synced to the branch, child objects that
         exist only in the branch (no record in main) are cascade-deleted at the DB level with
         no corresponding changelog entry. This method captures those deletions via a temporary
-        pre_delete signal handler and writes a synthetic DELETE ObjectChange for each one,
-        keeping the branch changelog accurate and allowing merge strategies to handle them
-        correctly (e.g. squash collapses CREATE + DELETE → SKIP).
-
-        Returns a set of model classes for the cascade-deleted objects, so the caller can
-        include them in cleanup tasks (e.g. MPTT rebuilds).
+        pre_delete signal handler and writes a synthetic DELETE ObjectChange for each one.
         """
         cascade_targets = []
         primary_model = change.changed_object_type.model_class()

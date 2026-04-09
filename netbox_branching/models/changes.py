@@ -5,8 +5,7 @@ from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.fields import ArrayField
-from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, IntegrityError, models
+from django.db import DEFAULT_DB_ALIAS, models
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from utilities.querysets import RestrictedQuerySet
@@ -40,14 +39,6 @@ class ObjectChange(ObjectChange_):
     def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None, skip_missing=False):
         """
         Apply the change using the specified database connection.
-
-        Args:
-            branch: The Branch instance the change belongs to.
-            using: The database alias to use for write operations.
-            logger: Optional logger instance; defaults to a module-level logger.
-            skip_missing: If True, silently skip the change when the target object does not exist
-                (UPDATE/DELETE) or cannot be created due to a missing dependency (CREATE). If False,
-                such conditions raise an exception.
         """
         logger = logger or logging.getLogger('netbox_branching.models.ObjectChange.apply')
         model = self.changed_object_type.model_class()
@@ -64,28 +55,11 @@ class ObjectChange(ObjectChange_):
                 instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
             try:
                 instance.object.full_clean()
-            except FileNotFoundError as e:
+            except (FileNotFoundError) as e:
                 # If a file was deleted later in this branch it will fail here
                 # so we need to ignore it. We can assume the NetBox state is valid.
                 logger.warning(f'Ignoring missing file: {e}')
-            except ValidationError:
-                if skip_missing:
-                    logger.debug(
-                        f'{model._meta.verbose_name} ID {self.changed_object_id} cannot be created '
-                        f'(missing dependency); skipping'
-                    )
-                    return
-                raise
-            try:
-                instance.save(using=using)
-            except IntegrityError:
-                if skip_missing:
-                    logger.debug(
-                        f'{model._meta.verbose_name} ID {self.changed_object_id} cannot be created '
-                        f'(integrity error); skipping'
-                    )
-                else:
-                    raise
+            instance.save(using=using)
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
@@ -132,11 +106,8 @@ class ObjectChange(ObjectChange_):
 
         # Reverting a modification to an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
-            try:
-                instance = model.objects.using(using).get(pk=self.changed_object_id)
-                update_object(instance, self.diff()['pre'], using=using)
-            except model.DoesNotExist:
-                logger.debug(f'{model._meta.verbose_name} ID {self.changed_object_id} does not exist; skipping')
+            instance = model.objects.using(using).get(pk=self.changed_object_id)
+            update_object(instance, self.diff()['pre'], using=using)
 
         # Restoring a deleted object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
@@ -152,14 +123,8 @@ class ObjectChange(ObjectChange_):
                     if ct_field and fk_field:
                         setattr(instance, field.name, ct_field.get_object_for_this_type(pk=fk_field))
 
-            try:
-                instance.full_clean()
-                instance.save(using=using)
-            except (ValidationError, IntegrityError):
-                logger.debug(
-                    f'Failed to restore {model._meta.verbose_name} ID {self.changed_object_id} '
-                    f'(missing dependency); skipping'
-                )
+            instance.full_clean()
+            instance.save(using=using)
 
     undo.alters_data = True
 
