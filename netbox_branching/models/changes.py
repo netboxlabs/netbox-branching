@@ -5,7 +5,8 @@ from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.fields import ArrayField
-from django.db import DEFAULT_DB_ALIAS, models
+from django.core.exceptions import ValidationError
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, models
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
 from utilities.querysets import RestrictedQuerySet
@@ -126,8 +127,14 @@ class ObjectChange(ObjectChange_):
                     if ct_field and fk_field:
                         setattr(instance, field.name, ct_field.get_object_for_this_type(pk=fk_field))
 
-            instance.full_clean()
-            instance.save(using=using)
+            try:
+                instance.full_clean()
+                instance.save(using=using)
+            except (ValidationError, IntegrityError):
+                logger.debug(
+                    f'Failed to restore {model._meta.verbose_name} ID {self.changed_object_id} '
+                    f'(missing dependency); skipping'
+                )
 
     undo.alters_data = True
 

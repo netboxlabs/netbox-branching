@@ -1023,9 +1023,9 @@ class BaseMergeTests:
           2. Create branch
           3. In branch: create Location l1 with site=s1
           4. In main: delete s1 (CASCADE to l1)
-          5. Sync: s1 deletion applied to branch; l1 cascade-deleted from branch
-                   schema with no ObjectChange recorded for it.
-          6. Merge: should succeed — the orphaned CREATE for l1 is skipped.
+          5. Sync: s1 deletion applied to branch; l1 cascade-deleted from branch schema;
+                   a synthetic DELETE ObjectChange is recorded for l1.
+          6. Merge: should succeed — CREATE + DELETE collapses to SKIP.
           7. Verify l1 does NOT exist in main (it was never created there).
         """
         request = RequestFactory().get(reverse('home'))
@@ -1061,10 +1061,10 @@ class BaseMergeTests:
         with activate_branch(branch):
             self.assertFalse(Location.objects.filter(id=location_id).exists())
 
-        # The CREATE ObjectChange for l1 is still in the branch log
-        self._assert_object_changes(branch, Location, location_id, 1, ['create'])
+        # A synthetic DELETE ObjectChange was recorded for l1 during sync
+        self._assert_object_changes(branch, Location, location_id, 2, ['create', 'delete'])
 
-        # Merge should succeed — the stale CREATE is skipped
+        # Merge should succeed — CREATE + DELETE collapses to SKIP
         branch.merge(user=self.user, commit=True)
 
         branch.refresh_from_db()
@@ -1073,7 +1073,7 @@ class BaseMergeTests:
         # l1 was never created in main
         self.assertFalse(Location.objects.filter(id=location_id).exists())
 
-        # Revert should succeed — undo of a CREATE for an object that never existed is a no-op
+        # Revert should succeed — nothing was applied to main for l1
         branch.revert(user=self.user, commit=True)
 
         branch.refresh_from_db()
@@ -1090,9 +1090,8 @@ class BaseMergeTests:
           2. Create branch
           3. In branch: create Location l1 with site=s1, then update its description
           4. In main: delete s1 (CASCADE to l1)
-          5. Sync: l1 cascade-deleted from branch (CREATE + UPDATE in log,
-                   no DELETE ObjectChange recorded).
-          6. Merge: should succeed — both the CREATE and the subsequent UPDATE are skipped.
+          5. Sync: l1 cascade-deleted from branch; a synthetic DELETE ObjectChange is recorded.
+          6. Merge: should succeed — CREATE + UPDATE + DELETE collapses to SKIP.
           7. Verify l1 does NOT exist in main.
         """
         request = RequestFactory().get(reverse('home'))
@@ -1126,15 +1125,15 @@ class BaseMergeTests:
         with event_tracking(request):
             Site.objects.get(id=site_id).delete()
 
-        # Sync: l1 cascade-deleted from branch; CREATE + UPDATE remain in log
+        # Sync: l1 cascade-deleted from branch; a synthetic DELETE is added to the log
         branch.sync(user=self.user, commit=True)
 
         with activate_branch(branch):
             self.assertFalse(Location.objects.filter(id=location_id).exists())
 
-        self._assert_object_changes(branch, Location, location_id, 2, ['create', 'update'])
+        self._assert_object_changes(branch, Location, location_id, 3, ['create', 'update', 'delete'])
 
-        # Merge should succeed — the stale CREATE and UPDATE are both skipped
+        # Merge should succeed — CREATE + UPDATE + DELETE collapses to SKIP
         branch.merge(user=self.user, commit=True)
 
         branch.refresh_from_db()
@@ -1143,7 +1142,7 @@ class BaseMergeTests:
         # l1 was never created in main
         self.assertFalse(Location.objects.filter(id=location_id).exists())
 
-        # Revert should succeed — undo of CREATE/UPDATE for a non-existent object are both no-ops
+        # Revert should succeed — nothing was applied to main for l1
         branch.revert(user=self.user, commit=True)
 
         branch.refresh_from_db()
