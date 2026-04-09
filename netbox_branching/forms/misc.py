@@ -2,12 +2,13 @@ from django import forms
 from django.utils.translation import gettext_lazy as _
 
 from netbox_branching.choices import BranchMergeStrategyChoices
-from netbox_branching.models import ChangeDiff
+from netbox_branching.models import Branch, ChangeDiff
 
 __all__ = (
     'BranchMergeForm',
     'BranchRevertForm',
     'BranchSyncForm',
+    'BulkMigrateBranchForm',
     'ConfirmationForm',
     'MigrateBranchForm',
 )
@@ -81,4 +82,11 @@ class MigrateBranchForm(forms.Form):
         help_text=_(
             'All migrations will be applied in order. <strong>Migrations cannot be reversed once applied.</strong>'
         )
+    )
+
+
+class BulkMigrateBranchForm(forms.Form):
+    pk = forms.ModelMultipleChoiceField(
+        queryset=Branch.objects.all(),
+        widget=forms.MultipleHiddenInput()
     )
