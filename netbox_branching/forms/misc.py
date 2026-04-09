@@ -88,6 +88,5 @@ class MigrateBranchForm(forms.Form):
 class BulkMigrateBranchForm(forms.Form):
     pk = forms.ModelMultipleChoiceField(
         queryset=Branch.objects.all(),
-        required=False,
         widget=forms.MultipleHiddenInput()
     )
