@@ -463,7 +463,9 @@ class Branch(JobsMixin, PrimaryModel):
                     if hasattr(instance, 'serialize_object')
                     else serialize_object(instance)
                 )
-                _targets.append((instance, prechange_data))
+                # Capture pk, repr, and model as values now — Django sets instance.pk = None
+                # after deletion, so reading them from the instance later would give wrong results.
+                _targets.append((sender, instance.pk, str(instance), prechange_data))
 
         pre_delete.connect(_capture_cascade)
         try:
@@ -472,14 +474,14 @@ class Branch(JobsMixin, PrimaryModel):
             pre_delete.disconnect(_capture_cascade)
 
         cascade_models = set()
-        for obj, prechange_data in cascade_targets:
-            cascade_models.add(type(obj))
-            ct = ContentType.objects.get_for_model(type(obj))
+        for model_class, obj_pk, obj_repr, prechange_data in cascade_targets:
+            cascade_models.add(model_class)
+            ct = ContentType.objects.get_for_model(model_class)
             ObjectChange.objects.using(self.connection_name).create(
                 action=ObjectChangeActionChoices.ACTION_DELETE,
                 changed_object_type=ct,
-                changed_object_id=obj.pk,
-                object_repr=str(obj),
+                changed_object_id=obj_pk,
+                object_repr=obj_repr,
                 prechange_data=prechange_data,
                 postchange_data=None,
                 user=user,
@@ -487,7 +489,7 @@ class Branch(JobsMixin, PrimaryModel):
                 request_id=uuid.uuid4(),
             )
             logger.debug(
-                f'Recorded cascade deletion of {type(obj)._meta.verbose_name} {obj} (branch-originated)'
+                f'Recorded cascade deletion of {model_class._meta.verbose_name} {obj_repr} (branch-originated)'
             )
 
         return cascade_models
