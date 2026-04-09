@@ -426,6 +426,72 @@ class Branch(JobsMixin, PrimaryModel):
     # Branch actions
     #
 
+    def _handle_sync_delete(self, change, branchable_models, user, logger):
+        """
+        Apply a DELETE change to the branch schema and record ObjectChange entries for any
+        branch-originated objects that are cascade-deleted as a side effect.
+
+        When a parent object is deleted in main and synced to the branch, child objects that
+        exist only in the branch (no record in main) are cascade-deleted at the DB level with
+        no corresponding changelog entry. This method captures those deletions via a temporary
+        pre_delete signal handler and writes a synthetic DELETE ObjectChange for each one,
+        keeping the branch changelog accurate and allowing merge strategies to handle them
+        correctly (e.g. squash collapses CREATE + DELETE → SKIP).
+
+        Returns a set of model classes for the cascade-deleted objects, so the caller can
+        include them in cleanup tasks (e.g. MPTT rebuilds).
+        """
+        cascade_targets = []
+        primary_model = change.changed_object_type.model_class()
+        primary_pk = change.changed_object_id
+
+        def _capture_cascade(
+            sender, instance, using,
+            _conn=self.connection_name,
+            _primary_model=primary_model,
+            _primary_pk=primary_pk,
+            _targets=cascade_targets,
+            **kwargs,
+        ):
+            if using != _conn or (sender is _primary_model and instance.pk == _primary_pk):
+                return
+            if sender not in branchable_models:
+                return
+            if not sender.objects.using(DEFAULT_DB_ALIAS).filter(pk=instance.pk).exists():
+                prechange_data = (
+                    instance.serialize_object()
+                    if hasattr(instance, 'serialize_object')
+                    else serialize_object(instance)
+                )
+                _targets.append((instance, prechange_data))
+
+        pre_delete.connect(_capture_cascade)
+        try:
+            change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+        finally:
+            pre_delete.disconnect(_capture_cascade)
+
+        cascade_models = set()
+        for obj, prechange_data in cascade_targets:
+            cascade_models.add(type(obj))
+            ct = ContentType.objects.get_for_model(type(obj))
+            ObjectChange.objects.using(self.connection_name).create(
+                action=ObjectChangeActionChoices.ACTION_DELETE,
+                changed_object_type=ct,
+                changed_object_id=obj.pk,
+                changed_object_repr=str(obj),
+                prechange_data=prechange_data,
+                postchange_data=None,
+                user=user,
+                user_name=user.username if user else '',
+                request_id=uuid.uuid4(),
+            )
+            logger.debug(
+                f'Recorded cascade deletion of {type(obj)._meta.verbose_name} {obj} (branch-originated)'
+            )
+
+        return cascade_models
+
     def sync(self, user, commit=True):
         """
         Apply changes from the main schema onto the Branch's schema.
@@ -463,61 +529,11 @@ class Branch(JobsMixin, PrimaryModel):
                 for change in changes:
                     model_class = change.changed_object_type.model_class()
                     models.add(model_class)
-
                     if change.action == ObjectChangeActionChoices.ACTION_DELETE:
-                        # Temporarily connect a pre_delete handler to capture branch-originated objects
-                        # that are cascade-deleted when this change is applied to the branch schema.
-                        # These objects have no corresponding deletion record in main (they only exist in
-                        # the branch), so we create one here to keep the branch changelog accurate.
-                        cascade_targets = []
-                        _primary_model = model_class
-                        _primary_pk = change.changed_object_id
-                        _conn = self.connection_name
-
-                        def _capture_cascade(
-                            sender, instance, using,
-                            _conn=_conn, _primary_model=_primary_model,
-                            _primary_pk=_primary_pk, _targets=cascade_targets,
-                            **kwargs,
-                        ):
-                            if using != _conn:
-                                return
-                            if sender is _primary_model and instance.pk == _primary_pk:
-                                return
-                            if sender not in branchable_models:
-                                return
-                            if not sender.objects.using(DEFAULT_DB_ALIAS).filter(pk=instance.pk).exists():
-                                prechange_data = (
-                                    instance.serialize_object()
-                                    if hasattr(instance, 'serialize_object')
-                                    else serialize_object(instance)
-                                )
-                                _targets.append((instance, prechange_data))
-
-                        pre_delete.connect(_capture_cascade)
-                        try:
-                            change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
-                        finally:
-                            pre_delete.disconnect(_capture_cascade)
-
-                        for obj, prechange_data in cascade_targets:
-                            models.add(type(obj))
-                            ct = ContentType.objects.get_for_model(type(obj))
-                            ObjectChange.objects.using(self.connection_name).create(
-                                action=ObjectChangeActionChoices.ACTION_DELETE,
-                                changed_object_type=ct,
-                                changed_object_id=obj.pk,
-                                changed_object_repr=str(obj),
-                                prechange_data=prechange_data,
-                                postchange_data=None,
-                                user=user,
-                                user_name=user.username if user else '',
-                                request_id=uuid.uuid4(),
-                            )
-                            logger.debug(
-                                f'Recorded cascade deletion of {type(obj)._meta.verbose_name} {obj} '
-                                f'(branch-originated)'
-                            )
+                        cascade_models = self._handle_sync_delete(
+                            change, branchable_models, user, logger
+                        )
+                        models.update(cascade_models)
                     else:
                         change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
 
