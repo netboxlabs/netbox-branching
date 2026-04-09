@@ -56,11 +56,28 @@ class ObjectChange(ObjectChange_):
                 instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
             try:
                 instance.object.full_clean()
-            except (FileNotFoundError) as e:
+            except FileNotFoundError as e:
                 # If a file was deleted later in this branch it will fail here
                 # so we need to ignore it. We can assume the NetBox state is valid.
                 logger.warning(f'Ignoring missing file: {e}')
-            instance.save(using=using)
+            except ValidationError:
+                if skip_missing:
+                    logger.debug(
+                        f'{model._meta.verbose_name} ID {self.changed_object_id} cannot be created '
+                        f'(missing dependency); skipping'
+                    )
+                    return
+                raise
+            try:
+                instance.save(using=using)
+            except IntegrityError:
+                if skip_missing:
+                    logger.debug(
+                        f'{model._meta.verbose_name} ID {self.changed_object_id} cannot be created '
+                        f'(integrity error); skipping'
+                    )
+                else:
+                    raise
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
