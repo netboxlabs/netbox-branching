@@ -31,7 +31,7 @@ class IterativeMergeStrategy(MergeStrategy):
                 request.id = change.request_id
                 request.user = change.user
                 try:
-                    change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger, skip_missing=True)
+                    change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
                 except ValidationError as e:
                     annotate_validation_error(e, model_class, change.changed_object_id, change.changed_object_type_id)
                     raise

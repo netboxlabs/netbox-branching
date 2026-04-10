@@ -500,11 +500,12 @@ class Branch(JobsMixin, PrimaryModel):
                 # after deletion, so reading them from the instance later would give wrong results.
                 _targets.append((sender, instance.pk, str(instance), prechange_data))
 
-        pre_delete.connect(_capture_cascade)
+        uid = f'_capture_cascade_{id(_capture_cascade)}'
+        pre_delete.connect(_capture_cascade, weak=False, dispatch_uid=uid)
         try:
             change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
         finally:
-            pre_delete.disconnect(_capture_cascade)
+            pre_delete.disconnect(_capture_cascade, dispatch_uid=uid)
 
         cascade_models = set()
         for model_class, obj_pk, obj_repr, prechange_data in cascade_targets:
