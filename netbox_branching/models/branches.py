@@ -474,7 +474,7 @@ class Branch(JobsMixin, PrimaryModel):
         no corresponding changelog entry. This method captures those deletions via a temporary
         pre_delete signal handler and writes a synthetic DELETE ObjectChange for each one.
         """
-        cascade_targets = []
+        cascade_targets = {}  # keyed by (model, pk) to deduplicate repeated pre_delete signals
         primary_model = change.changed_object_type.model_class()
         primary_pk = change.changed_object_id
 
@@ -490,6 +490,9 @@ class Branch(JobsMixin, PrimaryModel):
                 return
             if sender not in branchable_models:
                 return
+            key = (sender, instance.pk)
+            if key in _targets:
+                return
             if not sender.objects.using(DEFAULT_DB_ALIAS).filter(pk=instance.pk).exists():
                 prechange_data = (
                     instance.serialize_object()
@@ -498,7 +501,7 @@ class Branch(JobsMixin, PrimaryModel):
                 )
                 # Capture pk, repr, and model as values now — Django sets instance.pk = None
                 # after deletion, so reading them from the instance later would give wrong results.
-                _targets.append((sender, instance.pk, str(instance), prechange_data))
+                _targets[key] = (sender, instance.pk, str(instance), prechange_data)
 
         uid = f'_capture_cascade_{id(_capture_cascade)}'
         pre_delete.connect(_capture_cascade, weak=False, dispatch_uid=uid)
@@ -508,7 +511,7 @@ class Branch(JobsMixin, PrimaryModel):
             pre_delete.disconnect(_capture_cascade, dispatch_uid=uid)
 
         cascade_models = set()
-        for model_class, obj_pk, obj_repr, prechange_data in cascade_targets:
+        for model_class, obj_pk, obj_repr, prechange_data in cascade_targets.values():
             cascade_models.add(model_class)
             ct = ContentType.objects.get_for_model(model_class)
             ObjectChange.objects.using(self.connection_name).create(
