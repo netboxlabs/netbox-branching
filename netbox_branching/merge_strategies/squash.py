@@ -7,8 +7,16 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, models
+from django.dispatch import Signal
 from netbox.context_managers import event_tracking
-from netbox.signals import post_raw_create
+
+try:
+    from netbox.signals import post_raw_create
+except ImportError:
+    # Fallback for NetBox versions that predate the post_raw_create signal.
+    # Sending this no-op signal has no effect; any model-specific post-raw-create
+    # logic (e.g. cable path retracing) will simply not run on older NetBox.
+    post_raw_create = Signal()
 
 from ..error_report import annotate_validation_error
 from .strategy import MergeStrategy
