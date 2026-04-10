@@ -12,7 +12,6 @@ from dcim.models import (
     DeviceRole,
     DeviceType,
     Interface,
-    Location,
     Manufacturer,
     Region,
     Site,
