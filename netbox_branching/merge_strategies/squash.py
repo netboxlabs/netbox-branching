@@ -7,7 +7,16 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, models
+from django.dispatch import Signal
 from netbox.context_managers import event_tracking
+
+try:
+    from netbox.signals import post_raw_create
+except ImportError:
+    # Fallback for NetBox versions that predate the post_raw_create signal.
+    # Sending this no-op signal has no effect; any model-specific post-raw-create
+    # logic (e.g. cable path retracing) will simply not run on older NetBox.
+    post_raw_create = Signal()
 
 from ..error_report import annotate_validation_error
 from .strategy import MergeStrategy
@@ -200,6 +209,7 @@ class SquashMergeStrategy(MergeStrategy):
 
         # Apply collapsed changes in order
         logger.info(f"Applying {len(ordered_changes)} collapsed changes...")
+        created_pks_by_model = {}
         for i, collapsed in enumerate(ordered_changes, 1):
             model_class = collapsed.model_class
             models.add(model_class)
@@ -225,6 +235,16 @@ class SquashMergeStrategy(MergeStrategy):
                         collapsed.last_change.changed_object_type_id,
                     )
                     raise
+
+            # Track CREATEs per model class so receivers can perform any post-apply work.
+            # Raw saves (via DeserializedObject.save()) bypass Model.save(), so signals
+            # like trace_paths are never fired. post_raw_create lets models handle this.
+            if collapsed.final_action == ActionType.CREATE:
+                created_pks_by_model.setdefault(model_class, []).append(collapsed.key[1])
+
+        # Notify any registered receivers that objects were created via raw save.
+        for model_class, pks in created_pks_by_model.items():
+            post_raw_create.send(sender=model_class, pks=pks)
 
         # Perform cleanup tasks
         self._clean(models)
