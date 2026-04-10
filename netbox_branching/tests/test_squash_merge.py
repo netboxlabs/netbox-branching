@@ -4,7 +4,7 @@ Tests for Branch merge functionality with ObjectChange collapsing using squash m
 import uuid
 
 from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
-from dcim.models import Device, Interface, Region, Site
+from dcim.models import Device, Interface, Location, Region, Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory, TransactionTestCase
@@ -612,3 +612,138 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
         branch.revert(user=self.user, commit=True)
 
         self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+    def test_merge_after_sync_cascade_delete_of_branch_only_object(self):
+        """
+        Test that squash merge succeeds when a branch-only object was cascade-deleted during sync.
+
+        Scenario (refs: #478):
+          1. Create Site s1 in main
+          2. Create branch
+          3. In branch: create Location l1 with site=s1
+          4. In main: delete s1 (CASCADE to l1)
+          5. Sync: s1 deletion applied to branch; l1 cascade-deleted from branch schema;
+                   a synthetic DELETE ObjectChange is recorded for l1.
+          6. Merge: should succeed — CREATE + DELETE collapses to SKIP.
+          7. Verify l1 does NOT exist in main (it was never created there).
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # Create site in main before branch provisioning
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+        site_id = site.id
+
+        branch = self._create_and_provision_branch()
+
+        # In branch: create a location referencing s1
+        with activate_branch(branch), event_tracking(request):
+            location = Location.objects.create(
+                name='Location 1',
+                slug='location-1',
+                site=Site.objects.get(id=site_id),
+                status='active',
+            )
+            location_id = location.id
+
+        self._assert_object_changes(branch, Location, location_id, 1, ['create'])
+
+        # In main: delete s1 (cascades to l1 in the branch schema during sync)
+        with event_tracking(request):
+            Site.objects.get(id=site_id).delete()
+
+        # Sync: applies s1 deletion; l1 is cascade-deleted from the branch schema
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertFalse(Location.objects.filter(id=location_id).exists())
+
+        # A synthetic DELETE ObjectChange was recorded for l1 during sync
+        self._assert_object_changes(branch, Location, location_id, 2, ['create', 'delete'])
+
+        # Merge should succeed — CREATE + DELETE collapses to SKIP
+        branch.merge(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        # l1 was never created in main
+        self.assertFalse(Location.objects.filter(id=location_id).exists())
+
+        # Revert should succeed — nothing was applied to main for l1
+        branch.revert(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+        self.assertFalse(Location.objects.filter(id=location_id).exists())
+
+    def test_merge_after_sync_cascade_delete_of_branch_modified_object(self):
+        """
+        Test that squash merge succeeds when a branch-only object was created, modified,
+        then cascade-deleted during sync.
+
+        Scenario (refs: #478):
+          1. Create Site s1 in main
+          2. Create branch
+          3. In branch: create Location l1 with site=s1, then update its description
+          4. In main: delete s1 (CASCADE to l1)
+          5. Sync: l1 cascade-deleted from branch; a synthetic DELETE ObjectChange is recorded.
+          6. Merge: should succeed — CREATE + UPDATE + DELETE collapses to SKIP.
+          7. Verify l1 does NOT exist in main.
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+        site_id = site.id
+
+        branch = self._create_and_provision_branch()
+
+        # In branch: create l1, then update it
+        with activate_branch(branch), event_tracking(request):
+            location = Location.objects.create(
+                name='Location 1',
+                slug='location-1',
+                site=Site.objects.get(id=site_id),
+                status='active',
+            )
+            location_id = location.id
+
+            location = Location.objects.get(id=location_id)
+            location.snapshot()
+            location.description = 'Updated in branch'
+            location.save()
+
+        self._assert_object_changes(branch, Location, location_id, 2, ['create', 'update'])
+
+        # In main: delete s1 (cascades to l1 during sync)
+        with event_tracking(request):
+            Site.objects.get(id=site_id).delete()
+
+        # Sync: l1 cascade-deleted from branch; a synthetic DELETE is added to the log
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertFalse(Location.objects.filter(id=location_id).exists())
+
+        self._assert_object_changes(branch, Location, location_id, 3, ['create', 'update', 'delete'])
+
+        # Merge should succeed — CREATE + UPDATE + DELETE collapses to SKIP
+        branch.merge(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        # l1 was never created in main
+        self.assertFalse(Location.objects.filter(id=location_id).exists())
+
+        # Revert should succeed — nothing was applied to main for l1
+        branch.revert(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+        self.assertFalse(Location.objects.filter(id=location_id).exists())
