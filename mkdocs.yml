@@ -47,6 +47,7 @@ nav:
     - NetBox Docker: 'netbox-docker.md'
     - REST API: 'rest-api.md'
     - Configuration: 'configuration.md'
+    - Event Rules: 'event-rules.md'
     - Data Model:
         - Branch: 'models/branch.md'
         - BranchEvent: 'models/branchevent.md'

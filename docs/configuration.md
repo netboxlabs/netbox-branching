@@ -1,5 +1,23 @@
 # Configuration Parameters
 
+## NetBox `EVENTS_PIPELINE` (required for branch context in event processing)
+
+To include branch context in event rule processing, add the plugin's `add_branch_context` function to NetBox's [`EVENTS_PIPELINE`](https://netboxlabs.com/docs/netbox/en/stable/configuration/miscellaneous/#events_pipeline) setting **before** `extras.events.process_event_queue`:
+
+```python
+EVENTS_PIPELINE = [
+    'netbox_branching.events.add_branch_context',
+    'extras.events.process_event_queue',
+]
+```
+
+When active, this injects an `active_branch` key into each queued event's data payload with `id`, `name`, and `schema_id` fields (or `null` if the change was made on main). See [Event Rules](event-rules.md) for usage details.
+
+!!! note
+    This must be placed **before** `extras.events.process_event_queue` in the list to take effect.
+
+---
+
 ## `exempt_models`
 
 Default: `[]` (empty list)
