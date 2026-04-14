@@ -7,16 +7,8 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, models
-from django.dispatch import Signal
+from django.db.models.signals import post_save
 from netbox.context_managers import event_tracking
-
-try:
-    from netbox.signals import post_raw_create
-except ImportError:
-    # Fallback for NetBox versions that predate the post_raw_create signal.
-    # Sending this no-op signal has no effect; any model-specific post-raw-create
-    # logic (e.g. cable path retracing) will simply not run on older NetBox.
-    post_raw_create = Signal()
 
 from ..error_report import annotate_validation_error
 from .strategy import MergeStrategy
@@ -242,9 +234,27 @@ class SquashMergeStrategy(MergeStrategy):
             if collapsed.final_action == ActionType.CREATE:
                 created_pks_by_model.setdefault(model_class, []).append(collapsed.key[1])
 
-        # Notify any registered receivers that objects were created via raw save.
+        # Notify receivers that objects were created via raw save so they can perform any post-create work
+        # (e.g. retracing cable paths). This is done after all creates are complete as some operations
+        # require related objects to be in place first (e.g. cable path tracing requires all terminations).
+        # update_dependencies=True is a NetBox-specific flag that signals receivers should force dependency
+        # updates that would normally be triggered by Model.save() but are bypassed on a raw save.
+        # Load in batches of 100 to avoid N+1 queries without loading all into memory.
         for model_class, pks in created_pks_by_model.items():
-            post_raw_create.send(sender=model_class, pks=pks)
+            for i in range(0, len(pks), 100):
+                batch = pks[i:i + 100]
+                instances = {obj.pk: obj for obj in model_class.objects.using(DEFAULT_DB_ALIAS).filter(pk__in=batch)}
+                for pk in batch:
+                    if instance := instances.get(pk):
+                        post_save.send(
+                            sender=model_class,
+                            instance=instance,
+                            created=True,
+                            raw=False,
+                            using=DEFAULT_DB_ALIAS,
+                            update_fields=None,
+                            update_dependencies=True,
+                        )
 
         # Perform cleanup tasks
         self._clean(models)
