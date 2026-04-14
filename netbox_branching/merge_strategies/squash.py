@@ -237,7 +237,7 @@ class SquashMergeStrategy(MergeStrategy):
         # Notify receivers that objects were created via raw save so they can perform any post-create work
         # (e.g. retracing cable paths). This is done after all creates are complete as some operations
         # require related objects to be in place first (e.g. cable path tracing requires all terminations).
-        # update_dependencies=True is a NetBox-specific flag that signals receivers should force dependency
+        # post_raw_create=True is a NetBox-specific flag that signals receivers should force dependency
         # updates that would normally be triggered by Model.save() but are bypassed on a raw save.
         # Load in batches of 100 to avoid N+1 queries without loading all into memory.
         for model_class, pks in created_pks_by_model.items():
@@ -253,7 +253,7 @@ class SquashMergeStrategy(MergeStrategy):
                             raw=False,
                             using=DEFAULT_DB_ALIAS,
                             update_fields=None,
-                            update_dependencies=True,
+                            post_raw_create=True,
                         )
 
         # Perform cleanup tasks
