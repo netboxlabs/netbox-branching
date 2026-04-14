@@ -16,7 +16,7 @@ class AppConfig(PluginConfig):
     base_url = 'branching'
     # Remember to update COMPATIBILITY.md when modifying the minimum/maximum supported NetBox versions.
     min_version = '4.4.1'
-    max_version = '4.5.99'
+    max_version = '4.6.99'
     middleware = (
         'netbox_branching.middleware.BranchMiddleware',
     )
