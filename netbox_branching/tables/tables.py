@@ -1,16 +1,17 @@
 import django_tables2 as tables
+from core.models import ObjectChange
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
-
-from core.models import ObjectChange
 from netbox.tables import NetBoxTable, columns
-from netbox_branching.models import Branch, ChangeDiff
 from utilities.templatetags.builtins.filters import placeholder
+
+from netbox_branching.models import Branch, ChangeDiff
+
 from .columns import ConflictsColumn, DiffColumn
 
 __all__ = (
-    'ChangeDiffTable',
     'BranchTable',
+    'ChangeDiffTable',
     'ChangesTable',
 )
 
@@ -29,8 +30,12 @@ OBJECTCHANGE_OBJECT = """
 """
 
 BEFORE_DIFF = """
+{% load branch_filters %}
 {% if record.action == 'create' %}
     {{ ''|placeholder }}
+{% elif record.action == 'delete' %}
+    <pre class="p-0">{% for k, v in record.diff.pre.items %}{% if not v|is_empty %}{{ k }}: {{ v }}
+{% endif %}{% endfor %}</pre>
 {% else %}
     <pre class="p-0">{% for k, v in record.diff.pre.items %}{{ k }}: {{ v }}
 {% endfor %}</pre>
@@ -38,8 +43,12 @@ BEFORE_DIFF = """
 """
 
 AFTER_DIFF = """
+{% load branch_filters %}
 {% if record.action == 'delete' %}
     {{ ''|placeholder }}
+{% elif record.action == 'create' %}
+    <pre class="p-0">{% for k, v in record.diff.post.items %}{% if not v|is_empty %}{{ k }}: {{ v }}
+{% endif %}{% endfor %}</pre>
 {% else %}
     <pre class="p-0">{% for k, v in record.diff.post.items %}{{ k }}: {{ v }}
 {% endfor %}</pre>
@@ -94,9 +103,9 @@ class BranchTable(NetBoxTable):
 
 
 class ChangeDiffTable(NetBoxTable):
-    # TODO: Revert to the default "id" column when a detail view for ChangeDiff is implemented
     id = tables.Column(
-        verbose_name=_('ID')
+        verbose_name=_('ID'),
+        linkify=True
     )
     branch = tables.Column(
         verbose_name=_('Branch'),
@@ -136,7 +145,9 @@ class ChangeDiffTable(NetBoxTable):
             'id', 'branch', 'object_type', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff',
             'current_diff', 'last_updated', 'actions',
         )
-        default_columns = ('branch', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff')
+        default_columns = (
+            'id', 'branch', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff',
+        )
 
 
 class ChangesTable(NetBoxTable):

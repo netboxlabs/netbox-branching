@@ -2,12 +2,13 @@ from django import forms
 from django.utils.translation import gettext_lazy as _
 
 from netbox_branching.choices import BranchMergeStrategyChoices
-from netbox_branching.models import ChangeDiff
+from netbox_branching.models import Branch, ChangeDiff
 
 __all__ = (
-    'BranchSyncForm',
     'BranchMergeForm',
     'BranchRevertForm',
+    'BranchSyncForm',
+    'BulkMigrateBranchForm',
     'ConfirmationForm',
     'MigrateBranchForm',
 )
@@ -41,7 +42,7 @@ class BaseBranchActionForm(forms.Form):
             branch=self.branch,
             conflicts__isnull=False
         )
-        selected_diffs = self.cleaned_data.get('pk', list())
+        selected_diffs = self.cleaned_data.get('pk', [])
         if conflicted_diffs and not set(conflicted_diffs).issubset(selected_diffs):
             raise forms.ValidationError(_("All conflicts must be acknowledged in order to merge the branch."))
 
@@ -50,7 +51,6 @@ class BaseBranchActionForm(forms.Form):
 
 class BranchSyncForm(BaseBranchActionForm):
     """Form for syncing a branch."""
-    pass
 
 
 class BranchMergeForm(BaseBranchActionForm):
@@ -66,7 +66,6 @@ class BranchMergeForm(BaseBranchActionForm):
 
 class BranchRevertForm(BaseBranchActionForm):
     """Form for reverting a branch."""
-    pass
 
 
 class ConfirmationForm(forms.Form):
@@ -83,4 +82,11 @@ class MigrateBranchForm(forms.Form):
         help_text=_(
             'All migrations will be applied in order. <strong>Migrations cannot be reversed once applied.</strong>'
         )
+    )
+
+
+class BulkMigrateBranchForm(forms.Form):
+    pk = forms.ModelMultipleChoiceField(
+        queryset=Branch.objects.all(),
+        widget=forms.MultipleHiddenInput()
     )

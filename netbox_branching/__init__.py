@@ -1,9 +1,9 @@
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
-
 from netbox.plugins import PluginConfig, get_plugin_config
 from netbox.utils import register_model_feature
+
 from .constants import BRANCH_ACTIONS
 from .utilities import supports_branching
 
@@ -12,15 +12,15 @@ class AppConfig(PluginConfig):
     name = 'netbox_branching'
     verbose_name = 'NetBox Branching'
     description = 'A git-like branching implementation for NetBox'
-    version = '0.8.1'
+    version = '0.8.3'
     base_url = 'branching'
     # Remember to update COMPATIBILITY.md when modifying the minimum/maximum supported NetBox versions.
     min_version = '4.4.1'
     max_version = '4.5.99'
-    middleware = [
-        'netbox_branching.middleware.BranchMiddleware'
-    ]
-    default_settings = {
+    middleware = (
+        'netbox_branching.middleware.BranchMiddleware',
+    )
+    default_settings = {  # noqa: RUF012
         # The maximum number of working branches (excludes merged & archived branches)
         'max_working_branches': None,
 
@@ -36,17 +36,24 @@ class AppConfig(PluginConfig):
         # This string is prefixed to the name of each new branch schema during provisioning
         'schema_prefix': 'branch_',
 
+        # Job timeout in seconds for long-running operations (sync, merge, revert)
+        'job_timeout': 3600,
+
         # Branch action validators
         'sync_validators': [],
         'merge_validators': [],
         'migrate_validators': [],
         'revert_validators': [],
         'archive_validators': [],
+
+        # Number of days before staleness at which to display a stale warning
+        'stale_warning_threshold': 7,
     }
 
     def ready(self):
         super().ready()
-        from django.core.signals import request_started, request_finished
+        from django.core.signals import request_finished, request_started
+
         from . import constants, events, search, signal_receivers, webhook_callbacks  # noqa: F401
         from .models import Branch
         from .utilities import DynamicSchemaDict, close_old_branch_connections

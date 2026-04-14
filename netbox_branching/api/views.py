@@ -1,17 +1,24 @@
+from typing import ClassVar
+
+from core.api.serializers import JobSerializer
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseBadRequest
 from drf_spectacular.utils import extend_schema
+from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired
+from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
+from netbox.plugins import get_plugin_config
+from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
-from rest_framework.viewsets import ModelViewSet
+from rest_framework.viewsets import ModelViewSet, ViewSet
 
-from core.api.serializers import JobSerializer
-from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
 from netbox_branching import filtersets
-from netbox_branching.jobs import JOB_TIMEOUT, MergeBranchJob, RevertBranchJob, SyncBranchJob
+from netbox_branching.jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
+from netbox_branching.utilities import get_branchable_object_types
+
 from . import serializers
 
 
@@ -25,10 +32,30 @@ class BranchViewSet(ModelViewSet):
     serializer_class = serializers.BranchSerializer
     filterset_class = filtersets.BranchFilterSet
 
+    def _check_conflicts(self, branch, serializer):
+        """
+        Return a 409 response if the branch has conflicts and they have not been
+        acknowledged, else None.
+        """
+        if serializer.validated_data.get('acknowledge_conflicts', False):
+            return None
+        conflicts = ChangeDiff.objects.filter(
+            branch=branch, conflicts__isnull=False
+        ).select_related('object_type')
+        if not conflicts.exists():
+            return None
+        return Response(
+            {
+                'detail': 'All conflicts must be acknowledged before this action can proceed.',
+                'conflicts': serializers.ConflictSummarySerializer(conflicts, many=True).data,
+            },
+            status=status.HTTP_409_CONFLICT,
+        )
+
     @extend_schema(
         methods=['post'],
         request=serializers.CommitSerializer(),
-        responses={200: JobSerializer()},
+        responses={200: JobSerializer(), 409: serializers.ConflictResponseSerializer()},
     )
     @action(detail=True, methods=['post'])
     def sync(self, request, pk):
@@ -43,7 +70,10 @@ class BranchViewSet(ModelViewSet):
             return HttpResponseBadRequest("Branch is not ready to sync.")
 
         serializer = serializers.CommitSerializer(data=request.data)
-        commit = serializer.validated_data['commit'] if serializer.is_valid() else False
+        commit = serializer.validated_data.get('commit', True) if serializer.is_valid() else False
+
+        if conflict_response := self._check_conflicts(branch, serializer):
+            return conflict_response
 
         # Enqueue a background job
         job = SyncBranchJob.enqueue(
@@ -57,7 +87,7 @@ class BranchViewSet(ModelViewSet):
     @extend_schema(
         methods=['post'],
         request=serializers.CommitSerializer(),
-        responses={200: JobSerializer()},
+        responses={200: JobSerializer(), 409: serializers.ConflictResponseSerializer()},
     )
     @action(detail=True, methods=['post'])
     def merge(self, request, pk):
@@ -72,14 +102,17 @@ class BranchViewSet(ModelViewSet):
             return HttpResponseBadRequest("Branch is not ready to merge.")
 
         serializer = serializers.CommitSerializer(data=request.data)
-        commit = serializer.validated_data['commit'] if serializer.is_valid() else False
+        commit = serializer.validated_data.get('commit', True) if serializer.is_valid() else False
+
+        if conflict_response := self._check_conflicts(branch, serializer):
+            return conflict_response
 
         # Enqueue a background job
         job = MergeBranchJob.enqueue(
             instance=branch,
             user=request.user,
             commit=commit,
-            job_timeout=JOB_TIMEOUT
+            job_timeout=get_plugin_config('netbox_branching', 'job_timeout')
         )
 
         return Response(JobSerializer(job, context={'request': request}).data)
@@ -102,7 +135,7 @@ class BranchViewSet(ModelViewSet):
             return HttpResponseBadRequest("Only merged branches can be reverted.")
 
         serializer = serializers.CommitSerializer(data=request.data)
-        commit = serializer.validated_data['commit'] if serializer.is_valid() else False
+        commit = serializer.validated_data.get('commit', True) if serializer.is_valid() else False
 
         # Enqueue a background job
         job = RevertBranchJob.enqueue(
@@ -148,3 +181,27 @@ class ChangeDiffViewSet(NetBoxReadOnlyModelViewSet):
     queryset = ChangeDiff.objects.all()
     serializer_class = serializers.ChangeDiffSerializer
     filterset_class = filtersets.ChangeDiffFilterSet
+
+
+class BranchableModelViewSet(ViewSet):
+    """
+    List all models that support branching, including models from custom plugins.
+    """
+    permission_classes: ClassVar = [IsAuthenticatedOrLoginNotRequired]
+
+    def list(self, request):
+        data = []
+        for ot in get_branchable_object_types().order_by('app_label', 'model'):
+            entry = {
+                'app_label': ot.app_label,
+                'model': ot.model,
+                'verbose_name': None,
+                'verbose_name_plural': None,
+            }
+            if model_class := ot.model_class():
+                entry['verbose_name'] = model_class._meta.verbose_name
+                entry['verbose_name_plural'] = model_class._meta.verbose_name_plural
+            data.append(entry)
+
+        serializer = serializers.BranchableModelSerializer(data, many=True)
+        return Response(serializer.data)

@@ -5,12 +5,13 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
-
 from netbox.plugins import get_plugin_config
+
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.models import Branch
 from netbox_branching.utilities import get_tables_to_replicate
+
 from .utils import fetchall, fetchone
 
 
@@ -162,3 +163,33 @@ class BranchTestCase(TransactionTestCase):
         branch.last_sync = timezone.now() - timedelta(days=11)
         branch.save()
         self.assertTrue(branch.is_stale)
+
+    @override_settings(CHANGELOG_RETENTION=10)
+    def test_stale_warning(self):
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+
+        # Not yet in warning window (2 days ago, 8 days remaining > 7-day default threshold)
+        branch.last_sync = timezone.now() - timedelta(days=2)
+        branch.save()
+        self.assertIsNone(branch.stale_warning)
+
+        # Within warning window (4 days ago, 6 days remaining <= 7-day default threshold)
+        branch.last_sync = timezone.now() - timedelta(days=4)
+        branch.save()
+        self.assertEqual(branch.stale_warning, 6)
+
+        # Already stale (11 days ago) — warning should not show
+        branch.last_sync = timezone.now() - timedelta(days=11)
+        branch.save()
+        self.assertIsNone(branch.stale_warning)
+
+    @override_settings(CHANGELOG_RETENTION=7)
+    def test_stale_warning_threshold_equals_retention(self):
+        """When stale_warning_threshold equals CHANGELOG_RETENTION, warning shows for all non-stale branches."""
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+
+        branch.last_sync = timezone.now() - timedelta(days=6)
+        branch.save()
+        self.assertEqual(branch.stale_warning, 1)

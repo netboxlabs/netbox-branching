@@ -1,8 +1,8 @@
 from django.test import TestCase, TransactionTestCase, override_settings
-
 from ipam.models import Prefix
+
 from netbox_branching.models import Branch
-from netbox_branching.utilities import supports_branching, DynamicSchemaDict
+from netbox_branching.utilities import DynamicSchemaDict, supports_branching
 
 
 class ConfigTestCase(TransactionTestCase):

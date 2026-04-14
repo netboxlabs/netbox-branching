@@ -1,12 +1,12 @@
 """
 Iterative merge strategy implementation.
 """
+from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS
-
 from netbox.context_managers import event_tracking
 
+from ..error_report import annotate_validation_error
 from .strategy import MergeStrategy
-
 
 __all__ = (
     'IterativeMergeStrategy',
@@ -25,11 +25,16 @@ class IterativeMergeStrategy(MergeStrategy):
         models = set()
 
         for change in changes:
-            models.add(change.changed_object_type.model_class())
+            model_class = change.changed_object_type.model_class()
+            models.add(model_class)
             with event_tracking(request):
                 request.id = change.request_id
                 request.user = change.user
-                change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+                try:
+                    change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+                except ValidationError as e:
+                    annotate_validation_error(e, model_class, change.changed_object_id, change.changed_object_type_id)
+                    raise
 
         self._clean(models)
 

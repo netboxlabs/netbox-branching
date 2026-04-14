@@ -1,6 +1,6 @@
 from django.db import connection, migrations
-
 from netbox.plugins import get_plugin_config
+
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.utilities import get_sql_results
 
@@ -50,9 +50,9 @@ def rename_indexes(apps, schema_editor):
                         sql = f"ALTER INDEX {schema_name}.{branch_index.indexname} RENAME TO {new_name}"
                         try:
                             cursor.execute(sql)
-                        except Exception as e:
+                        except Exception:
                             print(sql)
-                            raise e
+                            raise
 
     print('\n ', end='')  # Padding for final "OK"
 

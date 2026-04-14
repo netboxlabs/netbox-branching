@@ -1,16 +1,17 @@
 import logging
 from functools import cached_property
 
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectChange as ObjectChange_
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.fields import ArrayField
 from django.db import DEFAULT_DB_ALIAS, models
+from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
-
-from core.choices import ObjectChangeActionChoices
-from core.models import ObjectChange as ObjectChange_
-from netbox_branching.utilities import update_object
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
+
+from netbox_branching.utilities import update_object
 
 __all__ = (
     'AppliedChange',
@@ -35,7 +36,7 @@ class ObjectChange(ObjectChange_):
         for migrator in branch.migrators.get(object_type, []):
             migrator(self, revert)
 
-    def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None):
+    def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None, skip_missing=False):
         """
         Apply the change using the specified database connection.
         """
@@ -62,9 +63,15 @@ class ObjectChange(ObjectChange_):
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
-            instance = model.objects.using(using).get(pk=self.changed_object_id)
-            logger.debug(f'Updating {model._meta.verbose_name} {instance}')
-            update_object(instance, self.diff()['post'], using=using)
+            try:
+                instance = model.objects.using(using).get(pk=self.changed_object_id)
+                logger.debug(f'Updating {model._meta.verbose_name} {instance}')
+                update_object(instance, self.diff()['post'], using=using)
+            except model.DoesNotExist:
+                if skip_missing:
+                    logger.debug(f'{model._meta.verbose_name} ID {self.changed_object_id} already deleted; skipping')
+                else:
+                    raise
 
         # Deleting an object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
@@ -181,6 +188,9 @@ class ChangeDiff(models.Model):
     def __str__(self):
         return f'{self.get_action_display()} {self.object_type.name} {self.object_repr} ({self.object_id})'
 
+    def get_absolute_url(self):
+        return reverse('plugins:netbox_branching:changediff', args=[self.pk])
+
     def save(self, *args, **kwargs):
         self._update_conflicts()
         if self.object:
@@ -195,16 +205,22 @@ class ChangeDiff(models.Model):
         """
         Record any conflicting changes between the modified and current object data.
         """
-        if self.original is None or self.current is None:
-            # Both the original and current states must be available to compare
+        if self.original is None:
             return
         conflicts = None
         if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
-            conflicts = [
-                k for k, v in self.original.items()
-                if v != self.modified[k] and v != self.current.get(k) and self.modified[k] != self.current.get(k)
-            ]
+            if self.current is None:
+                # Object was deleted in main; all branch modifications are in conflict
+                conflicts = [k for k, v in self.original.items() if v != self.modified[k]]
+            else:
+                conflicts = [
+                    k for k, v in self.original.items()
+                    if v != self.modified[k] and v != self.current.get(k) and self.modified[k] != self.current.get(k)
+                ]
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
+            if self.current is None:
+                # Object was also deleted in main; no conflict
+                return
             conflicts = [
                 k for k, v in self.original.items()
                 if v != self.current.get(k)
@@ -226,6 +242,8 @@ class ChangeDiff(models.Model):
         """
         Return the set of attributes altered in the main schema.
         """
+        if self.current is None:
+            return set()
         return {
             k for k, v in self.current.items()
             if k in self.original and v != self.original[k]
@@ -274,6 +292,8 @@ class ChangeDiff(models.Model):
         """
         Return a key-value mapping of all attributes which have been modified outside the branch.
         """
+        if self.current is None:
+            return {}
         return {
             k: v for k, v in self.current.items()
             if k in self.altered_fields

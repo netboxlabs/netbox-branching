@@ -1,22 +1,23 @@
 """
 Squash merge strategy implementation with functions for collapsing and ordering ObjectChanges.
 """
-from enum import Enum
+from enum import StrEnum
 
+from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, models
-
 from netbox.context_managers import event_tracking
 
+from ..error_report import annotate_validation_error
 from .strategy import MergeStrategy
-
 
 __all__ = (
     'SquashMergeStrategy',
 )
 
 
-class ActionType(str, Enum):
+class ActionType(StrEnum):
     """
     Enum for collapsed change action types.
     """
@@ -142,6 +143,48 @@ class SquashMergeStrategy(MergeStrategy):
     # because the collapse logic expects CREATE -> UPDATE -> DELETE order
     revert_changes_ordering = 'time'
 
+    @staticmethod
+    def _collapse_changes(changes, logger):
+        """
+        Collapse a queryset of ObjectChanges into a dict of CollapsedChange objects keyed by
+        (model_label, object_id). Returns a tuple of (collapsed_changes, change_count).
+        """
+        collapsed_changes = {}
+        change_count = 0
+
+        for change in changes:
+            change_count += 1
+            app_label, model = change.changed_object_type.natural_key()
+            key = (f"{app_label}.{model}", change.changed_object_id)
+
+            if key not in collapsed_changes:
+                model_class = change.changed_object_type.model_class()
+                collapsed_changes[key] = CollapsedChange(key, model_class)
+                logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
+
+            collapsed_changes[key].add_change(change, logger)
+
+        return collapsed_changes, change_count
+
+    @staticmethod
+    def _skip_updates_missing_in_main(collapsed_changes, logger):
+        """
+        Mark any collapsed UPDATE as SKIP if the object no longer exists in main. This handles
+        the case where an object was modified in the branch but deleted in main and then synced,
+        leaving only an UPDATE in the branch's ObjectChange log with no object to act on.
+        """
+        for collapsed in collapsed_changes.values():
+            if collapsed.final_action == ActionType.UPDATE:
+                exists = collapsed.model_class.objects.using(DEFAULT_DB_ALIAS).filter(
+                    pk=collapsed.key[1]
+                ).exists()
+                if not exists:
+                    logger.info(
+                        f"  Skipping UPDATE for {collapsed.model_class.__name__}:{collapsed.key[1]} "
+                        f"(object deleted in main)"
+                    )
+                    collapsed.final_action = ActionType.SKIP
+
     def merge(self, branch, changes, request, logger, user):
         """
         Apply changes after collapsing them by object and ordering by dependencies.
@@ -149,21 +192,8 @@ class SquashMergeStrategy(MergeStrategy):
         models = set()
 
         logger.info("Collapsing ObjectChanges by object (incremental)...")
-        collapsed_changes = {}
-
-        for change in changes:
-            app_label, model = change.changed_object_type.natural_key()
-            model_label = f"{app_label}.{model}"
-            key = (model_label, change.changed_object_id)
-
-            if key not in collapsed_changes:
-                model_class = change.changed_object_type.model_class()
-                collapsed = CollapsedChange(key, model_class)
-                collapsed_changes[key] = collapsed
-                logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
-
-            # Incrementally process each change to avoid storing all in memory
-            collapsed_changes[key].add_change(change, logger)
+        collapsed_changes, _ = SquashMergeStrategy._collapse_changes(changes, logger)
+        SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
 
         # Order collapsed changes based on dependencies
         ordered_changes = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger)
@@ -186,7 +216,15 @@ class SquashMergeStrategy(MergeStrategy):
 
                 # Create a dummy ObjectChange from the collapsed change and apply it
                 dummy_change = collapsed.generate_object_change()
-                dummy_change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+                try:
+                    dummy_change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+                except ValidationError as e:
+                    annotate_validation_error(
+                        e, model_class,
+                        collapsed.last_change.changed_object_id,
+                        collapsed.last_change.changed_object_type_id,
+                    )
+                    raise
 
         # Perform cleanup tasks
         self._clean(models)
@@ -197,27 +235,10 @@ class SquashMergeStrategy(MergeStrategy):
         """
         models = set()
 
-        # Group changes by object and create CollapsedChange objects
         logger.info("Collapsing ObjectChanges by object (incremental)...")
-        collapsed_changes = {}
-        change_count = 0
-
-        for change in changes:
-            change_count += 1
-            app_label, model = change.changed_object_type.natural_key()
-            model_label = f"{app_label}.{model}"
-            key = (model_label, change.changed_object_id)
-
-            if key not in collapsed_changes:
-                model_class = change.changed_object_type.model_class()
-                collapsed = CollapsedChange(key, model_class)
-                collapsed_changes[key] = collapsed
-                logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
-
-            # Incrementally process each change to avoid storing all in memory
-            collapsed_changes[key].add_change(change, logger)
-
+        collapsed_changes, change_count = SquashMergeStrategy._collapse_changes(changes, logger)
         logger.info(f"  {change_count} changes collapsed into {len(collapsed_changes)} objects")
+        SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
 
         # Order collapsed changes for revert (reverse of merge order)
         merge_order = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger)
@@ -252,11 +273,14 @@ class SquashMergeStrategy(MergeStrategy):
         """
         Find foreign key references in the given data that point to objects in changed_objects.
         Returns a set of (model_label, object_id) tuples where model_label is "app.model".
+        Handles both regular ForeignKey fields and GenericForeignKey fields.
         """
         if not data:
             return set()
 
         references = set()
+
+        # Check regular ForeignKey fields
         for field in model_class._meta.get_fields():
             if isinstance(field, models.ForeignKey):
                 fk_value = data.get(field.name)
@@ -272,6 +296,25 @@ class SquashMergeStrategy(MergeStrategy):
                     # Only track if this object is in our changed_objects
                     if ref_key in changed_objects:
                         references.add(ref_key)
+
+        # Check GenericForeignKey fields
+        for field in model_class._meta.private_fields:
+            if isinstance(field, GenericForeignKey):
+                # ObjectChange data may store the CT FK as either 'field_name' or 'field_name_id'
+                ct_value = data.get(field.ct_field) or data.get(field.ct_field + '_id')
+                fk_value = data.get(field.fk_field)
+
+                if ct_value and fk_value:
+                    try:
+                        ct = ContentType.objects.get_for_id(ct_value)
+                        app_label, model = ct.natural_key()
+                        model_label = f"{app_label}.{model}"
+                        ref_key = (model_label, fk_value)
+
+                        if ref_key in changed_objects:
+                            references.add(ref_key)
+                    except ContentType.DoesNotExist:
+                        pass
 
         return references
 
@@ -377,7 +420,7 @@ class SquashMergeStrategy(MergeStrategy):
     def _has_fk_to(collapsed, target_model_class, target_obj_id):
         """
         Check if a CollapsedChange has a foreign key reference to a specific object.
-        Returns True if any FK field in postchange_data points to the target object.
+        Returns True if any FK or GenericFK field in postchange_data points to the target object.
         """
         if not collapsed.postchange_data:
             return False
@@ -390,6 +433,21 @@ class SquashMergeStrategy(MergeStrategy):
                     related_model = field.related_model
                     if related_model == target_model_class and fk_value == target_obj_id:
                         return True
+
+        for field in collapsed.model_class._meta.private_fields:
+            if isinstance(field, GenericForeignKey):
+                # ObjectChange data may store the CT FK as either 'field_name' or 'field_name_id'
+                ct_value = (collapsed.postchange_data.get(field.ct_field)
+                            or collapsed.postchange_data.get(field.ct_field + '_id'))
+                fk_value = collapsed.postchange_data.get(field.fk_field)
+                if ct_value and fk_value == target_obj_id:
+                    try:
+                        ct = ContentType.objects.get_for_id(ct_value)
+                        if ct.model_class() == target_model_class:
+                            return True
+                    except ContentType.DoesNotExist:
+                        pass
+
         return False
 
     @staticmethod
@@ -474,10 +532,7 @@ class SquashMergeStrategy(MergeStrategy):
 
             # Try to get identifying info
             data = collapsed.postchange_data or collapsed.prechange_data or {}
-            identifying_info = []
-            for field in ['name', 'slug', 'label']:
-                if field in data:
-                    identifying_info.append(f"{field}={data[field]!r}")
+            identifying_info = [f"{field}={data[field]!r}" for field in ['name', 'slug', 'label'] if field in data]
             info_str = f" ({', '.join(identifying_info)})" if identifying_info else ""
 
             logger.error(f"    {action} {model_name} (ID: {obj_id}){info_str} depends on: {deps}")
@@ -538,13 +593,12 @@ class SquashMergeStrategy(MergeStrategy):
                     f"circular dependencies and cannot be ordered. This may indicate a complex cycle "
                     f"that could not be automatically resolved. Check the logs above for details."
                 )
-            else:
-                # Sort ready nodes by action priority (primary) and time (secondary)
-                # This maintains DELETE -> UPDATE -> CREATE ordering, with time ordering within each group
-                ready.sort(key=lambda k: (
-                    action_priority.get(collapsed_changes[k].final_action, 99),
-                    collapsed_changes[k].last_change.time
-                ))
+            # Sort ready nodes by action priority (primary) and time (secondary)
+            # This maintains DELETE -> UPDATE -> CREATE ordering, with time ordering within each group
+            ready.sort(key=lambda k: (
+                action_priority.get(collapsed_changes[k].final_action, 99),
+                collapsed_changes[k].last_change.time
+            ))
 
             # Process ready nodes
             for key in ready:

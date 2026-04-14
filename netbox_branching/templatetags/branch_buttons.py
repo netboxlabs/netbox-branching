@@ -1,11 +1,11 @@
 from django import template
 
 __all__ = (
-    'branch_sync_button',
+    'branch_archive_button',
     'branch_merge_button',
     'branch_migrate_button',
     'branch_revert_button',
-    'branch_archive_button',
+    'branch_sync_button',
 )
 
 register = template.Library()

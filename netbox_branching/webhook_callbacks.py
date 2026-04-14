@@ -6,7 +6,7 @@ from netbox_branching.utilities import get_active_branch
 @register_webhook_callback
 def set_active_branch(object_type, event_type, data, request):
     if request is None:
-        return
+        return None
     if branch := get_active_branch(request):
         attrs = {
             'id': branch.pk,

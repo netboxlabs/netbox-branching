@@ -23,3 +23,4 @@ def fetchone(cursor):
     if ret := cursor.fetchone():
         result = namedtuple('Result', [col[0] for col in cursor.description])
         return result(*ret)
+    return None

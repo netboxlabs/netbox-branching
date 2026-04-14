@@ -1,5 +1,35 @@
 # Change Log
 
+## v0.8.3
+
+### Enhancements
+
+* [#25](https://github.com/netboxlabs/netbox-branching/issues/25) - Display a summary of changes to be applied under the sync & merge views
+
+### Bug Fixes
+
+* [#426](https://github.com/netboxlabs/netbox-branching/issues/426) - Allow sync/merge if edited objects have been deleted in main
+* [#448](https://github.com/netboxlabs/netbox-branching/issues/448) - Fix squash merge ordering when new objects reference other new objects
+* [#467](https://github.com/netboxlabs/netbox-branching/issues/467) - Fix GFK dependency detection in squash merge
+* [#468](https://github.com/netboxlabs/netbox-branching/issues/468) - Fix `KeyError` exception when API request omits `commit` field
+
+---
+
+## v0.8.2
+
+### Enhancements
+
+* [#5](https://github.com/netboxlabs/netbox-branching/issues/5) - Automatically redirect to avoid 404s when activating or deactivating a branch
+* [#86](https://github.com/netboxlabs/netbox-branching/issues/86) - Omit empty values from displayed data for created & deleted objects
+* [#307](https://github.com/netboxlabs/netbox-branching/issues/307) - Exempt `/api/status/` from branching middleware
+* [#418](https://github.com/netboxlabs/netbox-branching/issues/418) - Allow setting maximum threshold for job timeout
+
+### Bug Fixes
+
+* [#422](https://github.com/netboxlabs/netbox-branching/issues/422) - Do not display deletion warning if object has already been deleted in main
+
+---
+
 ## v0.8.1
 
 ### Bug Fixes

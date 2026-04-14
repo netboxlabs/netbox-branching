@@ -43,9 +43,11 @@ nav:
         - Syncing & Merging: 'using-branches/syncing-merging.md'
         - Reverting a Branch: 'using-branches/reverting-a-branch.md'
     - Best Practices: 'best-practices.md'
+    - Plugin Development: 'plugin-development.md'
     - NetBox Docker: 'netbox-docker.md'
     - REST API: 'rest-api.md'
     - Configuration: 'configuration.md'
+    - Event Rules: 'event-rules.md'
     - Data Model:
         - Branch: 'models/branch.md'
         - BranchEvent: 'models/branchevent.md'

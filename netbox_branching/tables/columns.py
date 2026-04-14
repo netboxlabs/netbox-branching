@@ -1,7 +1,6 @@
 import django_tables2 as tables
-from django.utils.translation import gettext_lazy as _
-
 from core.tables import ObjectChangeTable
+from django.utils.translation import gettext_lazy as _
 from utilities.tables import register_table_column
 
 __all__ = (
@@ -52,7 +51,7 @@ class ConflictsColumn(tables.TemplateColumn):
     """
 
     def __init__(self, *args, **kwargs):
-        super().__init__(template_code=self.template_code, *args, **kwargs)
+        super().__init__(*args, template_code=self.template_code, **kwargs)
 
 
 class DiffColumn(tables.TemplateColumn):
@@ -73,7 +72,7 @@ class DiffColumn(tables.TemplateColumn):
         context = {
             'show_conflicts': show_conflicts,
         }
-        super().__init__(template_code=self.template_code, extra_context=context, *args, **kwargs)
+        super().__init__(*args, template_code=self.template_code, extra_context=context, **kwargs)
 
     def value(self, value):
         return str(value) if value else None

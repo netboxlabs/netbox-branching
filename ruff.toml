@@ -1,0 +1,70 @@
+# Ruff configuration
+####################
+
+exclude = [
+    ".eggs",
+    ".git",
+    ".pyenv",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+]
+
+# Enforce line length and indent-width
+line-length = 120
+indent-width = 4
+
+# Ignores anything in .gitignore
+respect-gitignore = true
+
+# Always generate Python 3.12-compatible code
+target-version = "py312"
+
+[lint]
+extend-select = [
+    "E1",    # pycodestyle errors: indentation-related (e.g., unexpected/missing indent)
+    "E2",    # pycodestyle errors: whitespace-related (e.g., missing whitespace, extra spaces)
+    "E3",    # pycodestyle errors: blank lines / spacing around definitions
+    "E501",  # pycodestyle: line too long (enforced with `line-length` above)
+    "W",     # pycodestyle warnings (various style warnings, often whitespace/newlines)
+    "I",     # import sorting (isort-equivalent)
+    "RET",   # return semantics (flake8-return family: consistent/explicit returns; remove redundant else/assign before return)
+    "UP",    # pyupgrade: modernize syntax for your target Python (e.g., f-strings, built-in generics, newer stdlib idioms)
+]
+ignore = [
+    "F403",  # pyflakes: `from ... import *` used; unable to detect undefined names
+    "F405",  # pyflakes: name may be undefined or defined from star imports
+    "RET504",  # return: unnecessary assignment before `return` (e.g., `x = expr; return x` -> `return expr`)
+    "TRY002", # tryceratops: create your own exception (would require significant refactoring)
+    "UP032", # pyupgrade: prefer f-strings over `str.format(...)`
+]
+preview = true
+
+[lint.isort]
+known-first-party = [
+    "netbox_branching",
+]
+
+[lint.per-file-ignores]
+"template_code.py" = ["E501"]
+"netbox_branching/migrations/*.py" = ["RUF012"]
+"netbox_branching/models/*.py" = ["RUF012"]
+"netbox_branching/tests/*.py" = ["BLE001", "S110"]
+
+[format]
+# Use single quotes for strings.
+quote-style = "single"
+
+# Indent with spaces, rather than tabs.
+indent-style = "space"
+
+# Enforce UNIX line ending
+line-ending = "lf"

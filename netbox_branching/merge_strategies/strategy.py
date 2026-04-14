@@ -1,8 +1,7 @@
 import logging
-
 from abc import ABC, abstractmethod
-from mptt.models import MPTTModel
 
+from mptt.models import MPTTModel
 
 __all__ = (
     'MergeStrategy',
@@ -30,7 +29,6 @@ class MergeStrategy(ABC):
             logger: Logger instance for logging
             user: User who initiated the merge
         """
-        pass
 
     @abstractmethod
     def revert(self, branch, changes, request, logger, user):
@@ -44,7 +42,6 @@ class MergeStrategy(ABC):
             logger: Logger instance for logging
             user: User who initiated the revert
         """
-        pass
 
     def _clean(self, models):
         """
@@ -74,6 +71,7 @@ def get_merge_strategy(strategy_name):
         ValueError: If the strategy name is unknown
     """
     from netbox_branching.choices import BranchMergeStrategyChoices
+
     from .iterative import IterativeMergeStrategy
     from .squash import SquashMergeStrategy
 
