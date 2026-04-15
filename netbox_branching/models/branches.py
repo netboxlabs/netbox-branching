@@ -559,8 +559,8 @@ class Branch(JobsMixin, PrimaryModel):
         logger.debug(f"Setting branch status to {BranchStatusChoices.SYNCING}")
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.SYNCING)
 
-        # Create a dummy request for correlating ObjectChange records from this sync
-        request = RequestFactory().get(reverse('home'))
+        # Generate a request ID for correlating ObjectChange records from this sync
+        request_id = uuid.uuid4()
 
         try:
             with activate_branch(self), transaction.atomic(using=self.connection_name):
@@ -573,7 +573,7 @@ class Branch(JobsMixin, PrimaryModel):
                     models.add(model_class)
                     if change.action == ObjectChangeActionChoices.ACTION_DELETE:
                         cascade_models = self._handle_sync_delete(
-                            change, branchable_models, user, logger, request_id=request.id
+                            change, branchable_models, user, logger, request_id=request_id
                         )
                         models.update(cascade_models)
                     else:
