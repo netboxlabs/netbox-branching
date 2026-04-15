@@ -35,6 +35,7 @@ class BranchMiddleware:
             branch = get_active_branch(request)
         except ObjectDoesNotExist:
             return HttpResponseBadRequest("Invalid branch identifier")
+        request.active_branch = branch
 
         response = self.get_response(request)
 
