@@ -1,5 +1,26 @@
 # Change Log
 
+## v0.9.0
+
+### Enhancements
+
+* [#145](https://github.com/netboxlabs/netbox-branching/issues/145) - Add a detail view for change diffs
+* [#213](https://github.com/netboxlabs/netbox-branching/issues/213) - Display a warning when a branch is becoming stale
+* [#323](https://github.com/netboxlabs/netbox-branching/issues/323) - Enable migrating branches in bulk
+* [#335](https://github.com/netboxlabs/netbox-branching/issues/335) - Add conflict handling to sync & merge API endpoints
+* [#406](https://github.com/netboxlabs/netbox-branching/issues/406) - Add `owner_id` filter for branches
+* [#425](https://github.com/netboxlabs/netbox-branching/issues/425) - Create a merge report
+* [#475](https://github.com/netboxlabs/netbox-branching/issues/475) - Track objects deleted in main as potential conflicts
+* [#485](https://github.com/netboxlabs/netbox-branching/issues/485) - Add branch context to events
+* [#505](https://github.com/netboxlabs/netbox-branching/issues/505) - Support NetBox v4.6
+
+### Bug Fixes
+
+* [#423](https://github.com/netboxlabs/netbox-branching/issues/423) - Fix migrating branches from v0.5.2
+* [#506](https://github.com/netboxlabs/netbox-branching/issues/506) - Set `SameSite` attribute for branch cookie
+
+---
+
 ## v0.8.3
 
 ### Enhancements
