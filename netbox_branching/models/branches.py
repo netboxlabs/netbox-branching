@@ -464,7 +464,7 @@ class Branch(JobsMixin, PrimaryModel):
     # Branch actions
     #
 
-    def _handle_sync_delete(self, change, branchable_models, user, logger):
+    def _handle_sync_delete(self, change, branchable_models, user, logger, request_id=None):
         """
         Apply a DELETE change to the branch schema and record ObjectChange entries for any
         branch-originated objects that are cascade-deleted as a side effect.
@@ -523,7 +523,7 @@ class Branch(JobsMixin, PrimaryModel):
                 postchange_data=None,
                 user=user,
                 user_name=user.username if user else '',
-                request_id=uuid.uuid4(),
+                request_id=request_id or uuid.uuid4(),
             )
             logger.debug(
                 f'Recorded cascade deletion of {model_class._meta.verbose_name} {obj_repr} (branch-originated)'
@@ -559,6 +559,9 @@ class Branch(JobsMixin, PrimaryModel):
         logger.debug(f"Setting branch status to {BranchStatusChoices.SYNCING}")
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.SYNCING)
 
+        # Create a dummy request for correlating ObjectChange records from this sync
+        request = RequestFactory().get(reverse('home'))
+
         try:
             with activate_branch(self), transaction.atomic(using=self.connection_name):
                 models = set()
@@ -570,7 +573,7 @@ class Branch(JobsMixin, PrimaryModel):
                     models.add(model_class)
                     if change.action == ObjectChangeActionChoices.ACTION_DELETE:
                         cascade_models = self._handle_sync_delete(
-                            change, branchable_models, user, logger
+                            change, branchable_models, user, logger, request_id=request.id
                         )
                         models.update(cascade_models)
                     else:
