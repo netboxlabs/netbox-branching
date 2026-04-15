@@ -16,7 +16,13 @@ class RequestTestCase(TestCase):
         branch.status = BranchStatusChoices.READY  # Fake provisioning
         branch.save(provision=False)
 
-    @override_settings(LOGIN_REQUIRED=False)
+    @override_settings(
+        LOGIN_REQUIRED=False,
+        SESSION_COOKIE_DOMAIN='example.com',
+        SESSION_COOKIE_PATH='/custom',
+        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_SAMESITE='Strict',
+    )
     def test_activate_branch(self):
         branch = Branch.objects.first()
 
@@ -31,7 +37,20 @@ class RequestTestCase(TestCase):
             msg="Branch ID set in cookie is incorrect"
         )
 
-    @override_settings(LOGIN_REQUIRED=False)
+        # Cookie attributes should mirror SESSION_COOKIE_* settings
+        cookie = response.cookies[COOKIE_NAME]
+        self.assertEqual(cookie['domain'], 'example.com')
+        self.assertEqual(cookie['path'], '/custom')
+        self.assertTrue(cookie['secure'])
+        self.assertEqual(cookie['samesite'], 'Strict')
+
+    @override_settings(
+        LOGIN_REQUIRED=False,
+        SESSION_COOKIE_DOMAIN='example.com',
+        SESSION_COOKIE_PATH='/custom',
+        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_SAMESITE='Strict',
+    )
     def test_deactivate_branch(self):
         # Attach the cookie to the test client
         branch = Branch.objects.first()
@@ -44,3 +63,27 @@ class RequestTestCase(TestCase):
         response = self.client.get(f'{url}?{QUERY_PARAM}=')
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.cookies[COOKIE_NAME].value, '', msg="Cookie was not deleted")
+
+        # Deletion cookie attributes should mirror SESSION_COOKIE_* settings
+        cookie = response.cookies[COOKIE_NAME]
+        self.assertEqual(cookie['domain'], 'example.com')
+        self.assertEqual(cookie['path'], '/custom')
+        self.assertEqual(cookie['samesite'], 'Strict')
+
+    @override_settings(LOGIN_REQUIRED=False)
+    def test_stale_cookie_cleared(self):
+        """
+        A cookie referencing a non-ready branch should be automatically cleared.
+        """
+        branch = Branch.objects.first()
+        branch.status = BranchStatusChoices.ARCHIVED
+        branch.save(provision=False)
+
+        self.client.cookies.load({
+            COOKIE_NAME: branch.schema_id,
+        })
+
+        url = reverse('home')
+        response = self.client.get(url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.cookies[COOKIE_NAME].value, '', msg="Stale cookie was not cleared")
