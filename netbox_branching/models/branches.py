@@ -3,20 +3,23 @@ import logging
 import math
 import random
 import string
+import uuid
 from collections import defaultdict
 from datetime import timedelta
 from functools import cached_property, partial
 
+from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.operations.special import SeparateDatabaseAndState
-from django.db.models.signals import post_save
+from django.db.models.signals import post_save, pre_delete
 from django.db.utils import ProgrammingError
 from django.test import RequestFactory
 from django.urls import reverse
@@ -29,6 +32,7 @@ from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
 from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet
+from utilities.serialization import serialize_object
 
 from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
@@ -460,6 +464,73 @@ class Branch(JobsMixin, PrimaryModel):
     # Branch actions
     #
 
+    def _handle_sync_delete(self, change, branchable_models, user, logger, request_id=None):
+        """
+        Apply a DELETE change to the branch schema and record ObjectChange entries for any
+        branch-originated objects that are cascade-deleted as a side effect.
+
+        When a parent object is deleted in main and synced to the branch, child objects that
+        exist only in the branch (no record in main) are cascade-deleted at the DB level with
+        no corresponding changelog entry. This method captures those deletions via a temporary
+        pre_delete signal handler and writes a synthetic DELETE ObjectChange for each one.
+        """
+        cascade_targets = {}  # keyed by (model, pk) to deduplicate repeated pre_delete signals
+        primary_model = change.changed_object_type.model_class()
+        primary_pk = change.changed_object_id
+
+        def _capture_cascade(
+            sender, instance, using,
+            _conn=self.connection_name,
+            _primary_model=primary_model,
+            _primary_pk=primary_pk,
+            _targets=cascade_targets,
+            **kwargs,
+        ):
+            if using != _conn or (sender is _primary_model and instance.pk == _primary_pk):
+                return
+            if sender not in branchable_models:
+                return
+            key = (sender, instance.pk)
+            if key in _targets:
+                return
+            if not sender.objects.using(DEFAULT_DB_ALIAS).filter(pk=instance.pk).exists():
+                prechange_data = (
+                    instance.serialize_object()
+                    if hasattr(instance, 'serialize_object')
+                    else serialize_object(instance)
+                )
+                # Capture pk, repr, and model as values now — Django sets instance.pk = None
+                # after deletion, so reading them from the instance later would give wrong results.
+                _targets[key] = (sender, instance.pk, str(instance), prechange_data)
+
+        uid = f'_capture_cascade_{id(_capture_cascade)}'
+        pre_delete.connect(_capture_cascade, weak=False, dispatch_uid=uid)
+        try:
+            change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+        finally:
+            pre_delete.disconnect(_capture_cascade, dispatch_uid=uid)
+
+        cascade_models = set()
+        for model_class, obj_pk, obj_repr, prechange_data in cascade_targets.values():
+            cascade_models.add(model_class)
+            ct = ContentType.objects.get_for_model(model_class)
+            ObjectChange.objects.using(self.connection_name).create(
+                action=ObjectChangeActionChoices.ACTION_DELETE,
+                changed_object_type=ct,
+                changed_object_id=obj_pk,
+                object_repr=obj_repr,
+                prechange_data=prechange_data,
+                postchange_data=None,
+                user=user,
+                user_name=user.username if user else '',
+                request_id=request_id or uuid.uuid4(),
+            )
+            logger.debug(
+                f'Recorded cascade deletion of {model_class._meta.verbose_name} {obj_repr} (branch-originated)'
+            )
+
+        return cascade_models
+
     def sync(self, user, commit=True):
         """
         Apply changes from the main schema onto the Branch's schema.
@@ -488,14 +559,26 @@ class Branch(JobsMixin, PrimaryModel):
         logger.debug(f"Setting branch status to {BranchStatusChoices.SYNCING}")
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.SYNCING)
 
+        # Generate a request ID for correlating ObjectChange records from this sync
+        request_id = uuid.uuid4()
+
         try:
             with activate_branch(self), transaction.atomic(using=self.connection_name):
                 models = set()
+                branchable_models = {ct.model_class() for ct in get_branchable_object_types()}
 
                 # Apply each change from the main schema
                 for change in changes:
-                    models.add(change.changed_object_type.model_class())
-                    change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+                    model_class = change.changed_object_type.model_class()
+                    models.add(model_class)
+                    if change.action == ObjectChangeActionChoices.ACTION_DELETE:
+                        cascade_models = self._handle_sync_delete(
+                            change, branchable_models, user, logger, request_id=request_id
+                        )
+                        models.update(cascade_models)
+                    else:
+                        change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+
                 if not commit:
                     raise AbortTransaction()
 
