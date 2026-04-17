@@ -232,6 +232,8 @@ class ChangeDiff(models.Model):
         """
         Return the set of attributes altered in the branch schema.
         """
+        if self.original is None or self.modified is None:
+            return set()
         return {
             k for k, v in self.modified.items()
             if k in self.original and v != self.original[k]
@@ -272,6 +274,8 @@ class ChangeDiff(models.Model):
         """
         Return a key-value mapping of all attributes in the original state which have been modified.
         """
+        if self.original is None:
+            return {}
         return {
             k: v for k, v in self.original.items()
             if k in self.altered_fields
@@ -282,6 +286,8 @@ class ChangeDiff(models.Model):
         """
         Return a key-value mapping of all attributes which have been modified within the branch.
         """
+        if self.modified is None:
+            return {}
         return {
             k: v for k, v in self.modified.items()
             if k in self.altered_fields
