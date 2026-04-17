@@ -1,6 +1,12 @@
 import logging
 from functools import cached_property
 
+try:
+    from botocore.exceptions import ClientError as BotocoreClientError
+    _FILE_NOT_FOUND_EXCEPTIONS = (FileNotFoundError, BotocoreClientError)
+except ImportError:
+    _FILE_NOT_FOUND_EXCEPTIONS = (FileNotFoundError,)
+
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -55,9 +61,10 @@ class ObjectChange(ObjectChange_):
                 instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
             try:
                 instance.object.full_clean()
-            except (FileNotFoundError) as e:
+            except _FILE_NOT_FOUND_EXCEPTIONS as e:
                 # If a file was deleted later in this branch it will fail here
                 # so we need to ignore it. We can assume the NetBox state is valid.
+                # Also catches S3 storage errors (botocore.exceptions.ClientError).
                 logger.warning(f'Ignoring missing file: {e}')
             instance.save(using=using)
 
