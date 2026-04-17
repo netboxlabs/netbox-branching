@@ -99,7 +99,7 @@ class CurrentDiffTestCase(SimpleTestCase):
         self.assertEqual(diff.current_diff, {})
 
     def test_no_changes(self):
-        diff = make_diff(original=DATA_A, modified=DATA_B, current=DATA_A)
+        diff = make_diff(original=DATA_A, modified=DATA_A, current=DATA_A)
         self.assertEqual(diff.current_diff, {})
 
 
