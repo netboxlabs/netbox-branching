@@ -415,6 +415,41 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, TransactionTestCase):
         self.assertIn('diff', result)
         self.assertEqual(result['diff'], {'original': {}, 'modified': {}, 'current': {}})
 
+    def test_changediff_list_update_action(self):
+        """
+        Updating an object inside a branch produces a ChangeDiff with both original and modified
+        populated. The diff field must reflect only the changed attributes.
+        """
+        # Site created before provisioning is present in the branch schema
+        site = Site.objects.create(name='Original Site', slug='original-site')
+        branch = Branch(name='Branch With Update')
+        branch.save(provision=False)
+        branch.provision(self.user)
+
+        try:
+            response = self.client.patch(
+                reverse('dcim-api:site-detail', kwargs={'pk': site.pk}),
+                data=json.dumps({'description': 'updated in branch'}),
+                content_type='application/json',
+                **{**self.header, 'HTTP_X_NETBOX_BRANCH': branch.schema_id},
+            )
+            self.assertEqual(response.status_code, 200)
+
+            diff = ChangeDiff.objects.get(branch=branch)
+            self.assertEqual(diff.action, ObjectChangeActionChoices.ACTION_UPDATE)
+            self.assertIsNotNone(diff.original)
+            self.assertIsNotNone(diff.modified)
+
+            url = reverse('plugins-api:netbox_branching-api:changediff-list')
+            response = self.client.get(url, **self.header)
+            self.assertEqual(response.status_code, 200)
+            result = json.loads(response.content)['results'][0]
+            self.assertIn('diff', result)
+            self.assertEqual(result['diff']['original']['description'], '')
+            self.assertEqual(result['diff']['modified']['description'], 'updated in branch')
+        finally:
+            connections[branch.connection_name].close()
+
     def test_changediff_list_delete_action(self):
         """
         Deleting a pre-existing object inside a branch produces a ChangeDiff with modified=None.
