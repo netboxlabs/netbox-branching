@@ -24,7 +24,9 @@ class IterativeMergeStrategy(MergeStrategy):
         """
         models = set()
 
-        for change in changes:
+        # Stream changes with .iterator() to avoid loading all
+        # ObjectChange rows into memory at once.
+        for change in changes.iterator():
             model_class = change.changed_object_type.model_class()
             models.add(model_class)
             with event_tracking(request):
@@ -44,13 +46,11 @@ class IterativeMergeStrategy(MergeStrategy):
         """
         models = set()
 
-        # Undo each change from the Branch
-        for change in changes:
+        for change in changes.iterator():
             models.add(change.changed_object_type.model_class())
             with event_tracking(request):
                 request.id = change.request_id
                 request.user = change.user
                 change.undo(branch, logger=logger)
 
-        # Perform cleanup tasks
         self._clean(models)

@@ -547,12 +547,17 @@ class Branch(JobsMixin, PrimaryModel):
         # Emit pre-sync signal
         pre_sync.send(sender=self.__class__, branch=self, user=user)
 
-        # Retrieve unsynced changes before we update the Branch's status
-        if changes := self.get_unsynced_changes().order_by('time'):
-            logger.info(f"Found {len(changes)} changes to sync")
-        else:
+        # Retrieve unsynced changes before we update the Branch's status.
+        # Use select_related to avoid N+1 queries on ContentType lookups
+        # during iteration, and .exists()/.count() to avoid evaluating the
+        # full queryset into memory.
+        changes_qs = self.get_unsynced_changes().order_by('time').select_related('changed_object_type')
+        if not changes_qs.exists():
             logger.info("No changes found; aborting.")
             return
+
+        change_count = changes_qs.count()
+        logger.info(f"Found {change_count} changes to sync")
 
         # Update Branch status
         logger.debug(f"Setting branch status to {BranchStatusChoices.SYNCING}")
@@ -566,8 +571,9 @@ class Branch(JobsMixin, PrimaryModel):
                 models = set()
                 branchable_models = {ct.model_class() for ct in get_branchable_object_types()}
 
-                # Apply each change from the main schema
-                for change in changes:
+                # Stream changes with .iterator() to avoid loading all
+                # ObjectChange rows into memory at once.
+                for change in changes_qs.iterator():
                     model_class = change.changed_object_type.model_class()
                     models.add(model_class)
                     if change.action == ObjectChangeActionChoices.ACTION_DELETE:
@@ -696,12 +702,16 @@ class Branch(JobsMixin, PrimaryModel):
         # Emit pre-merge signal
         pre_merge.send(sender=self.__class__, branch=self, user=user)
 
-        # Retrieve staged changes before we update the Branch's status
-        if changes := self.get_unmerged_changes().order_by('time'):
-            logger.info(f"Found {len(changes)} changes to merge")
-        else:
+        # Retrieve staged changes before we update the Branch's status.
+        # select_related avoids N+1 on ContentType; .exists()/.count() avoid
+        # evaluating the full queryset into memory.
+        changes_qs = self.get_unmerged_changes().order_by('time').select_related('changed_object_type')
+        if not changes_qs.exists():
             logger.info("No changes found; aborting.")
             return
+
+        change_count = changes_qs.count()
+        logger.info(f"Found {change_count} changes to merge")
 
         # Update Branch status
         logger.debug(f"Setting branch status to {BranchStatusChoices.MERGING}")
@@ -719,7 +729,7 @@ class Branch(JobsMixin, PrimaryModel):
                 # Get and execute the appropriate merge strategy
                 strategy_class = get_merge_strategy(self.merge_strategy)
                 logger.debug(f"Merging using {self.merge_strategy} strategy")
-                strategy_class().merge(self, changes, request, logger, user)
+                strategy_class().merge(self, changes_qs, request, logger, user)
 
                 if not commit:
                     raise AbortTransaction()
@@ -772,12 +782,18 @@ class Branch(JobsMixin, PrimaryModel):
         # Get the merge strategy to determine the correct ordering for changes
         strategy_class = get_merge_strategy(self.merge_strategy)
 
-        # Retrieve applied changes before we update the Branch's status
-        if changes := self.get_changes().order_by(strategy_class.revert_changes_ordering):
-            logger.info(f"Found {len(changes)} changes to revert")
-        else:
+        # Retrieve applied changes before we update the Branch's status.
+        # select_related avoids N+1 on ContentType; .exists()/.count() avoid
+        # evaluating the full queryset into memory.
+        changes_qs = self.get_changes().order_by(
+            strategy_class.revert_changes_ordering
+        ).select_related('changed_object_type')
+        if not changes_qs.exists():
             logger.info("No changes found; aborting.")
             return
+
+        change_count = changes_qs.count()
+        logger.info(f"Found {change_count} changes to revert")
 
         # Update Branch status
         logger.debug(f"Setting branch status to {BranchStatusChoices.REVERTING}")
@@ -794,7 +810,7 @@ class Branch(JobsMixin, PrimaryModel):
             with transaction.atomic():
                 # Execute the revert strategy
                 logger.debug(f"Reverting using {self.merge_strategy} strategy")
-                strategy_class().revert(self, changes, request, logger, user)
+                strategy_class().revert(self, changes_qs, request, logger, user)
 
                 if not commit:
                     raise AbortTransaction()
