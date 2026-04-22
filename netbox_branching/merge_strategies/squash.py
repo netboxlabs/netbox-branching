@@ -9,7 +9,7 @@ from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, models
 from netbox.context_managers import event_tracking
 
-from ..constants import CONNECTIONS
+from ..constants import CONNECTION_MODELS
 from ..error_report import annotate_validation_error
 from .strategy import MergeStrategy
 
@@ -228,17 +228,16 @@ class SquashMergeStrategy(MergeStrategy):
                     )
                     raise
 
-            # Track CREATEs for CONNECTIONS models. These are applied via raw save (bypassing
+            # Track CREATEs for CONNECTION models. These are applied via raw save (bypassing
             # Model.save() and signals like trace_paths), so we re-save them normally after all
-            # other objects exist. Cable creates must precede CableTermination creates due to FK
-            # constraints, so terminations are guaranteed to be in place by the time we re-save.
+            # other objects exist.
             if collapsed.final_action == ActionType.CREATE:
                 model_label = f"{model_class._meta.app_label}.{model_class._meta.model_name}"
-                if model_label in CONNECTIONS:
+                if model_label in CONNECTION_MODELS:
                     connection_pks_by_model.setdefault(model_class, []).append(collapsed.key[1])
 
-        # Re-save connection objects (e.g. cables) via a normal save to trigger path tracing.
-        # All terminations are in place at this point, so trace_paths fires correctly.
+        # Re-save connection objects to re-trigger any actions that need to be performed after 
+        # the object is created as the RAW create can bypass some processing.
         # Done outside event_tracking so no ObjectChanges are recorded for these saves.
         for model_class, pks in connection_pks_by_model.items():
             for i in range(0, len(pks), 100):

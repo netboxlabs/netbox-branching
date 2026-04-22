@@ -3,7 +3,7 @@ from django.urls import reverse_lazy
 __all__ = (
     'BRANCH_ACTIONS',
     'BRANCH_HEADER',
-    'CONNECTIONS',
+    'CONNECTION_MODELS',
     'COOKIE_NAME',
     'EXEMPT_MODELS',
     'EXEMPT_PATHS',
@@ -39,7 +39,7 @@ QUERY_PARAM = '_branch'
 
 # Models whose CREATE operations must be deferred to the end of a squash merge
 # so that all related objects (e.g. terminations) exist before path tracing fires.
-CONNECTIONS = (
+CONNECTION_MODELS = (
     'dcim.cable',
 )
 
