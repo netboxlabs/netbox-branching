@@ -236,7 +236,7 @@ class SquashMergeStrategy(MergeStrategy):
                 if model_label in CONNECTION_MODELS:
                     connection_pks_by_model.setdefault(model_class, []).append(collapsed.key[1])
 
-        # Re-save connection objects to re-trigger any actions that need to be performed after 
+        # Re-save connection objects to re-trigger any actions that need to be performed after
         # the object is created as the RAW create can bypass some processing.
         # Done outside event_tracking so no ObjectChanges are recorded for these saves.
         for model_class, pks in connection_pks_by_model.items():
