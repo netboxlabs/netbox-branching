@@ -1,5 +1,14 @@
 # Change Log
 
+## v0.9.1
+
+### Bug Fixes
+
+* [#478](https://github.com/netboxlabs/netbox-branching/issues/478) - Fix merge failure when referencing an object that has been deleted in main
+* [#513](https://github.com/netboxlabs/netbox-branching/issues/513) - Fix `AttributeError` exception when accessing diff properties on a `ChangeDiff` with no original or modified data
+
+---
+
 ## v0.9.0
 
 ### Enhancements
