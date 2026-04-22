@@ -67,7 +67,7 @@ class ObjectChange(ObjectChange_):
                 # For S3 ClientError, suppress key-not-found responses (404) and access-denied
                 # responses (403), since S3 can be configured to return 403 for missing objects.
                 status = e.response.get('ResponseMetadata', {}).get('HTTPStatusCode') if hasattr(e, 'response') else None
-                if status not in (403, 404):
+                if status is not None and status not in (403, 404):
                     raise
                 logger.warning(f'Ignoring missing file: {e}')
             instance.save(using=using)
