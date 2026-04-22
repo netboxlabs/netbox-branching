@@ -64,7 +64,10 @@ class ObjectChange(ObjectChange_):
             except _FILE_NOT_FOUND_EXCEPTIONS as e:
                 # If a file was deleted later in this branch it will fail here
                 # so we need to ignore it. We can assume the NetBox state is valid.
-                # Also catches S3 storage errors (botocore.exceptions.ClientError).
+                # For S3 ClientError, suppress key-not-found responses (404) and access-denied
+                # responses (403), since S3 can be configured to return 403 for missing objects.
+                if hasattr(e, 'response') and e.response.get('ResponseMetadata', {}).get('HTTPStatusCode') not in (403, 404):
+                    raise
                 logger.warning(f'Ignoring missing file: {e}')
             instance.save(using=using)
 
