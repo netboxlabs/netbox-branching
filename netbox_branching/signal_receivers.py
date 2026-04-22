@@ -238,9 +238,7 @@ def handle_branch_event(event_type, branch, user=None, **kwargs):
     process_event_rules(
         event_rules=event_rules,
         object_type=object_type,
-        event_type=event_type,
-        data=data,
-        username=username
+        event={'event_type': event_type, 'data': data, 'username': username}
     )
 
 
