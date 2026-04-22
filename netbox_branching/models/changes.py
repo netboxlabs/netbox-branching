@@ -66,9 +66,10 @@ class ObjectChange(ObjectChange_):
                 # so we need to ignore it. We can assume the NetBox state is valid.
                 # For S3 ClientError, suppress key-not-found responses (404) and access-denied
                 # responses (403), since S3 can be configured to return 403 for missing objects.
-                status = e.response.get('ResponseMetadata', {}).get('HTTPStatusCode') if hasattr(e, 'response') else None
-                if status is not None and status not in (403, 404):
-                    raise
+                if hasattr(e, 'response'):
+                    status = e.response.get('ResponseMetadata', {}).get('HTTPStatusCode')
+                    if status not in (403, 404):
+                        raise
                 logger.warning(f'Ignoring missing file: {e}')
             instance.save(using=using)
 
