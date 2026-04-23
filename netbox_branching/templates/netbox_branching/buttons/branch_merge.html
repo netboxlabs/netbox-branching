@@ -1,10 +1,12 @@
 {% load i18n %}
-{% if perms.netbox_branching.merge_branch %}
+{% if perms.netbox_branching.merge_branch and branch.get_unmerged_changes.exists %}
   <a href="{% url 'plugins:netbox_branching:branch_merge' pk=branch.pk %}" class="btn btn-primary">
     <i class="mdi mdi-merge"></i> {% trans "Merge" %}
   </a>
 {% else %}
-  <button type="button" class="btn btn-primary disabled" aria-disabled="true">
-    <i class="mdi mdi-merge"></i> {% trans "Merge" %}
-  </button>
+  <span class="d-inline-block" tabindex="0" data-bs-toggle="tooltip" data-bs-delay="100" data-bs-placement="bottom" title="{% if not perms.netbox_branching.merge_branch %}{% trans "Insufficient permissions" %}{% else %}{% trans "No changes to merge" %}{% endif %}">
+    <button type="button" class="btn btn-primary disabled" aria-disabled="true">
+      <i class="mdi mdi-merge"></i> {% trans "Merge" %}
+    </button>
+  </span>
 {% endif %}
