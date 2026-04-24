@@ -3,6 +3,7 @@ from functools import partial
 
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange, ObjectType
+from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS
@@ -235,13 +236,22 @@ def handle_branch_event(event_type, branch, user=None, **kwargs):
     username = user.username if user else None
     data = serialize_object(branch)
     data['id'] = branch.pk
-    process_event_rules(
-        event_rules=event_rules,
-        object_type=object_type,
-        event_type=event_type,
-        data=data,
-        username=username
-    )
+    # NetBox 4.5.2+ consolidates event fields into a single dict; older versions use separate params
+    nb_version = tuple(int(x) for x in settings.RELEASE.version.split('.')[:3])
+    if nb_version >= (4, 5, 2):
+        process_event_rules(
+            event_rules=event_rules,
+            object_type=object_type,
+            event={'event_type': event_type, 'data': data, 'username': username}
+        )
+    else:
+        process_event_rules(
+            event_rules=event_rules,
+            object_type=object_type,
+            event_type=event_type,
+            data=data,
+            username=username
+        )
 
 
 # Connect signals with weak=False to prevent garbage collection of partial objects
