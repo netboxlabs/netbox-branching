@@ -17,6 +17,7 @@ from netbox.utils import register_request_processor
 
 from .constants import BRANCH_HEADER, COOKIE_NAME, EXEMPT_MODELS, EXEMPT_PATHS, INCLUDE_MODELS, QUERY_PARAM
 from .contextvars import active_branch
+from .models.changes import _FILE_NOT_FOUND_EXCEPTIONS
 
 # Thread-local storage for tracking branch connection aliases (matches Django's approach)
 # Note: Aliases are tracked once and never removed, matching Django's pattern where
@@ -250,7 +251,7 @@ def update_object(instance, data, using):
 
     try:
         instance.full_clean()
-    except (FileNotFoundError) as e:
+    except _FILE_NOT_FOUND_EXCEPTIONS as e:
         # If a file was deleted later in this branch it will fail here
         # so we need to ignore it. We can assume the NetBox state is valid.
         logger.warning(f'Ignoring missing file: {e}')
