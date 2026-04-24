@@ -1,12 +1,6 @@
 import logging
 from functools import cached_property
 
-try:
-    from botocore.exceptions import ClientError as BotocoreClientError
-    _FILE_NOT_FOUND_EXCEPTIONS = (FileNotFoundError, BotocoreClientError)
-except ImportError:
-    _FILE_NOT_FOUND_EXCEPTIONS = (FileNotFoundError,)
-
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
 from django.contrib.contenttypes.fields import GenericForeignKey
@@ -17,6 +11,7 @@ from django.utils.translation import gettext_lazy as _
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
 
+from netbox_branching.constants import _FILE_NOT_FOUND_EXCEPTIONS
 from netbox_branching.utilities import update_object
 
 __all__ = (

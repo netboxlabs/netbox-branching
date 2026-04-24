@@ -15,9 +15,16 @@ from django.urls import reverse
 from netbox.plugins import get_plugin_config
 from netbox.utils import register_request_processor
 
-from .constants import BRANCH_HEADER, COOKIE_NAME, EXEMPT_MODELS, EXEMPT_PATHS, INCLUDE_MODELS, QUERY_PARAM
+from .constants import (
+    _FILE_NOT_FOUND_EXCEPTIONS,
+    BRANCH_HEADER,
+    COOKIE_NAME,
+    EXEMPT_MODELS,
+    EXEMPT_PATHS,
+    INCLUDE_MODELS,
+    QUERY_PARAM,
+)
 from .contextvars import active_branch
-from .models.changes import _FILE_NOT_FOUND_EXCEPTIONS
 
 # Thread-local storage for tracking branch connection aliases (matches Django's approach)
 # Note: Aliases are tracked once and never removed, matching Django's pattern where
