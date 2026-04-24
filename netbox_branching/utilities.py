@@ -15,7 +15,15 @@ from django.urls import reverse
 from netbox.plugins import get_plugin_config
 from netbox.utils import register_request_processor
 
-from .constants import BRANCH_HEADER, COOKIE_NAME, EXEMPT_MODELS, EXEMPT_PATHS, INCLUDE_MODELS, QUERY_PARAM
+from .constants import (
+    _FILE_NOT_FOUND_EXCEPTIONS,
+    BRANCH_HEADER,
+    COOKIE_NAME,
+    EXEMPT_MODELS,
+    EXEMPT_PATHS,
+    INCLUDE_MODELS,
+    QUERY_PARAM,
+)
 from .contextvars import active_branch
 
 # Thread-local storage for tracking branch connection aliases (matches Django's approach)
@@ -32,6 +40,7 @@ __all__ = (
     'activate_branch',
     'close_old_branch_connections',
     'deactivate_branch',
+    'full_clean_with_file_check',
     'get_active_branch',
     'get_branchable_object_types',
     'get_sql_results',
@@ -217,6 +226,22 @@ class ChangeSummary:
     count: int
 
 
+def full_clean_with_file_check(instance, logger):
+    """
+    Calls instance.full_clean(), suppressing _FILE_NOT_FOUND_EXCEPTIONS for genuinely missing
+    files. For BotocoreClientError, only 403/404 responses are suppressed — S3 can return 403
+    for missing objects when the bucket policy denies s3:ListBucket.
+    """
+    try:
+        instance.full_clean()
+    except _FILE_NOT_FOUND_EXCEPTIONS as e:
+        if hasattr(e, 'response'):
+            status = e.response.get('ResponseMetadata', {}).get('HTTPStatusCode')
+            if status not in (403, 404):
+                raise
+        logger.warning(f'Ignoring missing file: {e}')
+
+
 def update_object(instance, data, using):
     """
     Set an attribute on an object depending on the type of model field.
@@ -248,12 +273,7 @@ def update_object(instance, data, using):
         else:
             setattr(instance, attr, value)
 
-    try:
-        instance.full_clean()
-    except (FileNotFoundError) as e:
-        # If a file was deleted later in this branch it will fail here
-        # so we need to ignore it. We can assume the NetBox state is valid.
-        logger.warning(f'Ignoring missing file: {e}')
+    full_clean_with_file_check(instance, logger)
     instance.save(using=using)
 
     for m2m_manager, value in m2m_assignments.items():

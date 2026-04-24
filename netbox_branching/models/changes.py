@@ -11,7 +11,7 @@ from django.utils.translation import gettext_lazy as _
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
 
-from netbox_branching.utilities import update_object
+from netbox_branching.utilities import full_clean_with_file_check, update_object
 
 __all__ = (
     'AppliedChange',
@@ -53,12 +53,7 @@ class ObjectChange(ObjectChange_):
                 instance = model.deserialize_object(self.postchange_data, pk=self.changed_object_id)
             else:
                 instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
-            try:
-                instance.object.full_clean()
-            except (FileNotFoundError) as e:
-                # If a file was deleted later in this branch it will fail here
-                # so we need to ignore it. We can assume the NetBox state is valid.
-                logger.warning(f'Ignoring missing file: {e}')
+            full_clean_with_file_check(instance.object, logger)
             instance.save(using=using)
 
         # Modifying an object

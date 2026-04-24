@@ -1,5 +1,11 @@
 from django.urls import reverse_lazy
 
+try:
+    from botocore.exceptions import ClientError as BotocoreClientError
+    _FILE_NOT_FOUND_EXCEPTIONS = (FileNotFoundError, BotocoreClientError)
+except ImportError:
+    _FILE_NOT_FOUND_EXCEPTIONS = (FileNotFoundError,)
+
 __all__ = (
     'BRANCH_ACTIONS',
     'BRANCH_HEADER',
