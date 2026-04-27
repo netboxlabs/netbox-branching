@@ -12,6 +12,7 @@ from django.db import connections
 from django.db.models import ForeignKey, ManyToManyField
 from django.http import HttpResponseBadRequest
 from django.urls import reverse
+from django.utils.translation import gettext as _
 from netbox.plugins import get_plugin_config
 from netbox.utils import register_request_processor
 
@@ -316,11 +317,14 @@ def get_active_branch(request):
         if schema_id := request.GET.get(QUERY_PARAM):
             branch = Branch.objects.get(schema_id=schema_id)
             if branch.ready:
-                messages.success(request, f"Activated branch {branch}")
+                if schema_id != request.COOKIES.get(COOKIE_NAME):
+                    messages.success(request, _("Activated branch {branch}").format(branch=branch))
                 return branch
-            messages.error(request, f"Branch {branch} is not ready for use (status: {branch.status})")
+            messages.error(request, _("Branch {branch} is not ready for use (status: {status})").format(
+                branch=branch, status=branch.status
+            ))
             return None
-        messages.success(request, "Deactivated branch")
+        messages.success(request, _("Deactivated branch"))
         request.COOKIES.pop(COOKIE_NAME, None)  # Delete cookie if set
         return None
 

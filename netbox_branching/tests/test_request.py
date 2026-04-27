@@ -71,6 +71,19 @@ class RequestTestCase(TestCase):
         self.assertEqual(cookie['samesite'], 'Strict')
 
     @override_settings(LOGIN_REQUIRED=False)
+    def test_reactivate_branch_no_message(self):
+        branch = Branch.objects.first()
+        self.client.cookies.load({
+            COOKIE_NAME: branch.schema_id,
+        })
+
+        url = reverse('home')
+        response = self.client.get(f'{url}?{QUERY_PARAM}={branch.schema_id}')
+        self.assertEqual(response.status_code, 200)
+        messages_list = list(response.wsgi_request._messages)
+        self.assertEqual(len(messages_list), 0, msg="Unexpected toast message on branch re-activation")
+
+    @override_settings(LOGIN_REQUIRED=False)
     def test_stale_cookie_cleared(self):
         """
         A cookie referencing a non-ready branch should be automatically cleared.
