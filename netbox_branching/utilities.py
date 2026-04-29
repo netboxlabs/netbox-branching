@@ -318,13 +318,19 @@ def get_active_branch(request):
             branch = Branch.objects.get(schema_id=schema_id)
             if branch.ready:
                 if schema_id != request.COOKIES.get(COOKIE_NAME):
-                    messages.success(request, _("Activated branch {branch}").format(branch=branch))
+                    if not getattr(request, '_branch_activation_notified', False):
+                        messages.success(request, _("Activated branch {branch}").format(branch=branch))
+                        request._branch_activation_notified = True
                 return branch
-            messages.error(request, _("Branch {branch} is not ready for use (status: {status})").format(
-                branch=branch, status=branch.status
-            ))
+            if not getattr(request, '_branch_activation_notified', False):
+                messages.error(request, _("Branch {branch} is not ready for use (status: {status})").format(
+                    branch=branch, status=branch.status
+                ))
+                request._branch_activation_notified = True
             return None
-        messages.success(request, _("Deactivated branch"))
+        if not getattr(request, '_branch_activation_notified', False):
+            messages.success(request, _("Deactivated branch"))
+            request._branch_activation_notified = True
         request.COOKIES.pop(COOKIE_NAME, None)  # Delete cookie if set
         return None
 

@@ -44,6 +44,10 @@ class RequestTestCase(TestCase):
         self.assertTrue(cookie['secure'])
         self.assertEqual(cookie['samesite'], 'Strict')
 
+        # Verify exactly one activation toast (not duplicated by the request processor)
+        messages_list = list(response.wsgi_request._messages)
+        self.assertEqual(len(messages_list), 1, msg="Expected exactly one activation toast message")
+
     @override_settings(
         LOGIN_REQUIRED=False,
         SESSION_COOKIE_DOMAIN='example.com',
