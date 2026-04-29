@@ -317,10 +317,12 @@ def get_active_branch(request):
         if schema_id := request.GET.get(QUERY_PARAM):
             branch = Branch.objects.get(schema_id=schema_id)
             if branch.ready:
-                if schema_id != request.COOKIES.get(COOKIE_NAME):
-                    if not getattr(request, '_branch_activation_notified', False):
-                        messages.success(request, _("Activated branch {branch}").format(branch=branch))
-                        request._branch_activation_notified = True
+                if (
+                    schema_id != request.COOKIES.get(COOKIE_NAME)
+                    and not getattr(request, '_branch_activation_notified', False)
+                ):
+                    messages.success(request, _("Activated branch {branch}").format(branch=branch))
+                    request._branch_activation_notified = True
                 return branch
             if not getattr(request, '_branch_activation_notified', False):
                 messages.error(request, _("Branch {branch} is not ready for use (status: {status})").format(
