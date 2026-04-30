@@ -1,5 +1,11 @@
 from django.urls import reverse_lazy
 
+try:
+    from botocore.exceptions import ClientError as BotocoreClientError
+    _FILE_NOT_FOUND_EXCEPTIONS = (FileNotFoundError, BotocoreClientError)
+except ImportError:
+    _FILE_NOT_FOUND_EXCEPTIONS = (FileNotFoundError,)
+
 __all__ = (
     'BRANCH_ACTIONS',
     'BRANCH_HEADER',
@@ -40,6 +46,7 @@ QUERY_PARAM = '_branch'
 # must be replicated for each branch to ensure proper functionality
 INCLUDE_MODELS = (
     'dcim.cablepath',
+    'dcim.portmapping',  # Fix for issue #447 - front/rear port mapping table
     'extras.cachedvalue',
     'extras.taggeditem',  # Fix for issue #354 - tags through model
     'tenancy.contactgroupmembership',  # Fix for NetBox v4.3.0

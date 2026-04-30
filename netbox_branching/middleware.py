@@ -2,6 +2,7 @@ from django.conf import settings
 from django.contrib import messages
 from django.core.exceptions import ObjectDoesNotExist
 from django.http import HttpResponseBadRequest, HttpResponseRedirect
+from django.utils.translation import gettext as _
 
 from .constants import COOKIE_NAME, EXEMPT_PATHS, QUERY_PARAM
 from .utilities import get_active_branch, is_api_request
@@ -72,7 +73,9 @@ class BranchMiddleware:
                 requested_url = request.path
                 messages.warning(
                     request,
-                    f"The requested object at {requested_url} does not exist in {branch_name}."
+                    _("The requested object at {url} does not exist in {branch_name}.").format(
+                        url=requested_url, branch_name=branch_name
+                    )
                 )
 
                 # Create redirect response and apply cookie operations to it

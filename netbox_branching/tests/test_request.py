@@ -44,6 +44,10 @@ class RequestTestCase(TestCase):
         self.assertTrue(cookie['secure'])
         self.assertEqual(cookie['samesite'], 'Strict')
 
+        # Verify exactly one activation toast (not duplicated by the request processor)
+        messages_list = list(response.wsgi_request._messages)
+        self.assertEqual(len(messages_list), 1, msg="Expected exactly one activation toast message")
+
     @override_settings(
         LOGIN_REQUIRED=False,
         SESSION_COOKIE_DOMAIN='example.com',
@@ -69,6 +73,19 @@ class RequestTestCase(TestCase):
         self.assertEqual(cookie['domain'], 'example.com')
         self.assertEqual(cookie['path'], '/custom')
         self.assertEqual(cookie['samesite'], 'Strict')
+
+    @override_settings(LOGIN_REQUIRED=False)
+    def test_reactivate_branch_no_message(self):
+        branch = Branch.objects.first()
+        self.client.cookies.load({
+            COOKIE_NAME: branch.schema_id,
+        })
+
+        url = reverse('home')
+        response = self.client.get(f'{url}?{QUERY_PARAM}={branch.schema_id}')
+        self.assertEqual(response.status_code, 200)
+        messages_list = list(response.wsgi_request._messages)
+        self.assertEqual(len(messages_list), 0, msg="Unexpected toast message on branch re-activation")
 
     @override_settings(LOGIN_REQUIRED=False)
     def test_stale_cookie_cleared(self):

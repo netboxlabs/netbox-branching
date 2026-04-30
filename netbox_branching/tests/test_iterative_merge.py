@@ -1044,6 +1044,15 @@ class BaseMergeTests:
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
+        # Revert should succeed — undo of DELETE restores the site from prechange_data
+        branch.revert(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+        self.assertTrue(Site.objects.filter(id=site_id).exists())
+        site = Site.objects.get(id=site_id)
+        self.assertEqual(site.description, 'Original')
+
 
 class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
     """Test cases for Branch merge using iterative merge strategy."""
