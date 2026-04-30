@@ -26,11 +26,13 @@ from dcim.models import (
     FrontPortTemplate,
     Interface,
     Manufacturer,
+    PortMapping,
+    PortTemplateMapping,
     RearPortTemplate,
     Site,
 )
-from dcim.models.device_component_templates import PortTemplateMapping
 from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
 from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
@@ -138,8 +140,6 @@ class RelatedModelsTestCase(TransactionTestCase):
                 site=self.site,
             )
 
-        from dcim.models import PortMapping
-
         with activate_branch(branch):
             self.assertEqual(PortMapping.objects.filter(device=device).count(), 1)
 
@@ -161,7 +161,6 @@ class RelatedModelsTestCase(TransactionTestCase):
             site = Site.objects.create(name='Tagged Site', slug='tagged-site')
             site.tags.add(tag)
 
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
 
         with activate_branch(branch):
@@ -189,7 +188,6 @@ class RelatedModelsTestCase(TransactionTestCase):
         with activate_branch(branch), event_tracking(self._make_request()):
             site = Site.objects.create(name='Indexed Site', slug='indexed-site')
 
-        from django.contrib.contenttypes.models import ContentType
         site_ct = ContentType.objects.get_for_model(Site)
 
         with activate_branch(branch):
