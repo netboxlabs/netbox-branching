@@ -124,8 +124,6 @@ PLUGINS = [
 
 ### 5. Configuration
 
-#### NetBox v4.3 and Later
-
 Wrap your `DATABASES` configuration parameter with `DynamicSchemaDict` in `configuration.py`, as shown below.
 
 !!! note
