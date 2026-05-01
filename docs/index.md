@@ -152,27 +152,6 @@ DATABASE_ROUTERS = [
 ]
 ```
 
-#### NetBox v4.2 and Earlier
-
-If using NetBox v4.2 or earlier, these changes must be made in `local_settings.py`, as the `DATABASES` and `DATABASE_ROUTERS` configuration parameters were not introduced until NetBox v4.3.
-
-Create a file named `local_settings.py` in the same directory as `configuration.py`, and add the following content.
-    
-```python
-from netbox_branching.utilities import DynamicSchemaDict
-from .configuration import DATABASE
-
-# Wrap DATABASES with DynamicSchemaDict for dynamic schema support
-DATABASES = DynamicSchemaDict({
-    'default': DATABASE,
-})
-
-# Employ our custom database router
-DATABASE_ROUTERS = [
-    'netbox_branching.database.BranchAwareRouter',
-]
-```
-
 ### 6. Database Migrations
 
 Run the included database migrations:
