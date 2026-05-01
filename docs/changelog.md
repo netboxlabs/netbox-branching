@@ -1,5 +1,21 @@
 # Change Log
 
+## v1.0.0
+
+### Enhancements
+
+* [#419](https://github.com/netboxlabs/netbox-branching/issues/419) - Register branch custom permission actions
+* [#519](https://github.com/netboxlabs/netbox-branching/issues/519) - Disable merge button for branches with no pending changes
+
+### Bug Fixes
+
+* [#447](https://github.com/netboxlabs/netbox-branching/issues/447) - Fix `IntegrityError` when creating devices with front/rear port mappings in a branch
+* [#493](https://github.com/netboxlabs/netbox-branching/issues/493) - Fix event rule handling for NetBox v4.5
+* [#494](https://github.com/netboxlabs/netbox-branching/issues/494) - Fix merge failure when using S3 storage and a referenced file is not found
+* [#522](https://github.com/netboxlabs/netbox-branching/issues/522) - Fix share button toast notification, correct typo, and add i18n for activation messages
+
+---
+
 ## v0.9.1
 
 ### Bug Fixes

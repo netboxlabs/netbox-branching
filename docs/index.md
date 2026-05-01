@@ -124,8 +124,6 @@ PLUGINS = [
 
 ### 5. Configuration
 
-#### NetBox v4.3 and Later
-
 Wrap your `DATABASES` configuration parameter with `DynamicSchemaDict` in `configuration.py`, as shown below.
 
 !!! note
@@ -147,27 +145,6 @@ DATABASES = DynamicSchemaDict({
 Additionally, declare `DATABASE_ROUTERS` to employ the plugin's custom database router to support branching.
 
 ```python
-DATABASE_ROUTERS = [
-    'netbox_branching.database.BranchAwareRouter',
-]
-```
-
-#### NetBox v4.2 and Earlier
-
-If using NetBox v4.2 or earlier, these changes must be made in `local_settings.py`, as the `DATABASES` and `DATABASE_ROUTERS` configuration parameters were not introduced until NetBox v4.3.
-
-Create a file named `local_settings.py` in the same directory as `configuration.py`, and add the following content.
-    
-```python
-from netbox_branching.utilities import DynamicSchemaDict
-from .configuration import DATABASE
-
-# Wrap DATABASES with DynamicSchemaDict for dynamic schema support
-DATABASES = DynamicSchemaDict({
-    'default': DATABASE,
-})
-
-# Employ our custom database router
 DATABASE_ROUTERS = [
     'netbox_branching.database.BranchAwareRouter',
 ]
