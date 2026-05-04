@@ -60,15 +60,29 @@ __all__ = (
 
 def _fake_for_branch(migration):
     """
-    Return True if all model-specific operations in a migration affect only non-branchable
-    models. Such migrations should be faked on branch schemas to prevent RunSQL operations
-    from inadvertently acting on the main (public) schema via the search_path.
+    Return True if a migration should be faked when applied to a branch schema, False otherwise.
 
-    Migrations with no model-specific operations (e.g. pure RunSQL) are not faked, as we
-    cannot determine their intent without executing them.
+    Decision order:
+    1. If the migration module sets a ``fake_on_branch`` attribute, that value is respected
+       directly: ``True`` forces faking, ``False`` forces the migration to run.
+    2. Otherwise, fall back to a heuristic: fake migrations whose model-specific operations
+       affect only non-branchable models. This prevents RunSQL operations from inadvertently
+       acting on the main (public) schema via the search_path.
+
+    Migrations with no model-specific operations (e.g. pure RunSQL or RunPython) are not faked
+    by the heuristic, as we cannot determine their intent without executing them. Authors of
+    such migrations should set ``fake_on_branch`` explicitly when needed.
 
     SeparateDatabaseAndState operations are not supported and will be skipped with an error.
     """
+    # Check for an explicit per-migration override
+    try:
+        module = importlib.import_module(f'{migration.app_label}.migrations.{migration.name}')
+    except ModuleNotFoundError:
+        module = None
+    if module is not None and (explicit := getattr(module, 'fake_on_branch', None)) is not None:
+        return bool(explicit)
+
     has_model_operations = False
     for operation in migration.operations:
         if isinstance(operation, SeparateDatabaseAndState):
