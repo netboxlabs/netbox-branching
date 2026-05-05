@@ -1,5 +1,13 @@
 # Change Log
 
+## v1.0.1
+
+### Bug Fixes
+
+* [#529](https://github.com/netboxlabs/netbox-branching/issues/529) - Allow specifying migrations to skip via `fake_on_branch` to handle `RunPython` and `AlterModelOptions` operations
+
+---
+
 ## v1.0.0
 
 ### Enhancements
