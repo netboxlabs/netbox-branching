@@ -660,27 +660,34 @@ class Branch(JobsMixin, PrimaryModel):
         targets = executor.loader.graph.leaf_nodes()
         if plan := executor.migration_plan(targets):
             try:
-                # Apply each migration individually, faking those that only affect
-                # non-branchable models to prevent RunSQL from inadvertently operating
-                # on the main schema via the search_path. See GitHub issue #423.
-                full_plan = executor.migration_plan(executor.loader.graph.leaf_nodes(), clean_start=True)
-                migrations_to_run = {m for m, _ in plan}
-                # _create_project_state is a private Django API (MigrationExecutor). It builds
-                # the current ProjectState from all applied migrations, which apply_migration
-                # requires as its starting point. There is no public equivalent as of Django 5.x.
-                state = executor._create_project_state(with_applied_migrations=True)
-                for migration, _ in full_plan:
-                    if not migrations_to_run:
-                        break
-                    if migration in migrations_to_run:
-                        fake = _fake_for_branch(migration)
-                        state = executor.apply_migration(state, migration, fake=fake)
-                        migrations_to_run.remove(migration)
+                # Activate the branch so that any ORM queries inside data migrations
+                # (RunPython) route to the branch schema rather than main. Without this,
+                # historical-model queries fall through the BranchAwareRouter to the default
+                # connection and read from main, which may have already been migrated past
+                # columns the branch's pending migration still depends on.
+                with activate_branch(self):
+                    # Apply each migration individually, faking those that only affect
+                    # non-branchable models to prevent RunSQL from inadvertently operating
+                    # on the main schema via the search_path. See GitHub issue #423.
+                    full_plan = executor.migration_plan(executor.loader.graph.leaf_nodes(), clean_start=True)
+                    migrations_to_run = {m for m, _ in plan}
+                    # _create_project_state is a private Django API (MigrationExecutor). It builds
+                    # the current ProjectState from all applied migrations, which apply_migration
+                    # requires as its starting point. There is no public equivalent as of Django 5.x.
+                    state = executor._create_project_state(with_applied_migrations=True)
+                    for migration, _ in full_plan:
+                        if not migrations_to_run:
+                            break
+                        if migration in migrations_to_run:
+                            fake = _fake_for_branch(migration)
+                            state = executor.apply_migration(state, migration, fake=fake)
+                            migrations_to_run.remove(migration)
             except Exception as e:
                 if err_message := str(e):
                     logger.error(err_message)
-                # Save applied migrations & reset status
-                self.status = BranchStatusChoices.READY
+                # Mark the branch as failed so it cannot be activated in a partially-migrated
+                # state. Persist any migrations already recorded as applied.
+                self.status = BranchStatusChoices.FAILED
                 self.save()
                 raise
         else:
