@@ -39,6 +39,7 @@ __all__ = (
     'DynamicSchemaDict',
     'ListHandler',
     'activate_branch',
+    'clear_mptt_fields',
     'close_old_branch_connections',
     'deactivate_branch',
     'full_clean_with_file_check',
@@ -241,6 +242,16 @@ def full_clean_with_file_check(instance, logger):
             if status not in (403, 404):
                 raise
         logger.warning(f'Ignoring missing file: {e}')
+
+
+def clear_mptt_fields(instance):
+    """
+    Reset the MPTT-managed tree fields (lft/rght/level/tree_id) on an instance to None
+    so that MPTT will recompute them when the instance is next saved via Model.save().
+    """
+    opts = instance._mptt_meta
+    for attr in (opts.left_attr, opts.right_attr, opts.level_attr, opts.tree_id_attr):
+        setattr(instance, attr, None)
 
 
 def update_object(instance, data, using):

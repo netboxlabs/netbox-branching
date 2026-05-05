@@ -12,7 +12,7 @@ from mptt.models import MPTTModel
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
 
-from netbox_branching.utilities import full_clean_with_file_check, update_object
+from netbox_branching.utilities import clear_mptt_fields, full_clean_with_file_check, update_object
 
 __all__ = (
     'AppliedChange',
@@ -63,9 +63,7 @@ class ObjectChange(ObjectChange_):
             # the changelog, so reusing the source's tree fields would leave the
             # destination tree inconsistent and break later parent updates. (#531)
             if isinstance(instance.object, MPTTModel):
-                opts = instance.object._mptt_meta
-                for attr in (opts.left_attr, opts.right_attr, opts.level_attr, opts.tree_id_attr):
-                    setattr(instance.object, attr, None)
+                clear_mptt_fields(instance.object)
                 instance.object.save(using=using)
                 for accessor_name, object_list in (instance.m2m_data or {}).items():
                     getattr(instance.object, accessor_name).set(object_list)
