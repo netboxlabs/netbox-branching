@@ -5,6 +5,7 @@ import random
 import string
 import uuid
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import timedelta
 from functools import cached_property, partial
 
@@ -18,7 +19,7 @@ from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
 from django.db.migrations.executor import MigrationExecutor
-from django.db.migrations.operations.special import SeparateDatabaseAndState
+from django.db.migrations.operations.special import RunSQL, SeparateDatabaseAndState
 from django.db.models.signals import post_save, pre_delete
 from django.db.utils import ProgrammingError
 from django.test import RequestFactory
@@ -56,6 +57,49 @@ __all__ = (
     'Branch',
     'BranchEvent',
 )
+
+
+@contextmanager
+def _branch_isolated_runsql(branch_schema, main_schema):
+    """
+    Wrap ``RunSQL.database_forwards`` so each ``RunSQL`` body runs with the
+    connection's ``search_path`` restricted to the branch schema only.
+
+    Upstream NetBox migrations occasionally include statements like
+    ``ALTER INDEX IF EXISTS foo RENAME TO bar`` that are intended as no-ops
+    on installs where ``foo`` does not exist. With the default branch
+    ``search_path`` of ``<branch>,<main>``, the ``IF EXISTS`` check silently
+    matches an object in ``main`` and the rename then collides with an
+    existing object there — see GitHub issue #423.
+
+    Restricting ``search_path`` to the branch only for ``RunSQL`` execution
+    isolates these legacy renames to the branch schema. Other operations
+    (``CreateModel``, ``AddField``, ``RunPython``) keep the default
+    ``<branch>,<main>`` search path because they may need cross-schema
+    visibility (e.g. M2M FKs to ``auth.User`` or ``contenttypes``, neither
+    of which is replicated into a branch).
+    """
+    original = RunSQL.database_forwards
+    # pg_catalog.set_config(name, value, is_local=true) is documented as the
+    # function-call equivalent of SET LOCAL — value is passed as a parameter
+    # rather than interpolated into SQL.
+    set_path_sql = "SELECT pg_catalog.set_config('search_path', %s, true)"
+
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        connection = schema_editor.connection
+        with connection.cursor() as cursor:
+            cursor.execute(set_path_sql, [branch_schema])
+        try:
+            original(self, app_label, schema_editor, from_state, to_state)
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute(set_path_sql, [f'{branch_schema},{main_schema}'])
+
+    RunSQL.database_forwards = database_forwards
+    try:
+        yield
+    finally:
+        RunSQL.database_forwards = original
 
 
 def _fake_for_branch(migration):
@@ -658,6 +702,7 @@ class Branch(JobsMixin, PrimaryModel):
         connection = connections[self.connection_name]
         executor = MigrationExecutor(connection, progress_callback=migration_progress_callback)
         targets = executor.loader.graph.leaf_nodes()
+        main_schema = get_plugin_config('netbox_branching', 'main_schema')
         if plan := executor.migration_plan(targets):
             try:
                 # Activate the branch so that any ORM queries inside data migrations
@@ -665,7 +710,7 @@ class Branch(JobsMixin, PrimaryModel):
                 # historical-model queries fall through the BranchAwareRouter to the default
                 # connection and read from main, which may have already been migrated past
                 # columns the branch's pending migration still depends on.
-                with activate_branch(self):
+                with activate_branch(self), _branch_isolated_runsql(self.schema_name, main_schema):
                     # Apply each migration individually, faking those that only affect
                     # non-branchable models to prevent RunSQL from inadvertently operating
                     # on the main schema via the search_path. See GitHub issue #423.

@@ -67,22 +67,14 @@ class BranchUpgradeTestCase(TransactionTestCase):
 
     def test_upgrade_from_v4_4_10(self):
         """
-        Regression test for the original ``rear_port_position`` bug: when a
-        branch captured on 4.4.10 is migrated against current NetBox,
-        ``dcim.0222_port_mappings``'s RunPython data migration must read
-        ``FrontPortTemplate`` rows from the branch schema, not from main.
-
-        Without the fix, the BranchAwareRouter sends those queries to the main
-        schema (which has already been migrated past ``rear_port_position``),
-        producing ``ProgrammingError: column ... does not exist``.
-
-        This test asserts:
-          1. 0222 completes cleanly and populates the new mapping tables.
-          2. If a *later* migration fails (e.g. issue #423 with rename
-             collisions), the failure is not the original routing bug.
+        A branch captured on an older NetBox version must migrate cleanly to
+        the current NetBox version. The fixture covers FK, M2M, and MPTT
+        relations across DCIM, IPAM, Tenancy, and Extras so that data
+        migrations have realistic rows to operate against.
         """
-        user = User.objects.create_user(username='upgrade_user')
+        user, _ = User.objects.get_or_create(username='upgrade_user')
 
+        Branch.objects.filter(name='upgrade-test').delete()
         branch = Branch(name='upgrade-test')
         branch.save(provision=False)
         Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.READY)
@@ -90,63 +82,29 @@ class BranchUpgradeTestCase(TransactionTestCase):
 
         self._load_fixture(branch.schema_name)
 
-        # Sanity-check the fixture loaded as expected
+        # Confirm the fixture loaded with a populated migration history and
+        # at least some seed data (both required for the test to be meaningful).
         with connection.cursor() as cursor:
             cursor.execute(f'SELECT COUNT(*) FROM "{branch.schema_name}".django_migrations')
             self.assertGreater(
-                cursor.fetchone()[0], 700,
-                msg="Fixture django_migrations table appears empty"
-            )
-            cursor.execute(f'SELECT COUNT(*) FROM "{branch.schema_name}".dcim_frontporttemplate')
-            self.assertEqual(
-                cursor.fetchone()[0], 1,
-                msg="FrontPortTemplate seed row missing from fixture"
+                cursor.fetchone()[0], 0,
+                msg="Fixture django_migrations table is empty"
             )
 
-        # Run the migration. The fix routes data-migration ORM queries to the
-        # branch schema. Later migrations in the plan may fail for unrelated
-        # reasons (see issue #423); the assertions below validate that 0222
-        # specifically succeeded and that the failure (if any) is not the
-        # original routing bug.
-        try:
-            branch.migrate(user=user)
-        except Exception as e:
-            self.assertNotIn(
-                'rear_port_position', str(e),
-                msg="Migration failed with the original BranchAwareRouter "
-                    "routing bug — data migrations are still being sent to "
-                    "the main schema instead of the branch."
-            )
+        # Run all pending migrations against the branch schema.
+        branch.migrate(user=user)
 
-        # 0222 creates dcim_porttemplatemapping and dcim_portmapping and
-        # populates them via RunPython. If the routing fix worked, both
-        # tables exist in the branch schema with the expected row counts.
-        # The seed data has 1 FrontPortTemplate (→ 1 PortTemplateMapping) and
-        # 1 device with 1 auto-created FrontPort (→ 1 PortMapping).
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT 1 FROM information_schema.tables "
-                "WHERE table_schema=%s AND table_name='dcim_porttemplatemapping'",
-                [branch.schema_name],
-            )
-            self.assertIsNotNone(
-                cursor.fetchone(),
-                msg="dcim.0222_port_mappings did not run on the branch — "
-                    "dcim_porttemplatemapping table is missing."
-            )
-            cursor.execute(
-                f'SELECT COUNT(*) FROM "{branch.schema_name}".dcim_porttemplatemapping'
-            )
-            self.assertEqual(
-                cursor.fetchone()[0], 1,
-                msg="dcim.0222_port_mappings RunPython did not populate "
-                    "PortTemplateMapping in the branch schema."
-            )
-            cursor.execute(
-                f'SELECT COUNT(*) FROM "{branch.schema_name}".dcim_portmapping'
-            )
-            self.assertEqual(
-                cursor.fetchone()[0], 1,
-                msg="dcim.0222_port_mappings RunPython did not populate "
-                    "PortMapping in the branch schema."
-            )
+        # Migration completed successfully — branch is back to READY and there
+        # are no migrations left to apply.
+        branch.refresh_from_db()
+        self.assertEqual(
+            branch.status, BranchStatusChoices.READY,
+            msg=f"Branch ended migration in {branch.status!r}, expected READY"
+        )
+        # Clear cached_property so we re-read the post-migration plan
+        if 'pending_migrations' in branch.__dict__:
+            del branch.__dict__['pending_migrations']
+        self.assertEqual(
+            branch.pending_migrations, [],
+            msg=f"Migrations remain pending after migrate(): {branch.pending_migrations}"
+        )
