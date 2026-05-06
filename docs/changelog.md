@@ -1,5 +1,13 @@
 # Change Log
 
+## v1.0.2
+
+### Bug Fixes
+
+* [#539](https://github.com/netboxlabs/netbox-branching/issues/539) - Fix branch upgrade migration failures from NetBox 4.4 to 4.6
+
+---
+
 ## v1.0.1
 
 ### Bug Fixes
