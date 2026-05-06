@@ -124,10 +124,10 @@ def activate_branch(branch):
     A context manager for activating a Branch.
     """
     token = active_branch.set(branch)
-
-    yield
-
-    active_branch.reset(token)
+    try:
+        yield
+    finally:
+        active_branch.reset(token)
 
 
 @contextmanager
@@ -137,10 +137,10 @@ def deactivate_branch():
     convenience function for `activate_branch(None)`.
     """
     token = active_branch.set(None)
-
-    yield
-
-    active_branch.reset(token)
+    try:
+        yield
+    finally:
+        active_branch.reset(token)
 
 
 def get_branchable_object_types():

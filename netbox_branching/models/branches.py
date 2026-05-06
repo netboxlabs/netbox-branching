@@ -6,7 +6,6 @@ import string
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
-from contextvars import ContextVar
 from datetime import timedelta
 from functools import cached_property, partial
 
@@ -60,23 +59,18 @@ __all__ = (
 )
 
 
-# When set, RunSQL.database_forwards restricts the connection's search_path to
-# the branch schema for the duration of the SQL body. Holds (branch_schema,
-# main_schema). ContextVar binding is local to the running asyncio task /
-# thread, so concurrent Branch.migrate() calls do not interfere.
-_runsql_isolation: ContextVar = ContextVar('runsql_isolation', default=None)
-
 # pg_catalog.set_config(name, value, is_local=true) is the function-call form
 # of SET LOCAL — value is passed as a query parameter rather than interpolated.
 _SET_SEARCH_PATH = "SELECT pg_catalog.set_config('search_path', %s, true)"
 
 
-def _install_runsql_isolation_wrapper():
+@contextmanager
+def _branch_isolated_runsql(branch_schema, main_schema):
     """
-    Permanently wrap ``RunSQL.database_forwards`` so each ``RunSQL`` body can
-    run with ``search_path`` restricted to a branch schema. Activation is
-    gated on the ``_runsql_isolation`` ContextVar; when unset the wrapper is
-    a no-op and Django's normal RunSQL behavior is preserved.
+    Patch ``RunSQL.database_forwards`` for the duration of this block so each
+    ``RunSQL`` body runs with ``search_path`` restricted to ``branch_schema``,
+    then restored to ``<branch_schema>,<main_schema>`` for subsequent
+    operations. The patch is removed when the block exits.
 
     Upstream NetBox migrations occasionally include statements like
     ``ALTER INDEX IF EXISTS foo RENAME TO bar`` intended as no-ops on installs
@@ -95,18 +89,16 @@ def _install_runsql_isolation_wrapper():
     Note on transaction scope: ``SET LOCAL`` is reverted on transaction end.
     Django's schema_editor wraps each migration in an atomic block by default,
     so the per-RunSQL set/restore pair both apply within the same transaction.
-    Migrations that opt out of atomic execution may still see search_path
-    revert prematurely; this is acceptable because the next operation either
-    runs in its own transaction (and inherits the connection default) or is a
-    RunSQL whose own ``set_config`` will run first.
+
+    Concurrency: ``RunSQL.database_forwards`` is class-level state shared
+    across the process. This patches it in-place, so concurrent invocations
+    of ``Branch.migrate()`` in the same process would race. NetBox runs
+    branch migrations as RQ jobs (one job at a time per worker process), so
+    interleaving cannot occur in practice.
     """
     original = RunSQL.database_forwards
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
-        isolation = _runsql_isolation.get()
-        if isolation is None:
-            return original(self, app_label, schema_editor, from_state, to_state)
-        branch_schema, main_schema = isolation
         connection = schema_editor.connection
         with connection.cursor() as cursor:
             cursor.execute(_SET_SEARCH_PATH, [branch_schema])
@@ -117,23 +109,10 @@ def _install_runsql_isolation_wrapper():
                 cursor.execute(_SET_SEARCH_PATH, [f'{branch_schema},{main_schema}'])
 
     RunSQL.database_forwards = database_forwards
-
-
-_install_runsql_isolation_wrapper()
-
-
-@contextmanager
-def _branch_isolated_runsql(branch_schema, main_schema):
-    """
-    Activate branch ``search_path`` isolation for ``RunSQL`` operations within
-    this block via the module-level ContextVar; the actual wrapper is
-    installed once at module import. Concurrency-safe by ContextVar semantics.
-    """
-    token = _runsql_isolation.set((branch_schema, main_schema))
     try:
         yield
     finally:
-        _runsql_isolation.reset(token)
+        RunSQL.database_forwards = original
 
 
 def _fake_for_branch(migration):
@@ -766,8 +745,8 @@ class Branch(JobsMixin, PrimaryModel):
                     logger.error(err_message)
                 # Mark the branch as failed so it cannot be activated in a partially-migrated
                 # state. Persist any migrations already recorded as applied.
+                Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
                 self.status = BranchStatusChoices.FAILED
-                self.save()
                 raise
         else:
             logger.info("Found no migrations to apply")
