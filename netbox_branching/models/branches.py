@@ -67,34 +67,15 @@ _SET_SEARCH_PATH = "SELECT pg_catalog.set_config('search_path', %s, true)"
 @contextmanager
 def _branch_isolated_runsql(branch_schema, main_schema):
     """
-    Patch ``RunSQL.database_forwards`` for the duration of this block so each
-    ``RunSQL`` body runs with ``search_path`` restricted to ``branch_schema``,
-    then restored to ``<branch_schema>,<main_schema>`` for subsequent
-    operations. The patch is removed when the block exits.
+    Restrict ``search_path`` to ``branch_schema`` for each ``RunSQL`` body, then
+    restore ``<branch>,<main>`` afterwards. Other operation types keep the
+    default search_path because they may need cross-schema visibility (e.g. FKs
+    to ``auth.User`` / ``contenttypes``, which aren't replicated to branches).
 
-    Upstream NetBox migrations occasionally include statements like
-    ``ALTER INDEX IF EXISTS foo RENAME TO bar`` intended as no-ops on installs
-    where ``foo`` does not exist. With the default branch ``search_path`` of
-    ``<branch>,<main>``, the ``IF EXISTS`` check silently matches an object in
-    ``main`` and the rename then collides with an existing object there — see
-    GitHub issue #423.
-
-    Restricting ``search_path`` to the branch only for ``RunSQL`` execution
-    isolates these legacy renames to the branch schema. Other operations
-    (``CreateModel``, ``AddField``, ``RunPython``) keep the default
-    ``<branch>,<main>`` search_path because they may need cross-schema
-    visibility (e.g. M2M FKs to ``auth.User`` or ``contenttypes``, neither
-    of which is replicated into a branch).
-
-    Note on transaction scope: ``SET LOCAL`` is reverted on transaction end.
-    Django's schema_editor wraps each migration in an atomic block by default,
-    so the per-RunSQL set/restore pair both apply within the same transaction.
-
-    Concurrency: ``RunSQL.database_forwards`` is class-level state shared
-    across the process. This patches it in-place, so concurrent invocations
-    of ``Branch.migrate()`` in the same process would race. NetBox runs
-    branch migrations as RQ jobs (one job at a time per worker process), so
-    interleaving cannot occur in practice.
+    Implemented by monkey-patching ``RunSQL.database_forwards`` for the
+    duration of the block. Safe because NetBox runs branch migrations as RQ
+    jobs (one per worker process); concurrent ``Branch.migrate()`` calls in
+    the same process would race.
     """
     original = RunSQL.database_forwards
 
