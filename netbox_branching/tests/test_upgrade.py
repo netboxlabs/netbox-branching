@@ -2,8 +2,7 @@
 Regression test for upgrading an existing branch to a newer NetBox version.
 
 The fixture in ``tests/fixtures/branch_v4_4_10.sql.gz`` is a pg_dump of a branch
-schema captured on a clean NetBox 4.4.10 install (see the
-``dump_branch_fixture`` management command). It contains a populated
+schema captured on a clean NetBox 4.4.10 install. It contains a populated
 ``django_migrations`` table for 4.4.10 plus seed data covering FK, M2M, and
 MPTT relations across DCIM, IPAM, Tenancy, and Extras.
 
@@ -48,9 +47,8 @@ class BranchUpgradeTestCase(TransactionTestCase):
         if schema:
             with connection.cursor() as cursor:
                 cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
-        for alias in list(vars(connections._connections)):
-            if alias.startswith('schema_'):
-                connections[alias].close()
+        for alias in [a for a in connections.databases if a.startswith('schema_')]:
+            connections[alias].close()
 
     def _load_fixture(self, schema_name):
         """Create the schema and replay the gzipped SQL fixture into it."""
