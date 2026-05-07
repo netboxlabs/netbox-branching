@@ -1,5 +1,6 @@
 import logging
 from collections import defaultdict
+from contextlib import contextmanager
 
 from core.choices import ObjectChangeActionChoices
 from core.signals import handle_changed_object, handle_deleted_object
@@ -35,6 +36,26 @@ def get_job_log(job):
         job.data = {}
     job.data.setdefault('log', [])
     return job.data['log']
+
+
+@contextmanager
+def disconnect_signal_receivers():
+    """
+    Context manager to temporarily disconnect object change signal handlers. Used during branch
+    operations (sync, migrate) that modify the branch schema but should not record ObjectChange
+    entries or validate branching constraints.
+    """
+    post_save.disconnect(handle_changed_object)
+    m2m_changed.disconnect(handle_changed_object)
+    pre_delete.disconnect(handle_deleted_object)
+    post_clean.disconnect(validate_branching_operations)
+    try:
+        yield
+    finally:
+        post_save.connect(handle_changed_object)
+        m2m_changed.connect(handle_changed_object)
+        pre_delete.connect(handle_deleted_object)
+        post_clean.connect(validate_branching_operations)
 
 
 class ProvisionBranchJob(JobRunner):
@@ -240,9 +261,11 @@ class MigrateBranchJob(JobRunner):
         logger.setLevel(logging.DEBUG)
         logger.addHandler(ListHandler(queue=get_job_log(self.job)))
 
-        # Migrate the Branch
-        try:
-            branch = self.job.object
-            branch.migrate(user=self.job.user)
-        except AbortTransaction:
-            logger.info("Dry run completed; rolling back changes")
+        # Disconnect changelog handlers during migration to prevent data migrations
+        # from creating spurious ObjectChange records in the branch schema (#542)
+        with disconnect_signal_receivers():
+            try:
+                branch = self.job.object
+                branch.migrate(user=self.job.user)
+            except AbortTransaction:
+                logger.info("Dry run completed; rolling back changes")
