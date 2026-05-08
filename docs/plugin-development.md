@@ -71,6 +71,90 @@ exempt_models = ['my_plugin.*']
 
 See [Configuration: `exempt_models`](configuration.md#exempt_models) for full details.
 
+## Opting In: `register_branching_resolver`
+
+Some plugins have models that are not `ChangeLoggingMixin` subclasses but still need to participate in branching — most commonly **dynamically-generated M2M through tables** that store relationships involving branchable parent objects.
+
+The default branching heuristic excludes any model that does not inherit `ChangeLoggingMixin`, on the assumption that such models are configuration-style records (singletons, choice sets, etc.) that should remain global. For a through table, that assumption is wrong: relationship rows for a branch-only parent must live in the branch schema, not in main, or foreign-key constraints will fail and the relationship will leak across branches.
+
+NetBox Branching ships with a static list (`INCLUDE_MODELS`) covering its own through tables (`extras.taggeditem`, `dcim.portmapping`, etc.). For plugin models — especially when the model name isn't known until runtime — you can register a callable that decides on each query whether a given model should be branchable.
+
+### Resolver Signature
+
+A resolver is a plain function that takes a model class and returns `True`, `False`, or `None`:
+
+```python
+def my_resolver(model) -> bool | None:
+    ...
+```
+
+| Return value | Meaning |
+|---|---|
+| `True`  | Model is branchable; route queries to the active branch (still subject to the `exempt_models` filter). |
+| `False` | Model is not branchable; always route to main. |
+| `None`  | Defer to the next resolver, or to the default `ChangeLoggingMixin` heuristic. |
+
+Resolvers are evaluated in registration order. The first non-`None` result wins. Returning `None` for models you don't care about is important — it lets other plugins' resolvers, and the default heuristic, run normally.
+
+### Registration
+
+Register from your `PluginConfig.ready()`. Wrap the import in `try/except ImportError` so your plugin still works when `netbox-branching` is not installed:
+
+```python
+# my_plugin/__init__.py
+from netbox.plugins import PluginConfig
+
+
+class MyPluginConfig(PluginConfig):
+    name = 'my_plugin'
+    # ...
+
+    def ready(self):
+        super().ready()
+        try:
+            from netbox_branching.utilities import register_branching_resolver
+            from .branching import my_resolver
+            register_branching_resolver(my_resolver)
+        except ImportError:
+            pass  # netbox-branching not installed; nothing to register
+```
+
+`ready()` runs once per worker process at startup, so registration happens exactly once and the resolver list does not need to be deduplicated.
+
+### Example: Dynamically-generated through table
+
+A plugin that creates M2M through tables at runtime — for example `through_my_plugin_<n>_<field>` — can mark them branchable based on a name pattern:
+
+```python
+# my_plugin/branching.py
+
+def supports_branching_resolver(model):
+    """Mark dynamically-generated M2M through tables as branchable."""
+    meta = getattr(model, '_meta', None)
+    if meta is None or meta.app_label != 'my_plugin':
+        return None
+    if (meta.model_name or '').startswith('through_my_plugin_'):
+        return True
+    return None
+```
+
+Registered as above, this routes all matching through-table queries to the active branch's schema. Without it, the through-row INSERT would land in main and fail on the foreign-key constraint to a branch-only parent row.
+
+### When to use it
+
+- A model lacks `ChangeLoggingMixin` but **must** be branchable because it stores relationships or denormalized state for branchable parent objects.
+- The model name or app label can be matched dynamically (a name pattern, a class attribute, etc.) and so can't be expressed as a static entry in `INCLUDE_MODELS`.
+
+### When *not* to use it
+
+- The model already inherits `ChangeLoggingMixin`. Branching support is automatic in that case.
+- The model is a singleton / configuration record that should remain global. Leave it alone — the default heuristic will keep it in main.
+- You only need to bypass branching for a single specific model. Use `exempt_models` instead; it's simpler and more discoverable.
+
+### Interaction with `exempt_models`
+
+A resolver returning `True` does **not** override the `exempt_models` filter. After a resolver opts a model in, `supports_branching` still applies the configured exempt list. So you can use the two together: register a resolver that includes a whole class of plugin models, then exempt specific ones via `PLUGINS_CONFIG`.
+
 ## Custom Validators
 
 NetBox Branching supports pluggable validator functions that run before each branch action (sync, merge, revert, archive). This allows you or other plugin authors to enforce business rules — for example, preventing a branch from being merged if it has unresolved issues in an external system.
