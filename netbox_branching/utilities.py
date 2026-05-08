@@ -27,6 +27,8 @@ from .constants import (
 )
 from .contextvars import active_branch
 
+logger = logging.getLogger(__name__)
+
 # Thread-local storage for tracking branch connection aliases (matches Django's approach)
 # Note: Aliases are tracked once and never removed, matching Django's pattern where
 # DATABASES.keys() is static. Memory overhead is negligible (string references only).
@@ -48,6 +50,7 @@ __all__ = (
     'get_tables_to_replicate',
     'is_api_request',
     'record_applied_change',
+    'register_branching_resolver',
     'resolve_changes_summary',
     'supports_branching',
     'track_branch_connection',
@@ -174,7 +177,7 @@ def register_branching_resolver(resolver):
     The first non-``None`` return wins.
     """
     if not callable(resolver):
-        raise TypeError("Branching resolver must be callable")
+        raise TypeError('Branching resolver must be callable')
     _branching_resolvers.append(resolver)
 
 
@@ -198,9 +201,7 @@ def supports_branching(model):
         try:
             result = resolver(model)
         except Exception:
-            logging.getLogger('netbox_branching.utilities.supports_branching').exception(
-                'branching resolver %r raised; treating as None', resolver,
-            )
+            logger.exception('branching resolver %r raised; treating as None', resolver)
             continue
         if result is not None:
             if not result:
