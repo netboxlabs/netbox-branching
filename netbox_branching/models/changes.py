@@ -199,6 +199,16 @@ class ChangeDiff(models.Model):
     def _update_conflicts(self):
         """
         Record any conflicting changes between the modified and current object data.
+
+        Uses ``.get(k)`` rather than ``[k]`` against ``modified`` and ``current``
+        because the three dicts can carry different keys for the same logical
+        field — for example when a plugin's dynamically-generated model has a
+        field that was renamed in the branch but not in main, the branch's
+        ``modified`` dict carries the new name while ``original`` (the branch's
+        prechange snapshot from before the rename) and ``current`` (main's view)
+        carry the old name.  Treating "key only present on one side" as a
+        non-conflict mirrors the static-model case where all three dicts share
+        the same key set and ``.get`` behaves identically to ``[]``.
         """
         if self.original is None:
             return
@@ -206,11 +216,13 @@ class ChangeDiff(models.Model):
         if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             if self.current is None:
                 # Object was deleted in main; all branch modifications are in conflict
-                conflicts = [k for k, v in self.original.items() if v != self.modified[k]]
+                conflicts = [k for k, v in self.original.items() if v != self.modified.get(k)]
             else:
                 conflicts = [
                     k for k, v in self.original.items()
-                    if v != self.modified[k] and v != self.current.get(k) and self.modified[k] != self.current.get(k)
+                    if v != self.modified.get(k)
+                    and v != self.current.get(k)
+                    and self.modified.get(k) != self.current.get(k)
                 ]
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
             if self.current is None:

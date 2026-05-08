@@ -152,6 +152,32 @@ def get_branchable_object_types():
     return ObjectType.objects.with_feature('branching')
 
 
+_branching_resolvers = []
+
+
+def register_branching_resolver(resolver):
+    """
+    Register a callable that determines branching support for a model.
+
+    Resolvers run after the explicit ``INCLUDE_MODELS`` check and before the
+    default ``ChangeLoggingMixin`` heuristic.  Used by plugins whose models
+    don't follow the standard NetBox change-logging mixin pattern but still
+    need to be routed to the active branch's schema — e.g. dynamically-
+    generated M2M through models that share a parent's branchable status
+    but are themselves plain ``models.Model`` subclasses.
+
+    Signature: ``resolver(model) -> bool | None``
+        True  — model is branchable, route to active branch
+        False — model is not branchable, route to main
+        None  — defer to next resolver / default heuristic
+
+    The first non-``None`` return wins.
+    """
+    if not callable(resolver):
+        raise TypeError("Branching resolver must be callable")
+    _branching_resolvers.append(resolver)
+
+
 def supports_branching(model):
     """
     Returns True if branching is supported for the given model; otherwise False.
@@ -166,19 +192,35 @@ def supports_branching(model):
     if label in INCLUDE_MODELS:
         return True
 
-    # RunPython data migrations receive historical models from the migration's
-    # StateApps. Those don't inherit ChangeLoggingMixin even when the live
-    # model does, so the issubclass() check would mis-classify them and the
-    # router would send branch-aware queries to main. Resolve to the live
-    # registry for an accurate class-hierarchy check.
-    try:
-        resolved_model = live_apps.get_model(model._meta.app_label, model._meta.model_name)
-    except LookupError:
-        resolved_model = model
+    # Plugin-registered resolvers — let plugins extend branching to their
+    # non-ChangeLoggingMixin models when appropriate.
+    for resolver in _branching_resolvers:
+        try:
+            result = resolver(model)
+        except Exception:
+            logging.getLogger('netbox_branching.utilities.supports_branching').exception(
+                'branching resolver %r raised; treating as None', resolver,
+            )
+            continue
+        if result is not None:
+            if not result:
+                return False
+            # True: still apply the exempt-models filter below.
+            break
+    else:
+        # RunPython data migrations receive historical models from the migration's
+        # StateApps. Those don't inherit ChangeLoggingMixin even when the live
+        # model does, so the issubclass() check would mis-classify them and the
+        # router would send branch-aware queries to main. Resolve to the live
+        # registry for an accurate class-hierarchy check.
+        try:
+            resolved_model = live_apps.get_model(model._meta.app_label, model._meta.model_name)
+        except LookupError:
+            resolved_model = model
 
-    # Exclude models which do not support change logging
-    if not issubclass(resolved_model, ChangeLoggingMixin):
-        return False
+        # Exclude models which do not support change logging
+        if not issubclass(resolved_model, ChangeLoggingMixin):
+            return False
 
     # TODO: Make this more efficient
     # Check for exempted models
@@ -238,6 +280,50 @@ class ChangeSummary:
     count: int
 
 
+_attr_translators = []
+
+
+def register_attr_translator(translator):
+    """
+    Register a callable that resolves stored ObjectChange data attribute names
+    to current model field names.
+
+    Used by ``update_object()`` (the merge / sync / revert apply path) when a
+    data dict carries a key that does not match any current field on the
+    target instance — typically because a plugin's dynamically-generated
+    model has had a field renamed between when the change was recorded and
+    when it is being applied.
+
+    Translator signature: ``translator(instance, attr) -> str | None``
+        instance — the model instance the data is being applied to
+        attr     — the data key that did not match any current field
+
+    Return the translated attribute name (a string), or ``None`` to defer to
+    the next registered translator / treat the attribute as model-foreign
+    (the existing behaviour).  Translators are run in registration order;
+    the first non-None return wins.
+    """
+    if not callable(translator):
+        raise TypeError("Attribute translator must be callable")
+    _attr_translators.append(translator)
+
+
+def _translate_attr(instance, attr):
+    """Run registered attr translators; return the first non-None result."""
+    for translator in _attr_translators:
+        try:
+            result = translator(instance, attr)
+        except Exception:
+            logging.getLogger('netbox_branching.utilities._translate_attr').exception(
+                'translator %r raised on (%r, %r); skipping',
+                translator, type(instance).__name__, attr,
+            )
+            continue
+        if result is not None:
+            return result
+    return None
+
+
 def full_clean_with_file_check(instance, logger):
     """
     Calls instance.full_clean(), suppressing _FILE_NOT_FOUND_EXCEPTIONS for genuinely missing
@@ -257,6 +343,15 @@ def full_clean_with_file_check(instance, logger):
 def update_object(instance, data, using):
     """
     Set an attribute on an object depending on the type of model field.
+
+    Plugins may register data-attribute translators via
+    ``register_attr_translator()`` to handle cases where a stored ObjectChange
+    data dict carries a key that does not match any current model field —
+    typically because the field was renamed between when the change was
+    recorded and when it is being applied.  Translators run when (and only
+    when) the raw key is not a direct field on ``instance``; they may return
+    a different attribute name (e.g. the field's current name, looked up via
+    rename history) or ``None`` to fall through to the next translator.
     """
     # Avoid AppRegistryNotReady exception
     from taggit.managers import TaggableManager
@@ -264,11 +359,33 @@ def update_object(instance, data, using):
     instance.snapshot()
     m2m_assignments = {}
 
-    for attr, value in data.items():
-        # Account for custom field data
+    # First pass: resolve raw data keys to model attribute names, applying any
+    # registered translators for keys that don't match a current field.  This
+    # collapses "old field name" + "new field name" duplicates that arise in
+    # squash-merged ObjectChange data when a field was renamed: the old name
+    # carries the meaningful pre-rename value, while the new name often
+    # appears with a sentinel ``None`` (an artifact of ``deep_compare_dict``
+    # treating new-only-in-post keys as "removed in pre").  When both raw
+    # keys map to the same model field, prefer the non-None value.
+    resolved = {}
+    for raw_attr, value in data.items():
+        attr = raw_attr
         if attr == 'custom_fields':
             attr = 'custom_field_data'
+        try:
+            instance._meta.get_field(attr)
+            target = attr  # direct match — no translation needed
+        except FieldDoesNotExist:
+            translated = _translate_attr(instance, attr)
+            target = translated if translated and translated != attr else attr
+        if target in resolved:
+            # Conflict: another raw key already mapped here.  Prefer non-None.
+            if value is not None and resolved[target] is None:
+                resolved[target] = value
+        else:
+            resolved[target] = value
 
+    for attr, value in resolved.items():
         try:
             model_field = instance._meta.get_field(attr)
             field_cls = model_field.__class__
