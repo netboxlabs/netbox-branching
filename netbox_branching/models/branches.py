@@ -113,6 +113,8 @@ def _fake_for_branch(migration):
 
     SeparateDatabaseAndState operations are not supported and will be skipped with an error.
     """
+    logger = logging.getLogger('netbox_branching.branch.migrate')
+
     # Check for an explicit per-migration override
     try:
         module = importlib.import_module(f'{migration.app_label}.migrations.{migration.name}')
