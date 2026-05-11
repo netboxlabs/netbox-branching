@@ -14,9 +14,9 @@ This allows you and your colleagues to stage changes within isolated environment
 
 * Standard NetBox permissions are employed to control which users can perform branch operations.
 
-* Branches can be created, synchronized, merged, reverted, and deleted through the REST API.
+* Branches can be created, synchronized, merged, reverted, archived, and deleted through the REST API.
 
-* No external dependencies! This plugin requires only NetBox v4.1 or later and a conventional PostgreSQL database (v12.0 or later).
+* No external dependencies! This plugin requires only a supported version of NetBox (see [`COMPATIBILITY.md`](https://github.com/netboxlabs/netbox-branching/blob/main/COMPATIBILITY.md) for the current matrix) and a conventional PostgreSQL database.
 
 ## Terminology
 
@@ -26,23 +26,28 @@ This allows you and your colleagues to stage changes within isolated environment
 
 * A **branch** is an independent copy of the NetBox data model which diverges from main at a set point in time. Any changes to main after that time will not be reflected in the branch. Likewise, changes made within the branch will not be reflected in main.
 
-* Branches are **provisioned** automatically upon creation. The initial state of a branch is identical to the state of main at the time it was provisioned. 
+* Branches are **provisioned** automatically upon creation. The initial state of a branch is identical to the state of main at the time it was provisioned.
 
-* Changes in main can be **synchronized** at any time into a branch. Branches are independent of one another: Changes must be synchronized into each branch individually. This ensures complete isolation among branches.
+* Changes in main can be **synchronized** at any time into a branch. Branches are independent of one another: changes must be synchronized into each branch individually. This ensures complete isolation among branches.
+
+* When NetBox is upgraded, branches must be **migrated** to apply the same database migrations to each branch schema before they can be used again.
 
 * Once the work within a branch has been completed, it can be **merged** into main. Once a branch has been merged, it is generally no longer used.
 
-* Merged changes can be **reverted** provided the branch has not yet been deleted. This effectively replays the changes in reverse order to undo the relevant changes.
+* Merged changes can be **reverted** provided the branch has not yet been archived or deleted. This effectively replays the changes in reverse order to undo the relevant changes.
+
+* A merged branch can be **archived** to deprovision its PostgreSQL schema while retaining the branch's metadata for future reference. Archived branches cannot be reverted.
 
 ## Workflow
 
 The first step is to [create a new branch](./using-branches/creating-a-branch.md). Upon creation, a background job is automatically queued to provision a dedicated PostgreSQL schema for the branch. When provisioning is complete, the branch's status is updated to "ready."
 
+The full set of branch states and the transitions between them is documented under [Branch: Status](./models/branch.md#status).
+
 Users can now activate the branch and begin making changes within it. These changes will be contained to the branch, and will not impact main. Likewise, any changes to main will not be reflected in the branch until it has been [synchronized](./using-branches/syncing-merging.md#syncing-a-branch) by a user. A branch may be synchronized repeatedly to keep it up to date with main over time.
 
-> [!TIP]
-> If you would like to share the work you've done in a branch with a colleague, you cannot just copy the URL you're currently viewing.  
-> Instead, if you have activated a branch other than main, you will find a `Share` button on each object detail view page. Clicking `Share` will copy a shareable URL that you can send to others.  
+!!! tip
+    If you would like to share the work you've done in a branch with a colleague, you cannot just copy the URL you're currently viewing. Instead, if you have activated a branch other than main, you will find a **Share** button on each object detail view page. Clicking **Share** will copy a shareable URL that you can send to others.
 
 Once work in the branch has been completed, it can be [merged](./using-branches/syncing-merging.md#merging-a-branch) into main.
 
@@ -60,7 +65,7 @@ sequenceDiagram
     Branch->>Main: Merge branch
 ```
 
-In the event a branch should not have been merged, it can be reverted. Previously merged changes to main will be unwound and the branch will be restored to its pre-merge state. The branch is again marked as ready for additional changes, if needed, and can be merged again.
+In the event a branch should not have been merged, it can be [reverted](./using-branches/reverting-a-branch.md). Previously merged changes to main will be unwound and the branch will be restored to its pre-merge state. The branch is again marked as ready for additional changes, if needed, and can be merged again.
 
 ```mermaid
 sequenceDiagram
@@ -124,10 +129,7 @@ PLUGINS = [
 
 ### 5. Configuration
 
-Wrap your `DATABASES` configuration parameter with `DynamicSchemaDict` in `configuration.py`, as shown below.
-
-!!! note
-    If upgrading from an earlier version of NetBox, you may need to replace the legacy `DATABASE` (singular) parameter with `DATABASES` (plural).
+Wrap your `DATABASES` configuration parameter with `DynamicSchemaDict` in `configuration.py`, as shown below:
 
 ```python
 from netbox_branching.utilities import DynamicSchemaDict
@@ -142,13 +144,17 @@ DATABASES = DynamicSchemaDict({
 })
 ```
 
-Additionally, declare `DATABASE_ROUTERS` to employ the plugin's custom database router to support branching.
+Additionally, declare `DATABASE_ROUTERS` to employ the plugin's custom database router to support branching:
 
 ```python
 DATABASE_ROUTERS = [
     'netbox_branching.database.BranchAwareRouter',
 ]
 ```
+
+The plugin validates both of these settings on startup; NetBox will fail to start with an `ImproperlyConfigured` error if either is missing.
+
+Optional plugin-specific settings are configured under the `PLUGINS_CONFIG` dictionary; see the [Configuration](./configuration.md) page for the full list of supported parameters.
 
 ### 6. Database Migrations
 
@@ -159,10 +165,20 @@ cd /opt/netbox/netbox
 ./manage.py migrate
 ```
 
+### 7. Restart NetBox
+
+Restart the NetBox services to load the plugin:
+
+```
+sudo systemctl restart netbox netbox-rq
+```
+
 ## Known Limitations
 
 There are currently a few limitations to the functionality provided by this plugin that are worth highlighting. We hope to address these in future releases.
 
-* **Branches may not persist across minor version upgrades of NetBox.** Users are strongly encouraged to merge or remove all open branches prior to upgrading to a new minor release of NetBox (e.g. from v4.1 to v4.2). This is because database migrations introduced by the upgrade will _not_ be applied to branch schemas, potentially resulting in an invalid state. However, it should be considered safe to upgrade to new patch releases (e.g. v4.1.0 to v4.1.1) with open branches.
+* **Branches must be migrated after a NetBox minor version upgrade.** Database migrations introduced by a minor version upgrade (e.g. v4.4 → v4.5) are _not_ applied to branch schemas automatically. After upgrading, existing branches will be marked with the **Pending Migrations** status until they are migrated using the **Migrate** action. Upgrading between patch releases (e.g. v4.4.0 → v4.4.1) does not require this step. Where possible, merging or removing open branches before a minor upgrade is still the simpler path.
 
 * **Open branches will not reflect newly installed plugins.** Any branches created before installing a new plugin will not be updated to support its models. Note, however, that installing a new plugin will generally not impede the use of existing branches. Users are encouraged to install all necessary plugins prior to creating branches. (This also applies to database migrations introduced by upgrading a plugin.)
+
+* **Multi-table inheritance is not supported.** Models that use Django's multi-table inheritance cannot be branched. See the [Plugin Development Guide](./plugin-development.md) for details.

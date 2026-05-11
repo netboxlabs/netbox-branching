@@ -1,8 +1,5 @@
 # NetBox Branching Best Practices
 
-!!! note
-    This document was last updated for NetBox Branching version 0.8.0.
-
 This document describes the underlying architecture and best practices for using NetBox Branching effectively.
 
 For primary documentation, see the [NetBox Branching Overview](./index.md).
@@ -13,20 +10,20 @@ For primary documentation, see the [NetBox Branching Overview](./index.md).
 
 NetBox Branching allows you to create copies of NetBox's data model and alter them independently. Changes are reflected only within the branch you're working on until you decide to merge your branch into the main data model.
 
-It is important to understand how the underlying **synchronize** and **merge** functionality operates and how changes are applied to the main branch.
+It is important to understand how the underlying **synchronize** and **merge** functionality operates and how changes are applied to main.
 
-Branching works by replaying the NetBox ObjectChange log (changelog) in order, depending on the action:
+Branching works by replaying NetBox's `ObjectChange` log (changelog) in order, depending on the action:
 
 | Action | Description |
 | --- | --- |
-| Synchronize | The main branch changelog is replayed on the data within the branch from the point of the last sync to the branch. This is reflected in the "Changes Behind" tab in the branch detail screen. |
-| Merge | The branch changelog is replayed on the data within the main branch from the point of branch creation. This is reflected in the "Changed Ahead" table in the branch detail screen. |
+| Synchronize | The main changelog is replayed against the data within the branch, from the point of the last sync forward. This is reflected in the **Changes Behind** tab on the branch detail page. |
+| Merge | The branch changelog is replayed against the data in main, from the point of branch creation forward. This is reflected in the **Changes Ahead** tab on the branch detail page. |
 
 ### When to Work in Branches vs. Main
 
-With this architecture in mind, it is important to decide whether to work in branches or in the main branch.
+With this architecture in mind, it is important to decide whether to work in branches or directly in main.
 
-Branching includes conflict resolution, which helps identify objects that have been changed in both the main branch and other branches. This information is presented to the user during sync and merge actions, and users are asked to explicitly accept that they will overwrite the state of some objects. This action is analogous to forcing a merge in Git.
+Branching includes conflict resolution, which helps identify objects that have been changed in both main and a branch. This information is presented to the user during sync and merge actions, and users are asked to explicitly accept that they will overwrite the state of some objects. This action is analogous to forcing a merge in Git.
 
 There are scenarios in which conflicts can arise. Some can be recovered from, while others will leave branches unmerge-able.
 
@@ -74,7 +71,7 @@ Here are recommended best practices for working with NetBox branches:
 
 ### General Approach
 
-* **Main or Branches:** Decide whether to work directly in `main` or in dedicated branches. If working in `main`, take caution to prevent duplication or deletion of devices that might be concurrently updated in active branches.
+* **Main or Branches:** Decide whether to work directly in main or in dedicated branches. If working in main, take caution to prevent duplication or deletion of objects that might be concurrently updated in active branches.
 
 * **Conflict Avoidance:** Be mindful of potential conflicts when multiple branches update the same data.
 
@@ -86,7 +83,8 @@ Here are recommended best practices for working with NetBox branches:
 
 ### Archiving vs. Deletion
 
-* **Archiving:** Archiving prevents the branch from being reverted but maintains the list of changes, however it removes the branch's specific database schema. This action reduces the overall size of the underlying database and subsequent backup sizing.
+* **Archiving:** Archiving removes the branch's PostgreSQL schema (reducing the size of the underlying database and subsequent backups) while retaining the branch record and its event history. An archived branch cannot be reverted.
 
-* **Deletion:** Completely removes the branch. This can be useful to avoid confusion around branches that can be reverted or not.
+* **Deletion:** Deletion removes the branch entirely, including all of its event history. This can be useful to avoid confusion around which branches can be reverted, but the branch record will no longer be available for reference.
 
+* **Migration:** A migrated branch (i.e. one whose schema has been brought up to date with main after a NetBox upgrade) behaves no differently from a freshly provisioned branch. If you do not plan to migrate a branch after a NetBox upgrade, archive or delete it instead.

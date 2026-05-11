@@ -1,6 +1,6 @@
 # Event Rules
 
-When `add_branch_context` is configured in NetBox's `EVENTS_PIPELINE` (see [configuration](configuration.md)), branch context is available throughout event rule processing. This applies to all action types — webhooks, scripts, and notifications.
+When `add_branch_context` is configured in NetBox's `EVENTS_PIPELINE` (see [Configuration](./configuration.md#events_pipeline)), branch context is available throughout event rule processing. This applies to all action types — webhooks, scripts, and notifications.
 
 - **Scripts** can access branch info via `data.get('active_branch')`
 - **Webhooks** receive the `active_branch` key in the posted payload
@@ -42,6 +42,18 @@ Only fire for a specific branch by name:
 
 For more detail on NetBox's condition syntax, see the [NetBox conditions reference](https://netboxlabs.com/docs/netbox/en/stable/reference/conditions/).
 
+## Branch-Specific Event Types
+
+The plugin also registers a small set of dedicated event types that fire on branch lifecycle operations. These can be selected when configuring an event rule under **Integrations > Event Rules**:
+
+| Event type | When it fires |
+|------------|---------------|
+| `branch_provisioned` | A new branch has been provisioned successfully |
+| `branch_deprovisioned` | A branch's schema has been deprovisioned (archive or delete) |
+| `branch_synced` | A branch has been synced with main |
+| `branch_merged` | A branch has been merged into main |
+| `branch_reverted` | A previously merged branch has been reverted |
+
 ## Accessing Branch Context in Scripts
 
 Scripts triggered by event rules receive branch info via the `data` parameter:
@@ -63,3 +75,5 @@ When a branch is active, `active_branch` contains:
 | `id` | Branch primary key |
 | `name` | Branch name |
 | `schema_id` | Branch PostgreSQL schema identifier |
+
+When no branch is active (i.e. the change was made on main), `active_branch` is `None`.

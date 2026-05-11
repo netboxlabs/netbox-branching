@@ -69,11 +69,11 @@ exempt_models = ['my_plugin.*']
 !!! warning "Relational integrity"
     A model may not be exempted if it has foreign key relationships to models for which branching _is_ supported. Branching support must be consistent across all interrelated models; otherwise, changes inside a branch can corrupt relationships in the main schema. Only exempt models that are fully isolated from branchable models.
 
-See [Configuration: `exempt_models`](configuration.md#exempt_models) for full details.
+See [Configuration: `exempt_models`](./configuration.md#exempt_models) for full details.
 
 ## Custom Validators
 
-NetBox Branching supports pluggable validator functions that run before each branch action (sync, merge, revert, archive). This allows you or other plugin authors to enforce business rules — for example, preventing a branch from being merged if it has unresolved issues in an external system.
+NetBox Branching supports pluggable validator functions that run before each branch action (`sync`, `merge`, `migrate`, `revert`, `archive`). This allows you or other plugin authors to enforce business rules — for example, preventing a branch from being merged if it has unresolved issues in an external system.
 
 ### Validator Signature
 
@@ -108,6 +108,7 @@ PLUGINS_CONFIG = {
         'merge_validators': [
             'my_plugin.validators.check_external_ticket',
         ],
+        'migrate_validators': [],
         'revert_validators': [],
         'archive_validators': [],
     }
@@ -135,10 +136,38 @@ class MyPluginConfig(PluginConfig):
         Branch.register_preaction_check(check_external_ticket, 'merge')
 ```
 
-The `action` argument must be one of: `sync`, `merge`, `revert`, `archive`.
+The `action` argument must be one of `sync`, `merge`, `migrate`, `revert`, or `archive`.
 
 !!! note
     Validators registered programmatically are equivalent to those registered via configuration. Both approaches are supported; use whichever fits your plugin's architecture.
+
+## Lifecycle Signals
+
+The plugin exposes pre- and post-event Django signals for every branch lifecycle operation. These provide a low-friction integration point for plugins that need to react to branch state changes — for example, to update an external ticketing system, refresh a cache, or audit who merged what.
+
+The following signals are defined in `netbox_branching.signals`:
+
+| Operation     | Pre-event signal   | Post-event signal   |
+|---------------|--------------------|---------------------|
+| Provisioning  | `pre_provision`    | `post_provision`    |
+| Deprovisioning| `pre_deprovision`  | `post_deprovision`  |
+| Syncing       | `pre_sync`         | `post_sync`         |
+| Migrating     | `pre_migrate`      | `post_migrate`      |
+| Merging       | `pre_merge`        | `post_merge`        |
+| Reverting     | `pre_revert`       | `post_revert`       |
+
+Each signal is sent with `sender=Branch`, the affected `branch` instance, and (where applicable) the `user` who initiated the action. Connect to them as you would any other Django signal:
+
+```python
+from django.dispatch import receiver
+from netbox_branching.models import Branch
+from netbox_branching.signals import post_merge
+
+@receiver(post_merge, sender=Branch)
+def on_branch_merged(sender, branch, user, **kwargs):
+    # Notify an external system, refresh a cache, etc.
+    ...
+```
 
 ## Changelog Considerations
 
@@ -207,6 +236,6 @@ Pure schema migrations (`AddField`, `AlterField`, etc.) on branchable models don
 
 ## Branches and Plugin Upgrades
 
-If a plugin is installed or upgraded after branches have been created, the existing branch schemas will **not** receive the new database migrations. Models added or changed by the plugin upgrade will not be fully available in those branches.
+If a plugin is installed or upgraded after branches have been created, the existing branch schemas will **not** automatically receive the new database migrations. Branches with outstanding migrations will be flagged with the **Pending Migrations** status and can be brought up to date using the **Migrate** action; until they are migrated, they cannot be activated or merged.
 
 The recommended practice is to install or upgrade plugins before creating branches, and to merge or remove all open branches before upgrading a plugin that modifies existing models.

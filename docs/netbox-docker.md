@@ -1,25 +1,28 @@
 # Using Branching with NetBox Docker
 
-NetBox Docker is _not_ officially supported by NetBox Labs. This page is intended as a _minimal_ guide to getting branching working on NetBox Docker. For additional configuration options, please consult the [NetBox Docker documentation.](https://github.com/netbox-community/netbox-docker)
+NetBox Docker is _not_ officially supported by NetBox Labs. This page is intended as a _minimal_ guide to getting branching working on NetBox Docker. For additional configuration options, please consult the [NetBox Docker documentation](https://github.com/netbox-community/netbox-docker).
+
+!!! note
+    The exact NetBox, NetBox Docker, and plugin versions referenced below should be replaced with values appropriate for your environment. Consult [`COMPATIBILITY.md`](https://github.com/netboxlabs/netbox-branching/blob/main/COMPATIBILITY.md) for the supported NetBox version range.
 
 ## Building a Docker Image with Branching
 
 ### 1. Clone the `netbox-docker` repository
 
 ```
-git clone --branch 3.4.1 https://github.com/netbox-community/netbox-docker.git
+git clone https://github.com/netbox-community/netbox-docker.git
 pushd netbox-docker
 ```
 
 ### 2. Create a Dockerfile
 
-Create a Dockerfile in the root of the repository to include the `netbox-branching` plugin:
+Create a Dockerfile in the root of the repository to include the `netbox-branching` plugin (substitute the desired NetBox and plugin versions):
 
 ```text title="Dockerfile-Plugins"
-FROM netboxcommunity/netbox:v4.4.6
-RUN uv pip install netboxlabs-netbox-branching==0.7.2
+FROM netboxcommunity/netbox:v4.6.0
+RUN uv pip install netboxlabs-netbox-branching
 ```
- 
+
 ### 3. Include the custom image
 
 Create a `docker-compose.override.yml` file to include the custom image:
@@ -27,7 +30,7 @@ Create a `docker-compose.override.yml` file to include the custom image:
 ```yaml title="docker-compose.override.yml"
 services:
   netbox:
-    image: netbox:v4.4.6-plugins
+    image: netbox:v4.6.0-plugins
     pull_policy: never
     ports:
       - "8000:8080"
@@ -48,7 +51,7 @@ services:
     ports:
       - "5432:5432"
   netbox-worker:
-    image: netbox:v4.4.6-plugins
+    image: netbox:v4.6.0-plugins
     pull_policy: never
 ```
 
@@ -57,7 +60,7 @@ services:
 Create `plugins.py` to store the plugin's configuration.
 
 !!! tip
-    Remember to insert your postgres password, the default for which can be found in `env/postgres.env`  
+    Remember to insert your postgres password, the default for which can be found in `env/postgres.env`.
 
 ```python title="configuration/plugins.py"
 # If you have multiple plugins, netbox-branching _must_ come last
