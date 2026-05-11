@@ -5,6 +5,7 @@ import random
 import string
 import uuid
 from collections import defaultdict
+from contextlib import contextmanager
 from datetime import timedelta
 from functools import cached_property, partial
 
@@ -18,7 +19,7 @@ from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
 from django.db.migrations.executor import MigrationExecutor
-from django.db.migrations.operations.special import SeparateDatabaseAndState
+from django.db.migrations.operations.special import RunSQL, SeparateDatabaseAndState
 from django.db.models.signals import post_save, pre_delete
 from django.db.utils import ProgrammingError
 from django.test import RequestFactory
@@ -58,17 +59,70 @@ __all__ = (
 )
 
 
+# pg_catalog.set_config(name, value, is_local=true) is the function-call form
+# of SET LOCAL — value is passed as a query parameter rather than interpolated.
+_SET_SEARCH_PATH = "SELECT pg_catalog.set_config('search_path', %s, true)"
+
+
+@contextmanager
+def _branch_isolated_runsql(branch_schema, main_schema):
+    """
+    Restrict ``search_path`` to ``branch_schema`` for each ``RunSQL`` body, then
+    restore ``<branch>,<main>`` afterwards. Other operation types keep the
+    default search_path because they may need cross-schema visibility (e.g. FKs
+    to ``auth.User`` / ``contenttypes``, which aren't replicated to branches).
+
+    Implemented by monkey-patching ``RunSQL.database_forwards`` for the
+    duration of the block. Safe because NetBox runs branch migrations as RQ
+    jobs (one per worker process); concurrent ``Branch.migrate()`` calls in
+    the same process would race.
+    """
+    original = RunSQL.database_forwards
+
+    def database_forwards(self, app_label, schema_editor, from_state, to_state):
+        connection = schema_editor.connection
+        with connection.cursor() as cursor:
+            cursor.execute(_SET_SEARCH_PATH, [branch_schema])
+        try:
+            return original(self, app_label, schema_editor, from_state, to_state)
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute(_SET_SEARCH_PATH, [f'{branch_schema},{main_schema}'])
+
+    RunSQL.database_forwards = database_forwards
+    try:
+        yield
+    finally:
+        RunSQL.database_forwards = original
+
+
 def _fake_for_branch(migration):
     """
-    Return True if all model-specific operations in a migration affect only non-branchable
-    models. Such migrations should be faked on branch schemas to prevent RunSQL operations
-    from inadvertently acting on the main (public) schema via the search_path.
+    Return True if a migration should be faked when applied to a branch schema, False otherwise.
 
-    Migrations with no model-specific operations (e.g. pure RunSQL) are not faked, as we
-    cannot determine their intent without executing them.
+    Decision order:
+    1. If the migration module sets a ``fake_on_branch`` attribute, that value is respected
+       directly: ``True`` forces faking, ``False`` forces the migration to run.
+    2. Otherwise, fall back to a heuristic: fake migrations whose model-specific operations
+       affect only non-branchable models. This prevents RunSQL operations from inadvertently
+       acting on the main (public) schema via the search_path.
+
+    Migrations with no model-specific operations (e.g. pure RunSQL or RunPython) are not faked
+    by the heuristic, as we cannot determine their intent without executing them. Authors of
+    such migrations should set ``fake_on_branch`` explicitly when needed.
 
     SeparateDatabaseAndState operations are not supported and will be skipped with an error.
     """
+    logger = logging.getLogger('netbox_branching.branch.migrate')
+
+    # Check for an explicit per-migration override
+    try:
+        module = importlib.import_module(f'{migration.app_label}.migrations.{migration.name}')
+    except ModuleNotFoundError:
+        module = None
+    if module is not None and (explicit := getattr(module, 'fake_on_branch', None)) is not None:
+        return bool(explicit)
+
     has_model_operations = False
     for operation in migration.operations:
         if isinstance(operation, SeparateDatabaseAndState):
@@ -644,30 +698,38 @@ class Branch(JobsMixin, PrimaryModel):
         connection = connections[self.connection_name]
         executor = MigrationExecutor(connection, progress_callback=migration_progress_callback)
         targets = executor.loader.graph.leaf_nodes()
+        main_schema = get_plugin_config('netbox_branching', 'main_schema')
         if plan := executor.migration_plan(targets):
             try:
-                # Apply each migration individually, faking those that only affect
-                # non-branchable models to prevent RunSQL from inadvertently operating
-                # on the main schema via the search_path. See GitHub issue #423.
-                full_plan = executor.migration_plan(executor.loader.graph.leaf_nodes(), clean_start=True)
-                migrations_to_run = {m for m, _ in plan}
-                # _create_project_state is a private Django API (MigrationExecutor). It builds
-                # the current ProjectState from all applied migrations, which apply_migration
-                # requires as its starting point. There is no public equivalent as of Django 5.x.
-                state = executor._create_project_state(with_applied_migrations=True)
-                for migration, _ in full_plan:
-                    if not migrations_to_run:
-                        break
-                    if migration in migrations_to_run:
-                        fake = _fake_for_branch(migration)
-                        state = executor.apply_migration(state, migration, fake=fake)
-                        migrations_to_run.remove(migration)
+                # Activate the branch so that any ORM queries inside data migrations
+                # (RunPython) route to the branch schema rather than main. Without this,
+                # historical-model queries fall through the BranchAwareRouter to the default
+                # connection and read from main, which may have already been migrated past
+                # columns the branch's pending migration still depends on.
+                with activate_branch(self), _branch_isolated_runsql(self.schema_name, main_schema):
+                    # Apply each migration individually, faking those that only affect
+                    # non-branchable models to prevent RunSQL from inadvertently operating
+                    # on the main schema via the search_path. See GitHub issue #423.
+                    full_plan = executor.migration_plan(executor.loader.graph.leaf_nodes(), clean_start=True)
+                    migrations_to_run = {m for m, _ in plan}
+                    # _create_project_state is a private Django API (MigrationExecutor). It builds
+                    # the current ProjectState from all applied migrations, which apply_migration
+                    # requires as its starting point. There is no public equivalent as of Django 5.x.
+                    state = executor._create_project_state(with_applied_migrations=True)
+                    for migration, _ in full_plan:
+                        if not migrations_to_run:
+                            break
+                        if migration in migrations_to_run:
+                            fake = _fake_for_branch(migration)
+                            state = executor.apply_migration(state, migration, fake=fake)
+                            migrations_to_run.remove(migration)
             except Exception as e:
                 if err_message := str(e):
                     logger.error(err_message)
-                # Save applied migrations & reset status
-                self.status = BranchStatusChoices.READY
-                self.save()
+                # Mark the branch as failed so it cannot be activated in a partially-migrated
+                # state. Persist any migrations already recorded as applied.
+                Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
+                self.status = BranchStatusChoices.FAILED
                 raise
         else:
             logger.info("Found no migrations to apply")

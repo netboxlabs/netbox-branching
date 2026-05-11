@@ -147,6 +147,50 @@ Since branching relies entirely on the `ObjectChange` log, anything that affects
 - If you override `serialize_object()` on your model, ensure it produces a stable, complete representation — the branch merge machinery uses this data to reconstruct and apply changes.
 - Avoid side effects in model `save()` or `delete()` methods that are not captured by `ObjectChange`, as those side effects will not be replayed during a merge.
 
+## Database Migrations
+
+When a branch is migrated, NetBox Branching applies the same migration plan that's been applied to main, but it **fakes** (marks applied without running) any migration whose model-specific operations affect only non-branchable models. This prevents `RunSQL` and `RunPython` operations from inadvertently acting on the main schema via PostgreSQL's `search_path`.
+
+The heuristic can't always determine intent. A migration with no model-specific operations — for example, a pure `RunPython` data backfill — runs on the branch by default, because the framework can't introspect what the function does. If your migration shouldn't run on branches (or should run when the heuristic would skip it), declare `fake_on_branch` at the top of the migration module:
+
+```python
+# my_plugin/migrations/0010_backfill_something.py
+from django.db import migrations
+
+# Skip this migration on branch schemas; only run it on main
+fake_on_branch = True
+
+
+def backfill(apps, schema_editor):
+    ...
+
+
+class Migration(migrations.Migration):
+    operations = [
+        migrations.RunPython(backfill, migrations.RunPython.noop),
+    ]
+```
+
+`fake_on_branch` accepts three states:
+
+| Value | Behavior |
+|---|---|
+| `True` | Always fake on branches |
+| `False` | Always run on branches (overrides the heuristic) |
+| Not set | Apply the default heuristic |
+
+### When to set `fake_on_branch = True`
+
+Use this when a `RunPython` or `RunSQL` operation only makes sense against the main schema — for example, backfilling data on an exempt model, performing one-off cross-schema queries, or migrating system-level state (users, tokens, configuration). The migration will still be marked applied on the branch, so its dependency chain remains intact.
+
+### When to set `fake_on_branch = False`
+
+Use this only when the default heuristic would incorrectly fake a migration that needs to run on branches. This is uncommon but can happen if a `RunPython` that operates on branchable data sits in the same migration as a non-branchable schema operation — in that case the heuristic would fake the whole migration based on the schema op alone.
+
+### When to leave it unset
+
+Pure schema migrations (`AddField`, `AlterField`, etc.) on branchable models don't need the flag — the heuristic handles them correctly by running them on every branch.
+
 ## Plugin Installation Order
 
 !!! warning

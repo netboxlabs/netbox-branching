@@ -57,11 +57,7 @@ def check_object_accessible_in_branch(branch, model, object_id):
 
     # Check whether the object exists in main
     with deactivate_branch():
-        try:
-            model.objects.get(pk=object_id)
-        except model.DoesNotExist:
-            pass
-        else:
+        if model.objects.filter(pk=object_id).exists():
             return True
 
     # Object doesn't exist in main - check if it was created in the branch

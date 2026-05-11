@@ -47,6 +47,7 @@ QUERY_PARAM = '_branch'
 INCLUDE_MODELS = (
     'dcim.cablepath',
     'dcim.portmapping',  # Fix for issue #447 - front/rear port mapping table
+    'dcim.porttemplatemapping',  # Front/rear port template mapping table (added in NetBox 4.6)
     'extras.cachedvalue',
     'extras.taggeditem',  # Fix for issue #354 - tags through model
     'tenancy.contactgroupmembership',  # Fix for NetBox v4.3.0
