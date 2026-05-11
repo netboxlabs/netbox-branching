@@ -27,6 +27,8 @@ from .constants import (
 )
 from .contextvars import active_branch
 
+logger = logging.getLogger(__name__)
+
 # Thread-local storage for tracking branch connection aliases (matches Django's approach)
 # Note: Aliases are tracked once and never removed, matching Django's pattern where
 # DATABASES.keys() is static. Memory overhead is negligible (string references only).
@@ -48,6 +50,7 @@ __all__ = (
     'get_tables_to_replicate',
     'is_api_request',
     'record_applied_change',
+    'register_branching_resolver',
     'resolve_changes_summary',
     'supports_branching',
     'track_branch_connection',
@@ -152,6 +155,32 @@ def get_branchable_object_types():
     return ObjectType.objects.with_feature('branching')
 
 
+_branching_resolvers = []
+
+
+def register_branching_resolver(resolver):
+    """
+    Register a callable that determines branching support for a model.
+
+    Resolvers run after the explicit ``INCLUDE_MODELS`` check and before the
+    default ``ChangeLoggingMixin`` heuristic.  Used by plugins whose models
+    don't follow the standard NetBox change-logging mixin pattern but still
+    need to be routed to the active branch's schema — e.g. dynamically-
+    generated M2M through models that share a parent's branchable status
+    but are themselves plain ``models.Model`` subclasses.
+
+    Signature: ``resolver(model) -> bool | None``
+        True  — model is branchable, route to active branch
+        False — model is not branchable, route to main
+        None  — defer to next resolver / default heuristic
+
+    The first non-``None`` return wins.
+    """
+    if not callable(resolver):
+        raise TypeError('Branching resolver must be callable')
+    _branching_resolvers.append(resolver)
+
+
 def supports_branching(model):
     """
     Returns True if branching is supported for the given model; otherwise False.
@@ -166,19 +195,33 @@ def supports_branching(model):
     if label in INCLUDE_MODELS:
         return True
 
-    # RunPython data migrations receive historical models from the migration's
-    # StateApps. Those don't inherit ChangeLoggingMixin even when the live
-    # model does, so the issubclass() check would mis-classify them and the
-    # router would send branch-aware queries to main. Resolve to the live
-    # registry for an accurate class-hierarchy check.
-    try:
-        resolved_model = live_apps.get_model(model._meta.app_label, model._meta.model_name)
-    except LookupError:
-        resolved_model = model
+    # Plugin-registered resolvers — let plugins extend branching to their
+    # non-ChangeLoggingMixin models when appropriate.
+    for resolver in _branching_resolvers:
+        try:
+            result = resolver(model)
+        except Exception:
+            logger.exception('branching resolver %r raised; treating as None', resolver)
+            continue
+        if result is not None:
+            if not result:
+                return False
+            # True: still apply the exempt-models filter below.
+            break
+    else:
+        # RunPython data migrations receive historical models from the migration's
+        # StateApps. Those don't inherit ChangeLoggingMixin even when the live
+        # model does, so the issubclass() check would mis-classify them and the
+        # router would send branch-aware queries to main. Resolve to the live
+        # registry for an accurate class-hierarchy check.
+        try:
+            resolved_model = live_apps.get_model(model._meta.app_label, model._meta.model_name)
+        except LookupError:
+            resolved_model = model
 
-    # Exclude models which do not support change logging
-    if not issubclass(resolved_model, ChangeLoggingMixin):
-        return False
+        # Exclude models which do not support change logging
+        if not issubclass(resolved_model, ChangeLoggingMixin):
+            return False
 
     # TODO: Make this more efficient
     # Check for exempted models
