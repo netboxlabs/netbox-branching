@@ -2,38 +2,38 @@
 
 ## Syncing a Branch
 
-Synchronizing a branch replicates all recent changes from main into the branch. These changes can be reviewed under the "Changes Behind" tab under the branch view.
+Synchronizing a branch replicates all recent changes from main into the branch. These changes can be reviewed under the **Changes Behind** tab of the branch view.
 
-To synchronize a branch, click the "Sync" button. (If this button is not visible, verify that the branch status shows "ready" and that you have permission to synchronize the branch.)
+To synchronize a branch, click the **Sync** button. (If this button is not visible, verify that the branch status is "ready" and that you have permission to synchronize the branch.)
 
 !!! warning
-    A branch must be synchronized frequently enough to avoid exceeding NetBox's configured [changelog retention period](https://netboxlabs.com/docs/netbox/en/stable/configuration/miscellaneous/#changelog_retention) (which defaults to 90 days). This is to protect against data loss when replicating changes from main. A branch whose `last_sync` time exceeds the configured retention window can no longer be synced.
+    A branch must be synchronized frequently enough to avoid exceeding NetBox's configured [changelog retention period](https://netboxlabs.com/docs/netbox/en/stable/configuration/miscellaneous/#changelog_retention) (which defaults to 90 days). This is to protect against data loss when replicating changes from main. A branch whose `last_sync` time exceeds the configured retention window can no longer be synced. See the [`stale_warning_threshold`](../configuration.md#stale_warning_threshold) configuration parameter for advance warning before a branch becomes stale.
 
-While a branch is being synchronized, its status will show "synchronizing."
+While a branch is being synchronized, its status will show "syncing."
 
 !!! tip
-    You can check on the status of the syncing job under the "Jobs" tab of the branch view.
+    You can check on the status of the syncing job under the **Jobs** tab of the branch view.
 
 !!! tip
     It is good practice to sync your branch with main immediately before merging. This reduces the chance of conflicts and ensures you are merging against the most current state of main.
 
 ## Merging a Branch
 
-Merging a branch replicates its changes into main, and updates the branch's status to "merged." These changes can be reviewed under the "Changes Ahead" tab under the branch view. Typically, once a branch has been merged, it is no longer used.
+Merging a branch replicates its changes into main and updates the branch's status to "merged." These changes can be reviewed under the **Changes Ahead** tab of the branch view. Typically, once a branch has been merged, it is no longer used.
 
-To merge a branch, click the "Merge" button. (If this button is not visible, verify that the branch status shows "ready" and that you have permission to merge the branch.)
+To merge a branch, click the **Merge** button. (If this button is not visible, verify that the branch status is "ready" and that you have permission to merge the branch.) The merge form lets you select a [merge strategy](#merge-strategies) and acknowledge any conflicts before proceeding.
 
 !!! tip
-    To grant non-superusers the ability to merge branches add `merge` under `Additional actions` in `Admin` -> `Authentication` -> `Permissions`
+    To grant non-superusers the ability to merge branches, add **Merge branch changes into main** to the **Additional actions** field of an appropriate permission under **Admin > Authentication > Permissions**. Equivalent permissions are available for the **Synchronize**, **Migrate**, **Revert**, and **Archive** actions.
 
 ![Screenshot: Branch merge form](../media/screenshots/branch-merge-form.png)
 
 While a branch is being merged, its status will show "merging."
 
 !!! tip
-    You can check on the status of the merging job under the "Jobs" tab of the branch view.
+    You can check on the status of the merging job under the **Jobs** tab of the branch view.
 
-Once a branch has been merged, it can be [reverted](./reverting-a-branch.md), archived, or deleted. Archiving a branch removes its associated schema from the PostgreSQL database to deallocate space. An archived branch cannot be restored, however the branch record is retained for future reference.
+Once a branch has been merged, it can be [reverted](./reverting-a-branch.md), archived, or deleted. Archiving a branch removes its associated schema from the PostgreSQL database to reclaim space; an archived branch cannot be reverted, but its event history is retained for future reference.
 
 ## Merge Strategies
 
@@ -122,4 +122,7 @@ Alternatively, if the conflicting changes are problematic, you can go back and m
 
 ## Dry Runs
 
-By default, NetBox will perform a "dry run" when synchronizing or merging a branch. This means that it will replicate all the relevant changes to check for errors before ultimately aborting the change and returning the branch to its original state.  To permanently apply these changes instead, check the "commit changes" checkbox.
+By default, NetBox will perform a "dry run" when synchronizing or merging a branch through the web UI. This means that it will replicate all the relevant changes to check for errors before ultimately aborting the operation and returning the branch to its original state. To permanently apply the changes instead, check the **Commit changes** checkbox before submitting the form.
+
+!!! tip
+    When using the REST API, the corresponding behavior is controlled by the `commit` parameter, which defaults to `true`. See the [REST API documentation](../rest-api.md#branch-actions) for details.

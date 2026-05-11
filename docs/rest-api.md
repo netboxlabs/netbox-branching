@@ -75,19 +75,20 @@ The branch is effectively "deactivated" for future API requests by simply omitti
 !!! note
     The `X-NetBox-Branch` header is required only when making changes to NetBox objects within the context of an active branch. It is **not** required when creating, modifying, or deleting a branch itself.
 
-## Syncing & Merging Branches
+## Branch Actions
 
-Several REST API endpoints are provided to handle synchronizing, merging, and reverting branches:
+Several REST API endpoints are provided to handle the lifecycle actions associated with a branch:
 
-| Endpoint                                      | Description                                 |
-|-----------------------------------------------|---------------------------------------------|
-| `/api/plugins/branching/branches/<id>/sync/`   | Synchronize changes from main to the branch |
-| `/api/plugins/branching/branches/<id>/merge/`  | Merge a branch into main                    |
-| `/api/plugins/branching/branches/<id>/revert/` | Revert a previously merged branch           |
+| Endpoint                                         | Method | Description                                       |
+|--------------------------------------------------|--------|---------------------------------------------------|
+| `/api/plugins/branching/branches/<id>/sync/`     | POST   | Synchronize changes from main into the branch     |
+| `/api/plugins/branching/branches/<id>/merge/`    | POST   | Merge a branch into main                          |
+| `/api/plugins/branching/branches/<id>/revert/`   | POST   | Revert a previously merged branch                 |
+| `/api/plugins/branching/branches/<id>/archive/`  | POST   | Archive a merged branch (deprovisions its schema) |
 
 To synchronize updates from main into a branch, send a `POST` request to the desired branch's `sync/` endpoint.
 
-This endpoint requires a `commit` argument: Setting this to `false` effects a dry-run, where the changes to the branch are automatically rolled back at the end of the job. (This can be helpful to check for potential errors before committing to a set of changes.)
+The `sync/`, `merge/`, and `revert/` endpoints accept a `commit` argument: setting this to `false` performs a dry run, where the changes are automatically rolled back at the end of the job. (This can be helpful to check for potential errors before committing to a set of changes.) The default value is `true`.
 
 ```no-highlight title="Request"
 curl -X POST \
@@ -131,6 +132,20 @@ If successful, this will return data about the background job that has been enqu
 ```
 
 This same pattern can be followed to merge and revert branches via their respective API endpoints, listed above.
+
+The `archive/` endpoint differs slightly: it does not enqueue a background job, but rather archives the branch synchronously and returns the updated branch representation. The branch must be in the `merged` state for this action to succeed.
+
+## Additional Endpoints
+
+The plugin also exposes the following read-only endpoints:
+
+| Endpoint                                       | Method | Description                                                              |
+|------------------------------------------------|--------|--------------------------------------------------------------------------|
+| `/api/plugins/branching/branch-events/`        | GET    | List the event history (provision, sync, migrate, merge, revert, archive) for all branches |
+| `/api/plugins/branching/branch-events/<id>/`   | GET    | Retrieve a single branch event                                           |
+| `/api/plugins/branching/changes/`              | GET    | List all `ChangeDiff` records across branches                            |
+| `/api/plugins/branching/changes/<id>/`         | GET    | Retrieve a single `ChangeDiff` record                                    |
+| `/api/plugins/branching/branchable-models/`    | GET    | List every model registered for branching support                        |
 
 ## Syncing & Merging with Conflicts
 
