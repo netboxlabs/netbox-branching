@@ -1,6 +1,10 @@
-from django.test import SimpleTestCase
+from datetime import timedelta
 
-from netbox_branching.models import ChangeDiff
+from core.choices import ObjectChangeActionChoices
+from django.contrib.contenttypes.models import ContentType
+from django.test import SimpleTestCase, TestCase
+
+from netbox_branching.models import Branch, ChangeDiff
 
 DATA_A = {'name': 'foo', 'description': ''}
 DATA_B = {'name': 'foo', 'description': 'changed'}
@@ -130,3 +134,29 @@ class DiffPropertyTestCase(SimpleTestCase):
         self.assertEqual(result['original'], {'description': ''})
         self.assertEqual(result['modified'], {'description': 'changed'})
         self.assertEqual(result['current'], {'description': 'main change'})
+
+
+class LastUpdatedTestCase(TestCase):
+    """
+    Regression test for #483: last_updated must refresh on every save.
+    """
+
+    def test_last_updated_advances_on_save(self):
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+        diff = ChangeDiff.objects.create(
+            branch=branch,
+            object_type=ContentType.objects.get_for_model(Branch),
+            object_id=branch.pk,
+            action=ObjectChangeActionChoices.ACTION_CREATE,
+        )
+
+        # Back-date via .update() (bypasses auto_now) so save() has room to advance.
+        original = diff.last_updated - timedelta(hours=1)
+        ChangeDiff.objects.filter(pk=diff.pk).update(last_updated=original)
+        diff.refresh_from_db()
+        self.assertEqual(diff.last_updated, original)
+
+        diff.save()
+        diff.refresh_from_db()
+        self.assertGreater(diff.last_updated, original)
