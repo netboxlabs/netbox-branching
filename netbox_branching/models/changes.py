@@ -130,7 +130,7 @@ class ChangeDiff(models.Model):
         on_delete=models.CASCADE
     )
     last_updated = models.DateTimeField(
-        auto_now_add=True
+        auto_now=True
     )
     object_type = models.ForeignKey(
         to='contenttypes.ContentType',
