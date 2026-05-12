@@ -155,6 +155,64 @@ Registered as above, this routes all matching through-table queries to the activ
 
 A resolver returning `True` does **not** override the `exempt_models` filter. After a resolver opts a model in, `supports_branching` still applies the configured exempt list. So you can use the two together: register a resolver that includes a whole class of plugin models, then exempt specific ones via `PLUGINS_CONFIG`.
 
+## Handling Renamed Fields: `Model.canonicalize_data`
+
+Plugins whose models can be modified at runtime (e.g. user-defined custom object types where individual fields can be added, removed, or renamed) face a subtle problem when their changes are replayed across sync, merge, or revert: a stored `ObjectChange` data dict may carry a field-name key that no longer matches the model's current attribute set.
+
+For example, a custom object type's `description` field may have been renamed to `details_long` in a branch.  The branch's `ObjectChange` records use the new name; main's still use the old name.  When sync replays main's records onto the branch, or merge replays the branch's records onto main, `update_object()` tries to do `instance._meta.get_field(attr)` against the *target* schema's view — which may not recognise the name as it appears in the data dict.
+
+To support this, models may optionally define a `canonicalize_data` classmethod:
+
+```python
+class MyModel(NetBoxModel):
+    ...
+
+    @classmethod
+    def canonicalize_data(cls, data):
+        """Rewrite stale field-name keys in `data` to current attribute names."""
+        if not data:
+            return data
+        result = {}
+        for raw_key, value in data.items():
+            target = _resolve_current_name(cls, raw_key)  # plugin-specific
+            result[target] = value
+        return result
+```
+
+When present, netbox-branching invokes this method in two places:
+
+| Call site | When | Effect |
+|---|---|---|
+| `update_object()` (`netbox_branching/utilities.py`) | Each UPDATE replay during sync, merge, or revert-undo | The dict passed to the apply loop has keys translated to the model's current attribute names |
+| `ChangeDiff._update_conflicts()` (`netbox_branching/models/changes.py`) | Each `ChangeDiff.save()`, triggered by `ObjectChange` post-save | `original`, `modified`, and `current` are each canonicalized before comparison so a rename in one snapshot doesn't appear as a divergent key set |
+
+The hook is **opt-in**.  Models that don't define `canonicalize_data` use the data dict as-is — existing static-model behavior is unchanged.
+
+### When to define `canonicalize_data`
+
+- Your plugin's models have attributes that can be renamed at runtime (e.g. user-controlled schema).
+- You're seeing `KeyError` in `ChangeDiff._update_conflicts()` because key sets across `original`/`modified`/`current` diverge for your model.
+- `update_object()` is silently dropping writes because `instance._meta.get_field(attr)` raises `FieldDoesNotExist` for stale keys in the data dict.
+
+### When *not* to define it
+
+- Static models — attributes don't change between record-time and apply-time.  The hook is unnecessary overhead.
+- Models where every replay path goes through `deserialize_object()` (CREATE actions, DELETE-undo).  Those already have their own model-level hook.
+
+### Hook contract
+
+| Aspect | Contract |
+|---|---|
+| Receives | A `dict` (the raw data from `ObjectChange` storage or a snapshot field) |
+| Returns | A `dict` with keys translated; values unchanged |
+| Errors | Propagate normally — a buggy canonicalizer should surface, not silently misroute writes |
+| Idempotency | Should be idempotent: calling twice produces the same result as calling once |
+| Empty input | Should handle `None` / `{}` gracefully (typically by returning the input unchanged) |
+
+### Collision handling
+
+If two raw keys translate to the same target attribute (e.g. squash-merged data carries both the old name and the new name), the plugin's canonicalizer decides which value wins.  A common convention is "prefer the non-None value", which handles the squash-merge case where `deep_compare_dict` may emit a sentinel `None` under the new name.  Branching does not impose a rule — that's a plugin-level concern.
+
 ## Custom Validators
 
 NetBox Branching supports pluggable validator functions that run before each branch action (sync, merge, revert, archive). This allows you or other plugin authors to enforce business rules — for example, preventing a branch from being merged if it has unresolved issues in an external system.
