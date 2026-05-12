@@ -199,26 +199,43 @@ class ChangeDiff(models.Model):
     def _update_conflicts(self):
         """
         Record any conflicting changes between the modified and current object data.
+
+        Plugins whose dynamically-named fields can be renamed may opt into key
+        normalization by defining a ``canonicalize_data`` classmethod on the
+        model.  When present, ``original``/``modified``/``current`` are each
+        canonicalized once before comparison so that a rename in one snapshot
+        doesn't appear as a divergent key set.  Models without the hook are
+        compared as-is.
         """
         if self.original is None:
             return
+        model = self.object_type.model_class()
+        canonicalize = getattr(model, 'canonicalize_data', None) if model is not None else None
+        if canonicalize is not None:
+            original = canonicalize(self.original)
+            modified = canonicalize(self.modified)
+            current = canonicalize(self.current) if self.current is not None else None
+        else:
+            original = self.original
+            modified = self.modified
+            current = self.current
         conflicts = None
         if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
-            if self.current is None:
+            if current is None:
                 # Object was deleted in main; all branch modifications are in conflict
-                conflicts = [k for k, v in self.original.items() if v != self.modified[k]]
+                conflicts = [k for k, v in original.items() if v != modified[k]]
             else:
                 conflicts = [
-                    k for k, v in self.original.items()
-                    if v != self.modified[k] and v != self.current.get(k) and self.modified[k] != self.current.get(k)
+                    k for k, v in original.items()
+                    if v != modified[k] and v != current.get(k) and modified[k] != current.get(k)
                 ]
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
-            if self.current is None:
+            if current is None:
                 # Object was also deleted in main; no conflict
                 return
             conflicts = [
-                k for k, v in self.original.items()
-                if v != self.current.get(k)
+                k for k, v in original.items()
+                if v != current.get(k)
             ]
         self.conflicts = conflicts or None
 

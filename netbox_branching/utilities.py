@@ -300,12 +300,23 @@ def full_clean_with_file_check(instance, logger):
 def update_object(instance, data, using):
     """
     Set an attribute on an object depending on the type of model field.
+
+    Plugins may opt into key normalization by defining a ``canonicalize_data``
+    classmethod on their model.  It is called once at the top of this function
+    and returns a dict whose keys have been translated to the model's current
+    attribute names (e.g. walking rename history for fields that were renamed
+    between when an ObjectChange was recorded and when it is being replayed).
+    For models that don't define the hook, the data is used as-is.
     """
     # Avoid AppRegistryNotReady exception
     from taggit.managers import TaggableManager
     logger = logging.getLogger('netbox_branching.utilities.update_object')
     instance.snapshot()
     m2m_assignments = {}
+
+    canonicalize = getattr(type(instance), 'canonicalize_data', None)
+    if canonicalize is not None:
+        data = canonicalize(data)
 
     for attr, value in data.items():
         # Account for custom field data
