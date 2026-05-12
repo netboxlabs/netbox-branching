@@ -1,9 +1,8 @@
 from datetime import timedelta
 
+from core.choices import ObjectChangeActionChoices
 from django.contrib.contenttypes.models import ContentType
 from django.test import SimpleTestCase, TestCase
-
-from core.choices import ObjectChangeActionChoices
 
 from netbox_branching.models import Branch, ChangeDiff
 
