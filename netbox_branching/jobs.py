@@ -1,5 +1,6 @@
 import logging
 from collections import defaultdict
+from contextlib import contextmanager
 
 from core.choices import ObjectChangeActionChoices
 from core.signals import handle_changed_object, handle_deleted_object
@@ -37,6 +38,26 @@ def get_job_log(job):
     return job.data['log']
 
 
+@contextmanager
+def disconnect_object_change_signal_handlers():
+    """
+    Context manager to temporarily disconnect object change signal handlers. Used during branch
+    operations (sync, migrate) that modify the branch schema but should not record ObjectChange
+    entries or validate branching constraints.
+    """
+    post_save.disconnect(handle_changed_object)
+    m2m_changed.disconnect(handle_changed_object)
+    pre_delete.disconnect(handle_deleted_object)
+    post_clean.disconnect(validate_branching_operations)
+    try:
+        yield
+    finally:
+        post_save.connect(handle_changed_object)
+        m2m_changed.connect(handle_changed_object)
+        pre_delete.connect(handle_deleted_object)
+        post_clean.connect(validate_branching_operations)
+
+
 class ProvisionBranchJob(JobRunner):
     """
     Provision a Branch in the database.
@@ -67,47 +88,20 @@ class SyncBranchJob(JobRunner):
         """Return the job timeout from plugin configuration."""
         return get_plugin_config('netbox_branching', 'job_timeout')
 
-    def _disconnect_signal_receivers(self):
-        """
-        Disconnect object change handlers before syncing.
-        """
-        post_save.disconnect(handle_changed_object)
-        m2m_changed.disconnect(handle_changed_object)
-        pre_delete.disconnect(handle_deleted_object)
-        post_clean.disconnect(validate_branching_operations)
-
-    def _reconnect_signal_receivers(self):
-        """
-        Reconnect object change handlers after syncing.
-        """
-        post_save.connect(handle_changed_object)
-        m2m_changed.connect(handle_changed_object)
-        pre_delete.connect(handle_deleted_object)
-        post_clean.connect(validate_branching_operations)
-
     def run(self, commit=True, *args, **kwargs):
         # Initialize logging
         logger = logging.getLogger('netbox_branching.branch.sync')
         logger.setLevel(logging.DEBUG)
         logger.addHandler(ListHandler(queue=get_job_log(self.job)))
 
-        # Disconnect changelog handlers
-        self._disconnect_signal_receivers()
-
-        # Sync the branch
-        try:
-            branch = self.job.object
-            branch.sync(user=self.job.user, commit=commit)
-        except AbortTransaction:
-            logger.info("Dry run completed; rolling back changes")
-        except Exception:
-            # TODO: Can JobRunner be extended to handle this more cleanly?
-            # Ensure that signal handlers are reconnected
-            self._reconnect_signal_receivers()
-            raise
-
-        # Reconnect signal handlers
-        self._reconnect_signal_receivers()
+        # Disconnect changelog handlers during sync to prevent applied changes
+        # from creating spurious ObjectChange records in the branch schema
+        with disconnect_object_change_signal_handlers():
+            try:
+                branch = self.job.object
+                branch.sync(user=self.job.user, commit=commit)
+            except AbortTransaction:
+                logger.info("Dry run completed; rolling back changes")
 
 
 class MergeBranchJob(JobRunner):
@@ -240,9 +234,11 @@ class MigrateBranchJob(JobRunner):
         logger.setLevel(logging.DEBUG)
         logger.addHandler(ListHandler(queue=get_job_log(self.job)))
 
-        # Migrate the Branch
-        try:
-            branch = self.job.object
-            branch.migrate(user=self.job.user)
-        except AbortTransaction:
-            logger.info("Dry run completed; rolling back changes")
+        # Disconnect changelog handlers during migration to prevent data migrations
+        # from creating spurious ObjectChange records in the branch schema (#542)
+        with disconnect_object_change_signal_handlers():
+            try:
+                branch = self.job.object
+                branch.migrate(user=self.job.user)
+            except AbortTransaction:
+                logger.info("Dry run completed; rolling back changes")
