@@ -1,3 +1,4 @@
 *.pyc
 *.egg-info
+.claude/settings.local.json
 .idea/

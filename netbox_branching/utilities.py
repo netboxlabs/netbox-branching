@@ -125,10 +125,10 @@ def activate_branch(branch):
     A context manager for activating a Branch.
     """
     token = active_branch.set(branch)
-
-    yield
-
-    active_branch.reset(token)
+    try:
+        yield
+    finally:
+        active_branch.reset(token)
 
 
 @contextmanager
@@ -138,10 +138,10 @@ def deactivate_branch():
     convenience function for `activate_branch(None)`.
     """
     token = active_branch.set(None)
-
-    yield
-
-    active_branch.reset(token)
+    try:
+        yield
+    finally:
+        active_branch.reset(token)
 
 
 def get_branchable_object_types():
@@ -157,6 +157,7 @@ def supports_branching(model):
     """
     Returns True if branching is supported for the given model; otherwise False.
     """
+    from django.apps import apps as live_apps
     from netbox.models.features import ChangeLoggingMixin
 
     label = f'{model._meta.app_label}.{model._meta.model_name}'
@@ -166,8 +167,18 @@ def supports_branching(model):
     if label in INCLUDE_MODELS:
         return True
 
+    # RunPython data migrations receive historical models from the migration's
+    # StateApps. Those don't inherit ChangeLoggingMixin even when the live
+    # model does, so the issubclass() check would mis-classify them and the
+    # router would send branch-aware queries to main. Resolve to the live
+    # registry for an accurate class-hierarchy check.
+    try:
+        resolved_model = live_apps.get_model(model._meta.app_label, model._meta.model_name)
+    except LookupError:
+        resolved_model = model
+
     # Exclude models which do not support change logging
-    if not issubclass(model, ChangeLoggingMixin):
+    if not issubclass(resolved_model, ChangeLoggingMixin):
         return False
 
     # TODO: Make this more efficient
