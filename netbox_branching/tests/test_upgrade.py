@@ -84,6 +84,29 @@ def _signal_handlers_connected():
     )
 
 
+def _drop_schema_contents(cursor, schema):
+    """
+    Drop every table in a schema, then drop the (now near-empty) schema.
+
+    ``DROP SCHEMA ... CASCADE`` on a full NetBox schema (~200 tables plus
+    their indexes, FKs, and sequences) needs more locks than PostgreSQL's
+    default ``max_locks_per_transaction`` (64) allows — CI hits ``out of
+    shared memory`` on the public schema. Dropping tables one at a time
+    keeps each statement's lock budget bounded, since locks are released
+    when the implicit per-statement transaction commits.
+
+    Assumes the connection is in autocommit (the default for
+    ``TransactionTestCase`` outside an ``atomic()`` block).
+    """
+    cursor.execute(
+        "SELECT tablename FROM pg_tables WHERE schemaname = %s",
+        [schema],
+    )
+    for (table,) in cursor.fetchall():
+        cursor.execute(f'DROP TABLE IF EXISTS "{schema}"."{table}" CASCADE')
+    cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
 def _drop_branch_schemas(cursor):
     """Drop every ``branch_*`` schema in the current DB."""
     cursor.execute("""
@@ -91,7 +114,7 @@ def _drop_branch_schemas(cursor):
          WHERE nspname LIKE 'branch_%'
     """)
     for (name,) in cursor.fetchall():
-        cursor.execute(f'DROP SCHEMA IF EXISTS "{name}" CASCADE')
+        _drop_schema_contents(cursor, name)
 
 
 def load_whole_db_fixture():
@@ -100,16 +123,16 @@ def load_whole_db_fixture():
     with the contents of the whole-DB fixture, then run ``manage.py migrate``
     to bring everything from the source NetBox version forward to current.
 
-    Used by both ``BranchUpgradeTestCase`` and ``BranchSchemaParityTestCase``.
-    The operation is destructive: anything Django's test runner staged in
-    public is replaced. Tests that load the fixture should not depend on the
-    runner's normal serialized rollback state.
+    Used by ``BranchUpgradeTestCase``. The operation is destructive: anything
+    Django's test runner staged in public is replaced. Tests that load the
+    fixture should not depend on the runner's normal serialized rollback
+    state.
     """
     with gzip.open(FIXTURE_PATH, 'rt', encoding='utf-8') as f:
         sql = f.read()
 
     with connection.cursor() as cursor:
-        cursor.execute("DROP SCHEMA IF EXISTS public CASCADE")
+        _drop_schema_contents(cursor, 'public')
         _drop_branch_schemas(cursor)
         cursor.execute("CREATE SCHEMA public")
         cursor.execute(sql)
