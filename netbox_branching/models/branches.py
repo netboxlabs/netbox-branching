@@ -264,6 +264,7 @@ class Branch(JobsMixin, PrimaryModel):
         return f'schema_{self.schema_name}'
 
     def clean(self):
+        super().clean()
 
         # Enforce the maximum number of total branches
         if not self.pk and (max_branches := get_plugin_config('netbox_branching', 'max_branches')):

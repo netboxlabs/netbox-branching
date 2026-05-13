@@ -5,6 +5,7 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
+from extras.validators import CustomValidator
 from netbox.plugins import get_plugin_config
 
 from netbox_branching.choices import BranchStatusChoices
@@ -148,6 +149,25 @@ class BranchTestCase(TransactionTestCase):
         branch = Branch(name='Branch 4')
         with self.assertRaises(ValidationError):
             branch.full_clean()
+
+    @override_settings(CUSTOM_VALIDATORS={
+        'netbox_branching.branch': [
+            CustomValidator({'name': {'min_length': 5}}),
+        ],
+    })
+    def test_custom_validators_invoked(self):
+        """
+        Verify that CUSTOM_VALIDATORS configured against the Branch model are
+        invoked during full_clean(). Regression test for issue #530.
+        """
+        # A name that violates the configured validator should fail
+        branch = Branch(name='x')
+        with self.assertRaises(ValidationError):
+            branch.full_clean()
+
+        # A name that satisfies the validator should pass
+        branch = Branch(name='valid-name')
+        branch.full_clean()
 
     @override_settings(CHANGELOG_RETENTION=10)
     def test_is_stale(self):
