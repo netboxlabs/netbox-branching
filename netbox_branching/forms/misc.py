@@ -73,6 +73,17 @@ class BranchSyncForm(BaseBranchActionForm):
 
 class BranchMergeForm(BaseBranchActionForm):
     """Form for merging a branch."""
+    commit = forms.BooleanField(
+        required=False,
+        label=_('Commit changes'),
+        help_text=_(
+            '<ul class="mb-0 ps-3">'
+            '<li>If checked, the merge is committed and the branch remains available for revert or archival.</li>'
+            '<li>If unchecked, the operation is rolled back after completion and no changes are saved '
+            '(dry run).</li>'
+            '</ul>'
+        )
+    )
     merge_strategy = forms.ChoiceField(
         choices=BranchMergeStrategyChoices,
         initial=BranchMergeStrategyChoices.ITERATIVE,
@@ -88,16 +99,6 @@ class BranchMergeForm(BaseBranchActionForm):
             ),
         })
     )
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.fields['commit'].help_text = _(
-            '<ul class="mb-0 ps-3">'
-            '<li>If checked, the merge is committed and the branch remains available for revert or archival.</li>'
-            '<li>If unchecked, the operation is rolled back after completion and no changes are saved '
-            '(dry run).</li>'
-            '</ul>'
-        )
 
 
 class BranchRevertForm(BaseBranchActionForm):
