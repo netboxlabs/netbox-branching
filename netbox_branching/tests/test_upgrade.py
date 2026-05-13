@@ -20,6 +20,7 @@ be reconnected afterwards.
 """
 import gzip
 import time
+import typing
 import uuid
 import weakref
 from pathlib import Path
@@ -150,6 +151,23 @@ def load_whole_db_fixture():
 class BranchUpgradeTestCase(TransactionTestCase):
     serialized_rollback = True
 
+    # A handful of objects the branch creates in its seed data. They do
+    # not exist in public before the merge, exist after the merge, and are
+    # gone again after the revert. Each entry is ``(model_path, lookup_kwargs)``.
+    BRANCH_SEED_PROBES: typing.ClassVar = [
+        ('dcim.Site', {'slug': 'test-site'}),
+        ('tenancy.Tenant', {'slug': 'acme-corp'}),
+        ('dcim.Device', {'name': 'Test Device'}),
+        ('ipam.Prefix', {'prefix': '10.0.0.0/24'}),
+        ('extras.Tag', {'slug': 'fixture-tag-a'}),
+    ]
+
+    def setUp(self):
+        # Each test starts from the fixture's 4.4.10 state with public migrated
+        # forward. This is destructive — public is dropped and re-loaded —
+        # so it cannot share setup with sibling test classes via setUpClass.
+        load_whole_db_fixture()
+
     def tearDown(self):
         # Reset context vars so a stale branch doesn't leak into the next test
         active_branch_var.set(None)
@@ -159,6 +177,26 @@ class BranchUpgradeTestCase(TransactionTestCase):
         for alias in [a for a in connections.databases if a.startswith('schema_')]:
             connections[alias].close()
 
+    def _probe_models(self):
+        """Resolve the BRANCH_SEED_PROBES entries to (model, kwargs) tuples."""
+        from django.apps import apps
+        return [
+            (apps.get_model(path), kwargs)
+            for path, kwargs in self.BRANCH_SEED_PROBES
+        ]
+
+    def _assert_probes_exist(self, *, exist, msg_prefix):
+        for model, kwargs in self._probe_models():
+            present = model.objects.filter(**kwargs).exists()
+            self.assertEqual(
+                present, exist,
+                msg=(
+                    f"{msg_prefix}: expected {model.__name__} matching "
+                    f"{kwargs} to {'exist' if exist else 'be absent'} in main, "
+                    f"but it {'was missing' if exist else 'was present'}."
+                ),
+            )
+
     def test_upgrade_from_v4_4_10(self):
         """
         A branch captured on an older NetBox version must migrate cleanly to
@@ -166,10 +204,12 @@ class BranchUpgradeTestCase(TransactionTestCase):
         migration ObjectChange suppression), and the migrated branch must
         merge and revert cleanly against the migrated main schema.
         """
-        load_whole_db_fixture()
-
         branch = Branch.objects.get(name=FIXTURE_BRANCH_NAME)
         user = User.objects.get(username='_fixture_admin')
+
+        # Sanity: the branch-seeded objects must not yet exist in main.
+        # They live only in the branch schema until the merge replays them.
+        self._assert_probes_exist(exist=False, msg_prefix="Pre-merge")
 
         # After migrate(), the branch is marked PENDING_MIGRATIONS by
         # check_pending_migrations() because public moved forward but the
@@ -181,9 +221,11 @@ class BranchUpgradeTestCase(TransactionTestCase):
         )
 
         # The fixture preserves the ObjectChange records from when the v4.4.10
-        # branch was originally in use. Snapshot the count so we can later
-        # verify the schema migration itself didn't add to it.
-        unmerged_before = branch.get_changes().count()
+        # branch was originally in use. Snapshot the count of all branch-
+        # schema changes (using get_changes(), which works regardless of
+        # status — get_unmerged_changes() returns empty unless status=READY)
+        # so we can verify the schema migration itself didn't add to it.
+        changes_before = branch.get_changes().count()
 
         # Run all pending migrations against the branch schema via the job
         # (rather than calling branch.migrate() directly) so the disconnect
@@ -207,24 +249,27 @@ class BranchUpgradeTestCase(TransactionTestCase):
 
         # Regression for #542: data migrations must not have added to the
         # branch's pre-existing ObjectChange records.
-        unmerged_after = branch.get_unmerged_changes().count()
+        changes_after = branch.get_changes().count()
         self.assertEqual(
-            unmerged_after, unmerged_before,
+            changes_after, changes_before,
             msg=(
-                f"Data migrations created {unmerged_after - unmerged_before} "
+                f"Data migrations created {changes_after - changes_before} "
                 f"spurious ObjectChange record(s) in the branch "
-                f"(before={unmerged_before}, after={unmerged_after})"
+                f"(before={changes_before}, after={changes_after})"
             )
         )
 
-        # Exercise merge + revert against the migrated branch.
+        # Merge: branch-seeded objects should now exist in main.
         branch.merge(user=user, commit=True)
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        self._assert_probes_exist(exist=True, msg_prefix="Post-merge")
 
+        # Revert: the merge is undone; branch-seeded objects are gone from main.
         branch.revert(user=user, commit=True)
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.READY)
+        self._assert_probes_exist(exist=False, msg_prefix="Post-revert")
 
 
 class MigrateBranchSignalTestCase(TransactionTestCase):
