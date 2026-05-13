@@ -18,7 +18,6 @@ __all__ = (
 class DescriptiveRadioSelect(forms.RadioSelect):
     """Radio select widget that renders a short description beneath each choice."""
     template_name = 'netbox_branching/widgets/radio_select.html'
-    option_template_name = 'netbox_branching/widgets/radio_option.html'
 
     def __init__(self, *args, descriptions=None, **kwargs):
         self.descriptions = descriptions or {}
