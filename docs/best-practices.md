@@ -77,7 +77,7 @@ Here are recommended best practices for working with NetBox branches:
 
 ### Programmatic Modifications: Scripts, Shells, and Custom Code
 
-When you modify an object through NetBox's web UI or REST API, NetBox automatically captures a "before" snapshot of the object so the resulting changelog entry has both prechange and postchange data. **Code that bypasses the views and viewsets — Custom Scripts, `nbshell` sessions, plugin background jobs, bulk-import helpers — does not get this snapshot for free.**
+When an object is modified through NetBox's web UI or REST API, NetBox automatically captures a "before" snapshot of the object so the resulting changelog entry has both pre- and post-change data. **Code that bypasses the views and viewsets — Custom Scripts, `nbshell` sessions, plugin background jobs, bulk-import helpers — does not get this snapshot automatically.**
 
 Without a prechange snapshot, the resulting `ObjectChange` has empty `prechange_data`. This is mostly invisible in main NetBox (the changelog UI infers a "before" state from the prior change), but in a branch it has two consequences:
 
