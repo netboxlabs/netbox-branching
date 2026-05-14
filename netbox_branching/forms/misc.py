@@ -10,8 +10,23 @@ __all__ = (
     'BranchSyncForm',
     'BulkMigrateBranchForm',
     'ConfirmationForm',
+    'DescriptiveRadioSelect',
     'MigrateBranchForm',
 )
+
+
+class DescriptiveRadioSelect(forms.RadioSelect):
+    """Radio select widget that renders a short description beneath each choice."""
+    template_name = 'netbox_branching/widgets/radio_select.html'
+
+    def __init__(self, *args, descriptions=None, **kwargs):
+        self.descriptions = descriptions or {}
+        super().__init__(*args, **kwargs)
+
+    def create_option(self, name, value, label, selected, index, subindex=None, attrs=None):
+        option = super().create_option(name, value, label, selected, index, subindex=subindex, attrs=attrs)
+        option['description'] = self.descriptions.get(str(value), '')
+        return option
 
 
 class BaseBranchActionForm(forms.Form):
@@ -24,7 +39,9 @@ class BaseBranchActionForm(forms.Form):
     commit = forms.BooleanField(
         required=False,
         label=_('Commit changes'),
-        help_text=_('Leave unchecked to perform a dry run')
+        help_text=_(
+            'If unchecked, the operation is rolled back after completion and no changes are saved (dry run).'
+        )
     )
 
     def __init__(self, branch, *args, allow_commit=True, **kwargs):
@@ -55,12 +72,31 @@ class BranchSyncForm(BaseBranchActionForm):
 
 class BranchMergeForm(BaseBranchActionForm):
     """Form for merging a branch."""
+    commit = forms.BooleanField(
+        required=False,
+        label=_('Commit changes'),
+        help_text=_(
+            '<ul class="mb-0 ps-3">'
+            '<li>If checked, the merge is committed and the branch remains available for revert or archival.</li>'
+            '<li>If unchecked, the operation is rolled back after completion and no changes are saved '
+            '(dry run).</li>'
+            '</ul>'
+        )
+    )
     merge_strategy = forms.ChoiceField(
         choices=BranchMergeStrategyChoices,
         initial=BranchMergeStrategyChoices.ITERATIVE,
         required=True,
         label=_('Merge Strategy'),
-        help_text=_('Strategy to use when merging changes.')
+        widget=DescriptiveRadioSelect(descriptions={
+            BranchMergeStrategyChoices.ITERATIVE: _(
+                'Replay each change individually in order, preserving the full audit trail.'
+            ),
+            BranchMergeStrategyChoices.SQUASH: _(
+                'Collapse all changes per object into a single create, update, or delete. Can resolve some '
+                'merge cases that the iterative strategy cannot.'
+            ),
+        })
     )
 
 

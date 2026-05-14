@@ -1,0 +1,7 @@
+{% for group, options, index in widget.optgroups %}{% for option in options %}<div class="form-check mb-2">
+  <input type="{{ option.type }}" name="{{ option.name }}"{% if option.value != None %} value="{{ option.value|stringformat:'s' }}"{% endif %}{% include "django/forms/widgets/attrs.html" with widget=option %} class="form-check-input">
+  <label{% if option.attrs.id %} for="{{ option.attrs.id }}"{% endif %} class="form-check-label">
+    {{ option.label }}
+  </label>
+  {% if option.description %}<div class="form-text">{{ option.description }}</div>{% endif %}
+</div>{% endfor %}{% endfor %}
