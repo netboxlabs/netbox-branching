@@ -79,7 +79,7 @@ Here are recommended best practices for working with NetBox branches:
 
 When an object is modified through NetBox's web UI or REST API, NetBox automatically captures a "before" snapshot of the object so the resulting changelog entry has both pre- and post-change data. **Code that bypasses the views and viewsets — Custom Scripts, `nbshell` sessions, plugin background jobs, bulk-import helpers — does not get this snapshot automatically.**
 
-Without a prechange snapshot, the resulting `ObjectChange` has empty `prechange_data`. This is mostly invisible in main NetBox (the changelog UI infers a "before" state from the prior change), but in a branch it has two consequences:
+Without a pre-change snapshot, the resulting `ObjectChange` has empty `prechange_data`. This is mostly invisible in main NetBox (the changelog UI infers a "before" state from the prior change), but in a branch it has two consequences:
 
 1. The **Changes Ahead** diff cannot render a real before/after comparison for the affected object.
 2. **Conflict detection silently no-ops** for that object — if the same object is also modified in main, the conflict will not be flagged at merge time.
