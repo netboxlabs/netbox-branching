@@ -117,7 +117,11 @@ def _drop_schema_contents(schema):
     callers are expected to truncate the contents and reuse the existing
     schema. See ``_autocommit_connection`` for why we use a raw
     autocommit connection here.
+
+    Django's main connection is closed first so it can't hold stale
+    locks on objects we're about to drop.
     """
+    connection.close()
     with _autocommit_connection() as raw_conn, raw_conn.cursor() as cursor:
         cursor.execute(
             "SELECT tablename FROM pg_tables WHERE schemaname = %s",
@@ -139,11 +143,16 @@ def _drop_schema_contents(schema):
         )
         collations = [c for (c,) in cursor.fetchall()]
         for coll in collations:
-            cursor.execute(f'DROP COLLATION IF EXISTS "{schema}"."{coll}" CASCADE')
+            # No CASCADE: tables (the only things using the collation) are
+            # already dropped, so a RESTRICT drop locks only the collation
+            # itself. CASCADE would walk the dependency graph and exhaust
+            # the per-transaction lock budget in CI.
+            cursor.execute(f'DROP COLLATION IF EXISTS "{schema}"."{coll}"')
 
 
 def _drop_branch_schemas():
     """Drop every ``branch_*`` schema in the current DB."""
+    connection.close()
     with _autocommit_connection() as raw_conn, raw_conn.cursor() as cursor:
         cursor.execute("""
             SELECT nspname FROM pg_namespace
@@ -173,8 +182,11 @@ def load_whole_db_fixture():
     with gzip.open(FIXTURE_PATH, 'rt', encoding='utf-8') as f:
         sql = f.read()
 
-    _drop_schema_contents('public')
+    # Branch schemas first: their tables reference the public ``natural_sort``
+    # collation, so the collation drop in ``_drop_schema_contents`` would
+    # otherwise fail with DependentObjectsStillExist.
     _drop_branch_schemas()
+    _drop_schema_contents('public')
 
     with connection.cursor() as cursor:
         cursor.execute(sql)
