@@ -2,13 +2,16 @@
 Tests for Branch migration + upgrade behaviour.
 
 The ``BranchUpgradeTestCase`` fixture in ``tests/fixtures/branch_v4_4_10.sql.gz``
-is a pg_dump of a branch schema captured on a clean NetBox 4.4.10 install. It
-contains a populated ``django_migrations`` table for 4.4.10 plus seed data
-covering FK, M2M, and MPTT relations across DCIM, IPAM, Tenancy, and Extras.
+is a whole-DB pg_dump captured on a clean NetBox 4.4.10 install: the source
+install's ``public`` schema (with users, content types, seed data, and a
+Branch row pointing at the captured branch schema) plus that branch schema
+(with its own seed data and ``core_objectchange`` rows).
 
-The upgrade test loads that fixture into a fresh schema, registers a Branch
-pointing at it, runs ``MigrateBranchJob`` against the running NetBox version,
-and then exercises a user-driven create + merge + revert cycle.
+The upgrade test drops the test DB's ``public`` schema, replays the dump to
+re-establish the 4.4.10 state in both schemas, runs ``manage.py migrate`` to
+bring ``public`` forward to the current NetBox version, then runs
+``MigrateBranchJob`` to bring the branch schema forward, and finally
+exercises a merge + revert cycle.
 
 ``MigrateBranchSignalTestCase`` covers the regression for GitHub issue #542:
 ORM writes inside data migrations must not create ``ObjectChange`` records in
@@ -17,15 +20,18 @@ be reconnected afterwards.
 """
 import gzip
 import time
+import typing
 import uuid
 import weakref
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import psycopg
 from core.signals import handle_changed_object, handle_deleted_object
 from dcim.models import Manufacturer
 from django.contrib.auth import get_user_model
+from django.core.management import call_command
 from django.db import connection, connections
 from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.test import RequestFactory, TransactionTestCase
@@ -43,7 +49,9 @@ from netbox_branching.signal_receivers import validate_branching_operations
 User = get_user_model()
 
 FIXTURE_PATH = Path(__file__).parent / 'fixtures' / 'branch_v4_4_10.sql.gz'
-PLACEHOLDER = '__BRANCH_SCHEMA__'
+
+# Branch name baked into the fixture by dump_branch_fixture.
+FIXTURE_BRANCH_NAME = '_fixture_dump'
 
 
 def _make_migrate_job(branch, user):
@@ -78,69 +86,253 @@ def _signal_handlers_connected():
     )
 
 
+def _autocommit_connection():
+    """
+    Open a raw psycopg connection with autocommit forced on.
+
+    ``TransactionTestCase`` does not reliably leave Django's connection in
+    autocommit (locks accumulate across ``cursor.execute`` calls), so
+    ``DROP TABLE`` / ``DROP COLLATION`` / ``DROP SCHEMA`` statements run
+    against Django's connection exhaust PostgreSQL's per-transaction lock
+    budget on a full NetBox schema (331 tables + ~1000 indexes + FKs).
+    A fresh autocommit connection guarantees each statement commits on
+    its own and releases its locks before the next one runs.
+    """
+    db_settings = connection.settings_dict
+    conn_kwargs = {
+        'dbname': db_settings['NAME'],
+        'user': db_settings['USER'],
+        'password': db_settings['PASSWORD'],
+        'host': db_settings['HOST'] or 'localhost',
+    }
+    if db_settings.get('PORT'):
+        conn_kwargs['port'] = db_settings['PORT']
+    return psycopg.connect(autocommit=True, **conn_kwargs)
+
+
+def _drop_schema_contents(schema):
+    """
+    Drop every table in a schema, plus the ``natural_sort`` collation
+    NetBox installs in ``public``. The schema itself is *not* dropped —
+    callers are expected to truncate the contents and reuse the existing
+    schema. See ``_autocommit_connection`` for why we use a raw
+    autocommit connection here.
+
+    Django's main connection is closed first so it can't hold stale
+    locks on objects we're about to drop.
+    """
+    connection.close()
+    with _autocommit_connection() as raw_conn, raw_conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = %s",
+            [schema],
+        )
+        tables = [t for (t,) in cursor.fetchall()]
+        for table in tables:
+            cursor.execute(f'DROP TABLE IF EXISTS "{schema}"."{table}" CASCADE')
+
+        # Drop any custom collations in this schema. The fixture
+        # re-creates ``natural_sort`` in ``public``; without an
+        # explicit drop here, re-running the fixture collides on it.
+        cursor.execute(
+            """
+            SELECT collname FROM pg_collation
+             WHERE collnamespace = (SELECT oid FROM pg_namespace WHERE nspname = %s)
+            """,
+            [schema],
+        )
+        collations = [c for (c,) in cursor.fetchall()]
+        for coll in collations:
+            # No CASCADE: tables (the only things using the collation) are
+            # already dropped, so a RESTRICT drop locks only the collation
+            # itself. CASCADE would walk the dependency graph and exhaust
+            # the per-transaction lock budget in CI.
+            cursor.execute(f'DROP COLLATION IF EXISTS "{schema}"."{coll}"')
+
+
+def _drop_branch_schemas():
+    """Drop every ``branch_*`` schema in the current DB."""
+    connection.close()
+    with _autocommit_connection() as raw_conn, raw_conn.cursor() as cursor:
+        cursor.execute("""
+            SELECT nspname FROM pg_namespace
+             WHERE nspname LIKE 'branch_%'
+        """)
+        schemas = [s for (s,) in cursor.fetchall()]
+        for schema in schemas:
+            cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+
+
+def load_whole_db_fixture():
+    """
+    Replace the current test DB's ``public`` contents (plus any branch
+    schemas) with the contents of the whole-DB fixture, then run
+    ``manage.py migrate`` to bring everything from the source NetBox
+    version forward to current.
+
+    Used by ``BranchUpgradeTestCase``. The operation is destructive:
+    anything Django's test runner staged in public is replaced. Tests
+    that load the fixture should not depend on the runner's normal
+    serialized rollback state.
+
+    We empty ``public`` rather than dropping and re-creating it, because
+    ``DROP SCHEMA "public" CASCADE`` on a full NetBox database exhausts
+    PostgreSQL's shared lock table — see ``_drop_schema_contents``.
+    """
+    with gzip.open(FIXTURE_PATH, 'rt', encoding='utf-8') as f:
+        sql = f.read()
+
+    # Branch schemas first: their tables reference the public ``natural_sort``
+    # collation, so the collation drop in ``_drop_schema_contents`` would
+    # otherwise fail with DependentObjectsStillExist.
+    _drop_branch_schemas()
+    _drop_schema_contents('public')
+
+    with connection.cursor() as cursor:
+        cursor.execute(sql)
+        cursor.execute("SET search_path TO public")
+
+    # The connection's cached schema introspection is now stale (table OIDs
+    # and column lists changed when we replaced public's contents). Close
+    # it so subsequent queries open a fresh connection.
+    connection.close()
+
+    # Bring public forward to the current NetBox migration head.
+    call_command('migrate', verbosity=0)
+
+
 class BranchUpgradeTestCase(TransactionTestCase):
     serialized_rollback = True
+
+    # A handful of objects the branch creates in its seed data. They do
+    # not exist in public before the merge, exist after the merge, and are
+    # gone again after the revert. Each entry is ``(model_path, lookup_kwargs)``.
+    BRANCH_SEED_PROBES: typing.ClassVar = [
+        ('dcim.Site', {'slug': 'test-site'}),
+        ('tenancy.Tenant', {'slug': 'acme-corp'}),
+        ('dcim.Device', {'name': 'Test Device'}),
+        ('ipam.Prefix', {'prefix': '10.0.0.0/24'}),
+        ('extras.Tag', {'slug': 'fixture-tag-a'}),
+    ]
+
+    def setUp(self):
+        # Each test starts from the fixture's 4.4.10 state with public migrated
+        # forward. This is destructive — public is dropped and re-loaded —
+        # so it cannot share setup with sibling test classes via setUpClass.
+        load_whole_db_fixture()
 
     def tearDown(self):
         # Reset context vars so a stale branch doesn't leak into the next test
         active_branch_var.set(None)
 
-        # Drop the branch schema we created (TransactionTestCase doesn't track
-        # schemas it didn't make) and close any branch connections so the test
-        # database can be torn down cleanly.
-        schema = getattr(self, '_loaded_schema', None)
-        if schema:
-            with connection.cursor() as cursor:
-                cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        _drop_branch_schemas()
         for alias in [a for a in connections.databases if a.startswith('schema_')]:
             connections[alias].close()
 
-    def _load_fixture(self, schema_name):
-        """Create the schema and replay the gzipped SQL fixture into it."""
-        with gzip.open(FIXTURE_PATH, 'rt', encoding='utf-8') as f:
-            sql = f.read().replace(PLACEHOLDER, schema_name)
-        with connection.cursor() as cursor:
-            cursor.execute(f'CREATE SCHEMA "{schema_name}"')
-            cursor.execute(sql)
-            # pg_dump's preamble emits `set_config('search_path', '', false)`,
-            # which clears the connection's search_path. Reset it so subsequent
-            # ORM queries against the default schema work.
-            cursor.execute("SET search_path TO public")
-        self._loaded_schema = schema_name
+    @classmethod
+    def tearDownClass(cls):
+        # ``load_whole_db_fixture`` is destructive to ``public`` and to the
+        # set of branch schemas. To keep this test class from breaking
+        # downstream ``TransactionTestCase`` classes that rely on Django's
+        # captured ``_test_serialized_contents`` matching the live DB
+        # state, we fully recreate the test database from scratch and
+        # re-capture the serialized snapshot.
+        from netbox.context import current_request, events_queue
+        # Clear NetBox request-tracking context vars so any leftover state
+        # from earlier tests doesn't trigger ``handle_changed_object``
+        # signals during the re-capture's ``obj.save()`` loop in
+        # subsequent test classes' ``deserialize_db_from_string``.
+        current_request.set(None)
+        events_queue.set({})
+        active_branch_var.set(None)
+
+        db_settings = connection.settings_dict
+        test_db_name = db_settings['NAME']
+
+        # Close all Django connections so we can drop the database.
+        for conn in connections.all():
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        admin_kwargs = {
+            'dbname': 'postgres',
+            'user': db_settings['USER'],
+            'password': db_settings['PASSWORD'],
+            'host': db_settings['HOST'] or 'localhost',
+        }
+        if db_settings.get('PORT'):
+            admin_kwargs['port'] = db_settings['PORT']
+        with psycopg.connect(autocommit=True, **admin_kwargs) as admin_conn, \
+             admin_conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                [test_db_name],
+            )
+            cursor.execute(f'DROP DATABASE IF EXISTS "{test_db_name}"')
+            cursor.execute(f'CREATE DATABASE "{test_db_name}"')
+
+        # Migrate the fresh database to current.
+        call_command('migrate', verbosity=0)
+        # Re-capture serialized state so subsequent test classes' per-test
+        # ``deserialize_db_from_string`` matches the live DB schema/data.
+        connection._test_serialized_contents = (
+            connection.creation.serialize_db_to_string()
+        )
+
+        super().tearDownClass()
+
+    def _probe_models(self):
+        """Resolve the BRANCH_SEED_PROBES entries to (model, kwargs) tuples."""
+        from django.apps import apps
+        return [
+            (apps.get_model(path), kwargs)
+            for path, kwargs in self.BRANCH_SEED_PROBES
+        ]
+
+    def _assert_probes_exist(self, *, exist, msg_prefix):
+        for model, kwargs in self._probe_models():
+            present = model.objects.filter(**kwargs).exists()
+            self.assertEqual(
+                present, exist,
+                msg=(
+                    f"{msg_prefix}: expected {model.__name__} matching "
+                    f"{kwargs} to {'exist' if exist else 'be absent'} in main, "
+                    f"but it {'was missing' if exist else 'was present'}."
+                ),
+            )
 
     def test_upgrade_from_v4_4_10(self):
         """
         A branch captured on an older NetBox version must migrate cleanly to
-        the current NetBox version, and the schema migration must not add
-        spurious ObjectChange records to the branch (regression for #542).
-
-        The fixture covers FK, M2M, and MPTT relations across DCIM, IPAM,
-        Tenancy, and Extras so that data migrations have realistic rows to
-        operate against.
+        the current NetBox version (regression for #542 covers the data-
+        migration ObjectChange suppression), and the migrated branch must
+        merge and revert cleanly against the migrated main schema.
         """
-        user, _ = User.objects.get_or_create(username='upgrade_user')
+        branch = Branch.objects.get(name=FIXTURE_BRANCH_NAME)
+        user = User.objects.get(username='_fixture_admin')
 
-        Branch.objects.filter(name='upgrade-test').delete()
-        branch = Branch(name='upgrade-test')
-        branch.save(provision=False)
-        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.READY)
+        # Sanity: the branch-seeded objects must not yet exist in main.
+        # They live only in the branch schema until the merge replays them.
+        self._assert_probes_exist(exist=False, msg_prefix="Pre-merge")
+
+        # After migrate(), the branch is marked PENDING_MIGRATIONS by
+        # check_pending_migrations() because public moved forward but the
+        # branch schema didn't.
         branch.refresh_from_db()
-
-        self._load_fixture(branch.schema_name)
-
-        # Confirm the fixture loaded with a populated migration history and
-        # at least some seed data (both required for the test to be meaningful).
-        with connection.cursor() as cursor:
-            cursor.execute(f'SELECT COUNT(*) FROM "{branch.schema_name}".django_migrations')
-            self.assertGreater(
-                cursor.fetchone()[0], 0,
-                msg="Fixture django_migrations table is empty"
-            )
+        self.assertEqual(
+            branch.status, BranchStatusChoices.PENDING_MIGRATIONS,
+            msg=f"Expected PENDING_MIGRATIONS, got {branch.status!r}"
+        )
 
         # The fixture preserves the ObjectChange records from when the v4.4.10
-        # branch was originally in use. Snapshot the count so we can later
-        # verify the migration itself didn't add to it.
-        unmerged_before = branch.get_unmerged_changes().count()
+        # branch was originally in use. Snapshot the count of all branch-
+        # schema changes (using get_changes(), which works regardless of
+        # status — get_unmerged_changes() returns empty unless status=READY)
+        # so we can verify the schema migration itself didn't add to it.
+        changes_before = branch.get_changes().count()
 
         # Run all pending migrations against the branch schema via the job
         # (rather than calling branch.migrate() directly) so the disconnect
@@ -164,15 +356,27 @@ class BranchUpgradeTestCase(TransactionTestCase):
 
         # Regression for #542: data migrations must not have added to the
         # branch's pre-existing ObjectChange records.
-        unmerged_after = branch.get_unmerged_changes().count()
+        changes_after = branch.get_changes().count()
         self.assertEqual(
-            unmerged_after, unmerged_before,
+            changes_after, changes_before,
             msg=(
-                f"Data migrations created {unmerged_after - unmerged_before} "
+                f"Data migrations created {changes_after - changes_before} "
                 f"spurious ObjectChange record(s) in the branch "
-                f"(before={unmerged_before}, after={unmerged_after})"
+                f"(before={changes_before}, after={changes_after})"
             )
         )
+
+        # Merge: branch-seeded objects should now exist in main.
+        branch.merge(user=user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        self._assert_probes_exist(exist=True, msg_prefix="Post-merge")
+
+        # Revert: the merge is undone; branch-seeded objects are gone from main.
+        branch.revert(user=user, commit=True)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+        self._assert_probes_exist(exist=False, msg_prefix="Post-revert")
 
 
 class MigrateBranchSignalTestCase(TransactionTestCase):
