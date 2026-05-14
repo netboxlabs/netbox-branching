@@ -75,6 +75,26 @@ Here are recommended best practices for working with NetBox branches:
 
 * **Conflict Avoidance:** Be mindful of potential conflicts when multiple branches update the same data.
 
+### Programmatic Modifications: Scripts, Shells, and Custom Code
+
+When an object is modified through NetBox's web UI or REST API, NetBox automatically captures a "before" snapshot of the object so the resulting changelog entry has both pre- and post-change data. **Code that bypasses the views and viewsets — Custom Scripts, `nbshell` sessions, plugin background jobs, bulk-import helpers — does not get this snapshot automatically.**
+
+Without a pre-change snapshot, the resulting `ObjectChange` has empty `prechange_data`. This is mostly invisible in main NetBox (the changelog UI infers a "before" state from the prior change), but in a branch it has two consequences:
+
+1. The **Changes Ahead** diff cannot render a real before/after comparison for the affected object.
+2. **Conflict detection silently no-ops** for that object — if the same object is also modified in main, the conflict will not be flagged at merge time.
+
+To avoid both issues, call `obj.snapshot()` on the existing object *before* mutating it:
+
+```python
+interface = Interface.objects.get(pk=interface_id)
+interface.snapshot()           # capture the "before" state
+interface.description = 'Updated by script'
+interface.save()
+```
+
+This matches the pattern NetBox's own views use internally and is required for any code path that mutates a changelogged object in a branch.
+
 ### Branch Management
 
 * **Scope Limitation:** Branches should be limited in scope and exist for only as long as needed to complete the changes. The longer branches are open and the more changes they contain, the more opportunity for conflicts to arise. This is in part due to the complexity of the NetBox object model, alongside the fact that each branch is essentially a copy of the underlying NetBox database.
