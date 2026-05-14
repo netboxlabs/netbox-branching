@@ -87,20 +87,21 @@ def _signal_handlers_connected():
 
 def _drop_schema_contents(cursor, schema):
     """
-    Drop every table and extension in a schema, then drop the (now
-    near-empty) schema.
+    Drop every table in a schema, plus the ``natural_sort`` collation
+    NetBox installs in ``public``. The schema itself is *not* dropped —
+    callers are expected to truncate the contents and reuse the existing
+    schema.
 
-    ``DROP SCHEMA ... CASCADE`` on a full NetBox schema (~200 tables plus
-    their indexes, FKs, sequences, and the functions/operators/types
-    installed by extensions like ``pg_trgm``) needs more locks than
-    PostgreSQL's default ``max_locks_per_transaction`` (64) allows — CI
-    hits ``out of shared memory`` on the public schema. Dropping tables
-    and extensions one at a time keeps each statement's lock budget
-    bounded, since locks are released when the implicit per-statement
-    transaction commits.
-
-    Assumes the connection is in autocommit (the default for
-    ``TransactionTestCase`` outside an ``atomic()`` block).
+    ``DROP SCHEMA "public" CASCADE`` on a full NetBox database needs
+    locks on every dependent object at once (331 tables + ~1000 indexes
+    + every FK + the ``natural_sort`` collation). Even though the table
+    drops above run one statement at a time, Django's
+    ``TransactionTestCase`` does not always leave the connection in
+    autocommit — locks accumulate across the per-table statements and
+    the final ``DROP SCHEMA CASCADE`` tips the shared lock table into
+    ``out of shared memory``. Leaving the schema in place sidesteps the
+    problem entirely; the only conflict with re-loading the fixture is
+    the ``natural_sort`` collation, which we drop explicitly.
     """
     cursor.execute(
         "SELECT tablename FROM pg_tables WHERE schemaname = %s",
@@ -109,20 +110,22 @@ def _drop_schema_contents(cursor, schema):
     for (table,) in cursor.fetchall():
         cursor.execute(f'DROP TABLE IF EXISTS "{schema}"."{table}" CASCADE')
 
-    # Drop extensions installed in this schema individually. A single
-    # ``DROP SCHEMA ... CASCADE`` would lock all extension-owned objects
-    # at once, which is what blows the lock budget on the public schema.
+    # Drop any custom collations in this schema. The fixture re-creates
+    # ``natural_sort`` in ``public``; without an explicit drop here the
+    # second invocation of ``load_whole_db_fixture()`` collides on it.
     cursor.execute(
         """
-        SELECT e.extname FROM pg_extension e
-         JOIN pg_namespace n ON n.oid = e.extnamespace
-         WHERE n.nspname = %s
+        SELECT collname FROM pg_collation
+         WHERE collnamespace = (SELECT oid FROM pg_namespace WHERE nspname = %s)
         """,
         [schema],
     )
-    for (ext,) in cursor.fetchall():
-        cursor.execute(f'DROP EXTENSION IF EXISTS "{ext}" CASCADE')
+    for (coll,) in cursor.fetchall():
+        cursor.execute(f'DROP COLLATION IF EXISTS "{schema}"."{coll}" CASCADE')
 
+
+def _drop_branch_schema(cursor, schema):
+    """Drop a single branch schema (small, no shared objects, safe to cascade)."""
     cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
 
 
@@ -133,19 +136,24 @@ def _drop_branch_schemas(cursor):
          WHERE nspname LIKE 'branch_%'
     """)
     for (name,) in cursor.fetchall():
-        _drop_schema_contents(cursor, name)
+        _drop_branch_schema(cursor, name)
 
 
 def load_whole_db_fixture():
     """
-    Replace the current test DB's ``public`` schema (plus any branch schemas)
-    with the contents of the whole-DB fixture, then run ``manage.py migrate``
-    to bring everything from the source NetBox version forward to current.
+    Replace the current test DB's ``public`` contents (plus any branch
+    schemas) with the contents of the whole-DB fixture, then run
+    ``manage.py migrate`` to bring everything from the source NetBox
+    version forward to current.
 
-    Used by ``BranchUpgradeTestCase``. The operation is destructive: anything
-    Django's test runner staged in public is replaced. Tests that load the
-    fixture should not depend on the runner's normal serialized rollback
-    state.
+    Used by ``BranchUpgradeTestCase``. The operation is destructive:
+    anything Django's test runner staged in public is replaced. Tests
+    that load the fixture should not depend on the runner's normal
+    serialized rollback state.
+
+    We empty ``public`` rather than dropping and re-creating it, because
+    ``DROP SCHEMA "public" CASCADE`` on a full NetBox database exhausts
+    PostgreSQL's shared lock table — see ``_drop_schema_contents``.
     """
     with gzip.open(FIXTURE_PATH, 'rt', encoding='utf-8') as f:
         sql = f.read()
@@ -153,13 +161,12 @@ def load_whole_db_fixture():
     with connection.cursor() as cursor:
         _drop_schema_contents(cursor, 'public')
         _drop_branch_schemas(cursor)
-        cursor.execute("CREATE SCHEMA public")
         cursor.execute(sql)
         cursor.execute("SET search_path TO public")
 
     # The connection's cached schema introspection is now stale (table OIDs
-    # and column lists changed when we dropped + recreated public). Close it
-    # so subsequent queries open a fresh connection.
+    # and column lists changed when we replaced public's contents). Close
+    # it so subsequent queries open a fresh connection.
     connection.close()
 
     # Bring public forward to the current NetBox migration head.
@@ -194,22 +201,6 @@ class BranchUpgradeTestCase(TransactionTestCase):
             _drop_branch_schemas(cursor)
         for alias in [a for a in connections.databases if a.startswith('schema_')]:
             connections[alias].close()
-
-    @classmethod
-    def tearDownClass(cls):
-        # load_whole_db_fixture() replaces public with the fixture's 4.4.10
-        # state and then migrates forward, which leaves public in a different
-        # state than Django's test runner originally set up (different
-        # content_types rows, fixture user, etc.). Reset public to a freshly
-        # migrated state so subsequent test classes (which rely on Django's
-        # serialized_rollback to repopulate data) start from a clean schema.
-        with connection.cursor() as cursor:
-            _drop_schema_contents(cursor, 'public')
-            _drop_branch_schemas(cursor)
-            cursor.execute("CREATE SCHEMA public")
-        connection.close()
-        call_command('migrate', verbosity=0)
-        super().tearDownClass()
 
     def _probe_models(self):
         """Resolve the BRANCH_SEED_PROBES entries to (model, kwargs) tuples."""
