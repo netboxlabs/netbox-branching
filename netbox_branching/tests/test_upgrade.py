@@ -27,6 +27,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import psycopg
 from core.signals import handle_changed_object, handle_deleted_object
 from dcim.models import Manufacturer
 from django.contrib.auth import get_user_model
@@ -85,58 +86,72 @@ def _signal_handlers_connected():
     )
 
 
-def _drop_schema_contents(cursor, schema):
+def _autocommit_connection():
+    """
+    Open a raw psycopg connection with autocommit forced on.
+
+    ``TransactionTestCase`` does not reliably leave Django's connection in
+    autocommit (locks accumulate across ``cursor.execute`` calls), so
+    ``DROP TABLE`` / ``DROP COLLATION`` / ``DROP SCHEMA`` statements run
+    against Django's connection exhaust PostgreSQL's per-transaction lock
+    budget on a full NetBox schema (331 tables + ~1000 indexes + FKs).
+    A fresh autocommit connection guarantees each statement commits on
+    its own and releases its locks before the next one runs.
+    """
+    db_settings = connection.settings_dict
+    conn_kwargs = {
+        'dbname': db_settings['NAME'],
+        'user': db_settings['USER'],
+        'password': db_settings['PASSWORD'],
+        'host': db_settings['HOST'] or 'localhost',
+    }
+    if db_settings.get('PORT'):
+        conn_kwargs['port'] = db_settings['PORT']
+    return psycopg.connect(autocommit=True, **conn_kwargs)
+
+
+def _drop_schema_contents(schema):
     """
     Drop every table in a schema, plus the ``natural_sort`` collation
     NetBox installs in ``public``. The schema itself is *not* dropped —
     callers are expected to truncate the contents and reuse the existing
-    schema.
-
-    ``DROP SCHEMA "public" CASCADE`` on a full NetBox database needs
-    locks on every dependent object at once (331 tables + ~1000 indexes
-    + every FK + the ``natural_sort`` collation). Even though the table
-    drops above run one statement at a time, Django's
-    ``TransactionTestCase`` does not always leave the connection in
-    autocommit — locks accumulate across the per-table statements and
-    the final ``DROP SCHEMA CASCADE`` tips the shared lock table into
-    ``out of shared memory``. Leaving the schema in place sidesteps the
-    problem entirely; the only conflict with re-loading the fixture is
-    the ``natural_sort`` collation, which we drop explicitly.
+    schema. See ``_autocommit_connection`` for why we use a raw
+    autocommit connection here.
     """
-    cursor.execute(
-        "SELECT tablename FROM pg_tables WHERE schemaname = %s",
-        [schema],
-    )
-    for (table,) in cursor.fetchall():
-        cursor.execute(f'DROP TABLE IF EXISTS "{schema}"."{table}" CASCADE')
+    with _autocommit_connection() as raw_conn, raw_conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT tablename FROM pg_tables WHERE schemaname = %s",
+            [schema],
+        )
+        tables = [t for (t,) in cursor.fetchall()]
+        for table in tables:
+            cursor.execute(f'DROP TABLE IF EXISTS "{schema}"."{table}" CASCADE')
 
-    # Drop any custom collations in this schema. The fixture re-creates
-    # ``natural_sort`` in ``public``; without an explicit drop here the
-    # second invocation of ``load_whole_db_fixture()`` collides on it.
-    cursor.execute(
-        """
-        SELECT collname FROM pg_collation
-         WHERE collnamespace = (SELECT oid FROM pg_namespace WHERE nspname = %s)
-        """,
-        [schema],
-    )
-    for (coll,) in cursor.fetchall():
-        cursor.execute(f'DROP COLLATION IF EXISTS "{schema}"."{coll}" CASCADE')
-
-
-def _drop_branch_schema(cursor, schema):
-    """Drop a single branch schema (small, no shared objects, safe to cascade)."""
-    cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+        # Drop any custom collations in this schema. The fixture
+        # re-creates ``natural_sort`` in ``public``; without an
+        # explicit drop here, re-running the fixture collides on it.
+        cursor.execute(
+            """
+            SELECT collname FROM pg_collation
+             WHERE collnamespace = (SELECT oid FROM pg_namespace WHERE nspname = %s)
+            """,
+            [schema],
+        )
+        collations = [c for (c,) in cursor.fetchall()]
+        for coll in collations:
+            cursor.execute(f'DROP COLLATION IF EXISTS "{schema}"."{coll}" CASCADE')
 
 
-def _drop_branch_schemas(cursor):
+def _drop_branch_schemas():
     """Drop every ``branch_*`` schema in the current DB."""
-    cursor.execute("""
-        SELECT nspname FROM pg_namespace
-         WHERE nspname LIKE 'branch_%'
-    """)
-    for (name,) in cursor.fetchall():
-        _drop_branch_schema(cursor, name)
+    with _autocommit_connection() as raw_conn, raw_conn.cursor() as cursor:
+        cursor.execute("""
+            SELECT nspname FROM pg_namespace
+             WHERE nspname LIKE 'branch_%'
+        """)
+        schemas = [s for (s,) in cursor.fetchall()]
+        for schema in schemas:
+            cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
 
 
 def load_whole_db_fixture():
@@ -158,9 +173,10 @@ def load_whole_db_fixture():
     with gzip.open(FIXTURE_PATH, 'rt', encoding='utf-8') as f:
         sql = f.read()
 
+    _drop_schema_contents('public')
+    _drop_branch_schemas()
+
     with connection.cursor() as cursor:
-        _drop_schema_contents(cursor, 'public')
-        _drop_branch_schemas(cursor)
         cursor.execute(sql)
         cursor.execute("SET search_path TO public")
 
@@ -197,8 +213,7 @@ class BranchUpgradeTestCase(TransactionTestCase):
         # Reset context vars so a stale branch doesn't leak into the next test
         active_branch_var.set(None)
 
-        with connection.cursor() as cursor:
-            _drop_branch_schemas(cursor)
+        _drop_branch_schemas()
         for alias in [a for a in connections.databases if a.startswith('schema_')]:
             connections[alias].close()
 
