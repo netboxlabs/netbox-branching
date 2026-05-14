@@ -229,6 +229,61 @@ class BranchUpgradeTestCase(TransactionTestCase):
         for alias in [a for a in connections.databases if a.startswith('schema_')]:
             connections[alias].close()
 
+    @classmethod
+    def tearDownClass(cls):
+        # ``load_whole_db_fixture`` is destructive to ``public`` and to the
+        # set of branch schemas. To keep this test class from breaking
+        # downstream ``TransactionTestCase`` classes that rely on Django's
+        # captured ``_test_serialized_contents`` matching the live DB
+        # state, we fully recreate the test database from scratch and
+        # re-capture the serialized snapshot.
+        from netbox.context import current_request, events_queue
+        # Clear NetBox request-tracking context vars so any leftover state
+        # from earlier tests doesn't trigger ``handle_changed_object``
+        # signals during the re-capture's ``obj.save()`` loop in
+        # subsequent test classes' ``deserialize_db_from_string``.
+        current_request.set(None)
+        events_queue.set({})
+        active_branch_var.set(None)
+
+        db_settings = connection.settings_dict
+        test_db_name = db_settings['NAME']
+
+        # Close all Django connections so we can drop the database.
+        for conn in connections.all():
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        admin_kwargs = {
+            'dbname': 'postgres',
+            'user': db_settings['USER'],
+            'password': db_settings['PASSWORD'],
+            'host': db_settings['HOST'] or 'localhost',
+        }
+        if db_settings.get('PORT'):
+            admin_kwargs['port'] = db_settings['PORT']
+        with psycopg.connect(autocommit=True, **admin_kwargs) as admin_conn, \
+             admin_conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+                "WHERE datname = %s AND pid <> pg_backend_pid()",
+                [test_db_name],
+            )
+            cursor.execute(f'DROP DATABASE IF EXISTS "{test_db_name}"')
+            cursor.execute(f'CREATE DATABASE "{test_db_name}"')
+
+        # Migrate the fresh database to current.
+        call_command('migrate', verbosity=0)
+        # Re-capture serialized state so subsequent test classes' per-test
+        # ``deserialize_db_from_string`` matches the live DB schema/data.
+        connection._test_serialized_contents = (
+            connection.creation.serialize_db_to_string()
+        )
+
+        super().tearDownClass()
+
     def _probe_models(self):
         """Resolve the BRANCH_SEED_PROBES entries to (model, kwargs) tuples."""
         from django.apps import apps
