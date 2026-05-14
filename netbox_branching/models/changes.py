@@ -8,10 +8,11 @@ from django.contrib.postgres.fields import ArrayField
 from django.db import DEFAULT_DB_ALIAS, models
 from django.urls import reverse
 from django.utils.translation import gettext_lazy as _
+from mptt.models import MPTTModel
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
 
-from netbox_branching.utilities import full_clean_with_file_check, update_object
+from netbox_branching.utilities import clear_mptt_fields, full_clean_with_file_check, update_object
 
 __all__ = (
     'AppliedChange',
@@ -54,7 +55,20 @@ class ObjectChange(ObjectChange_):
             else:
                 instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
             full_clean_with_file_check(instance.object, logger)
-            instance.save(using=using)
+
+            # For MPTT models, clear the tree fields and bypass the raw save path so
+            # MPTT recomputes them against the local tree state. The values captured in
+            # postchange_data come from the source schema, where MPTT may have renumbered
+            # other rows (e.g. due to order_insertion_by) — those side-effects aren't in
+            # the changelog, so reusing the source's tree fields would leave the
+            # destination tree inconsistent and break later parent updates. (#531)
+            if isinstance(instance.object, MPTTModel):
+                clear_mptt_fields(instance.object)
+                instance.object.save(using=using)
+                for accessor_name, object_list in (instance.m2m_data or {}).items():
+                    getattr(instance.object, accessor_name).set(object_list)
+            else:
+                instance.save(using=using)
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
