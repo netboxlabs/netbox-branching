@@ -87,14 +87,17 @@ def _signal_handlers_connected():
 
 def _drop_schema_contents(cursor, schema):
     """
-    Drop every table in a schema, then drop the (now near-empty) schema.
+    Drop every table and extension in a schema, then drop the (now
+    near-empty) schema.
 
     ``DROP SCHEMA ... CASCADE`` on a full NetBox schema (~200 tables plus
-    their indexes, FKs, and sequences) needs more locks than PostgreSQL's
-    default ``max_locks_per_transaction`` (64) allows — CI hits ``out of
-    shared memory`` on the public schema. Dropping tables one at a time
-    keeps each statement's lock budget bounded, since locks are released
-    when the implicit per-statement transaction commits.
+    their indexes, FKs, sequences, and the functions/operators/types
+    installed by extensions like ``pg_trgm``) needs more locks than
+    PostgreSQL's default ``max_locks_per_transaction`` (64) allows — CI
+    hits ``out of shared memory`` on the public schema. Dropping tables
+    and extensions one at a time keeps each statement's lock budget
+    bounded, since locks are released when the implicit per-statement
+    transaction commits.
 
     Assumes the connection is in autocommit (the default for
     ``TransactionTestCase`` outside an ``atomic()`` block).
@@ -105,6 +108,21 @@ def _drop_schema_contents(cursor, schema):
     )
     for (table,) in cursor.fetchall():
         cursor.execute(f'DROP TABLE IF EXISTS "{schema}"."{table}" CASCADE')
+
+    # Drop extensions installed in this schema individually. A single
+    # ``DROP SCHEMA ... CASCADE`` would lock all extension-owned objects
+    # at once, which is what blows the lock budget on the public schema.
+    cursor.execute(
+        """
+        SELECT e.extname FROM pg_extension e
+         JOIN pg_namespace n ON n.oid = e.extnamespace
+         WHERE n.nspname = %s
+        """,
+        [schema],
+    )
+    for (ext,) in cursor.fetchall():
+        cursor.execute(f'DROP EXTENSION IF EXISTS "{ext}" CASCADE')
+
     cursor.execute(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
 
 
@@ -176,6 +194,22 @@ class BranchUpgradeTestCase(TransactionTestCase):
             _drop_branch_schemas(cursor)
         for alias in [a for a in connections.databases if a.startswith('schema_')]:
             connections[alias].close()
+
+    @classmethod
+    def tearDownClass(cls):
+        # load_whole_db_fixture() replaces public with the fixture's 4.4.10
+        # state and then migrates forward, which leaves public in a different
+        # state than Django's test runner originally set up (different
+        # content_types rows, fixture user, etc.). Reset public to a freshly
+        # migrated state so subsequent test classes (which rely on Django's
+        # serialized_rollback to repopulate data) start from a clean schema.
+        with connection.cursor() as cursor:
+            _drop_schema_contents(cursor, 'public')
+            _drop_branch_schemas(cursor)
+            cursor.execute("CREATE SCHEMA public")
+        connection.close()
+        call_command('migrate', verbosity=0)
+        super().tearDownClass()
 
     def _probe_models(self):
         """Resolve the BRANCH_SEED_PROBES entries to (model, kwargs) tuples."""
