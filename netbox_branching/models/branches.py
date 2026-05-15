@@ -340,10 +340,14 @@ class Branch(JobsMixin, PrimaryModel):
         if active_branch.get() == self:
             raise AbortRequest(_("The active branch cannot be deleted."))
 
-        # Delete the row first so a blocked deletion (e.g. a Branch in a transitional
-        # state, rejected by the pre_delete receiver) does not drop the schema.
-        result = super().delete(*args, **kwargs)
-        self.deprovision()
+        # Delete the row before dropping the schema so a blocked deletion (e.g. a Branch
+        # in a transitional state, rejected by the pre_delete receiver) does not strand
+        # the schema. The atomic block ensures that if deprovision() fails after the row
+        # is deleted, the row delete is rolled back too — PostgreSQL DDL (DROP SCHEMA) is
+        # transactional, so neither side is left orphaned.
+        with transaction.atomic():
+            result = super().delete(*args, **kwargs)
+            self.deprovision()
 
         return result
 
@@ -1095,12 +1099,12 @@ class Branch(JobsMixin, PrimaryModel):
         if not self.can_archive:
             raise Exception("Archiving this branch is not permitted.")
 
-        # Deprovision the branch's schema
-        self.deprovision()
-
-        # Update the branch's status to "archived"
-        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.ARCHIVED)
-        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.ARCHIVED)
+        # Drop the schema and flip the status atomically so a failure after the schema
+        # has been dropped does not leave an un-archived Branch with no schema.
+        with transaction.atomic():
+            self.deprovision()
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.ARCHIVED)
+            BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.ARCHIVED)
 
     archive.alters_data = True
 

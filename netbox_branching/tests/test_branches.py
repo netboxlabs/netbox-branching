@@ -13,6 +13,7 @@ from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.forms import BranchForm
 from netbox_branching.models import Branch
+from netbox_branching.signals import pre_deprovision
 from netbox_branching.utilities import get_tables_to_replicate
 
 from .utils import fetchall, fetchone
@@ -276,3 +277,34 @@ class BranchTestCase(TransactionTestCase):
                 [branch.schema_name]
             )
             self.assertIsNotNone(cursor.fetchone(), msg="Schema was unexpectedly dropped on blocked delete")
+
+    def test_delete_rolls_back_when_deprovision_fails(self):
+        """
+        If deprovision() raises after super().delete() has already removed the row,
+        the atomic block must roll back the row delete and the schema drop together,
+        leaving both the Branch row and its schema intact.
+        """
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+        branch.provision(user=None)
+
+        def boom(sender, **kwargs):
+            raise RuntimeError("simulated deprovision failure")
+
+        pre_deprovision.connect(boom, sender=Branch, weak=False)
+        try:
+            with self.assertRaises(RuntimeError):
+                branch.delete()
+        finally:
+            pre_deprovision.disconnect(boom, sender=Branch)
+
+        # The branch row must still exist (atomic rolled back the super().delete())
+        self.assertTrue(Branch.objects.filter(pk=branch.pk).exists())
+
+        # The schema must still exist (DROP SCHEMA never executed)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
+                [branch.schema_name]
+            )
+            self.assertIsNotNone(cursor.fetchone(), msg="Schema was unexpectedly dropped despite failed deprovision")
