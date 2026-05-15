@@ -1,4 +1,5 @@
 from core.choices import ObjectChangeActionChoices
+from django.core.exceptions import ObjectDoesNotExist
 from drf_spectacular.utils import extend_schema_field
 from netbox.api.exceptions import SerializerNotFound
 from netbox.api.fields import ChoiceField, ContentTypeField
@@ -129,16 +130,23 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
         """
         Serialize a nested representation of the changed object.
         """
-        if obj.object is None:
-            return None
-
         try:
-            serializer = get_serializer_for_model(obj.object)
-        except SerializerNotFound:
-            return obj.object_repr
-        data = serializer(obj.object, nested=True, context={'request': self.context['request']}).data
+            target = obj.object
+            if target is None:
+                return None
 
-        return data
+            try:
+                serializer = get_serializer_for_model(target)
+            except SerializerNotFound:
+                return obj.object_repr
+            return serializer(target, nested=True, context={'request': self.context['request']}).data
+        except ObjectDoesNotExist:
+            # When a branch is active, BranchAwareRouter routes related-object
+            # lookups (e.g. a CableTermination's cable FK during nested
+            # serialization) to the branch schema. If the related object was
+            # deleted in the branch, that lookup raises DoesNotExist; fall back
+            # to the stored object_repr instead of 500-ing. (#498)
+            return obj.object_repr
 
 
 class ConflictSummarySerializer(serializers.ModelSerializer):
