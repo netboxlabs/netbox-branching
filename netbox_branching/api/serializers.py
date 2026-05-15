@@ -141,11 +141,7 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
                 return obj.object_repr
             return serializer(target, nested=True, context={'request': self.context['request']}).data
         except ObjectDoesNotExist:
-            # When a branch is active, BranchAwareRouter routes related-object
-            # lookups (e.g. a CableTermination's cable FK during nested
-            # serialization) to the branch schema. If the related object was
-            # deleted in the branch, that lookup raises DoesNotExist; fall back
-            # to the stored object_repr instead of 500-ing. (#498)
+            # Related object deleted in branch schema; fall back to stored repr (#498)
             return obj.object_repr
 
 
