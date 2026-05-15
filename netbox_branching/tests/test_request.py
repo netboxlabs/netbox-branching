@@ -94,7 +94,7 @@ class RequestTestCase(TestCase):
         """
         branch = Branch.objects.first()
         branch.status = BranchStatusChoices.ARCHIVED
-        branch.save(provision=False)
+        branch.save(provision=False, update_merge_sync_fields=True)
 
         self.client.cookies.load({
             COOKIE_NAME: branch.schema_id,
