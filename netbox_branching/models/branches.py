@@ -288,12 +288,7 @@ class Branch(JobsMixin, PrimaryModel):
                     ).format(max=max_working_branches)
                 )
 
-    # Fields written by background jobs (provision/sync/migrate/merge/revert) via
-    # `Branch.objects.filter(...).update(...)`. On a normal save these columns are
-    # excluded from the UPDATE statement so a stale in-memory instance (e.g. one
-    # loaded into a form or DRF serializer before a job ran) cannot clobber a
-    # concurrent lifecycle update. Internal callers that legitimately need to write
-    # these fields opt in by passing `update_merge_sync_fields=True`.
+    # Fields owned by background jobs; excluded from save() by default to avoid clobbering. See #445.
     LIFECYCLE_FIELDS = (
         'status', 'last_sync', 'merged_time', 'merged_by', 'applied_migrations',
     )
@@ -311,7 +306,7 @@ class Branch(JobsMixin, PrimaryModel):
 
         _provision = provision and self.pk is None
         _shield_lifecycle = (
-            self.pk and not update_merge_sync_fields and not kwargs.get('update_fields')
+            self.pk and not update_merge_sync_fields and 'update_fields' not in kwargs
         )
 
         if _shield_lifecycle:
@@ -323,9 +318,7 @@ class Branch(JobsMixin, PrimaryModel):
         super().save(*args, **kwargs)
 
         if _shield_lifecycle:
-            # The UPDATE skipped the lifecycle columns, so the in-memory instance still holds the
-            # pre-save (potentially stale) values. Pull them back from the DB so callers — and DRF
-            # response serializers in particular — see current state.
+            # Refresh excluded fields so callers (notably DRF response serializers) see current state.
             self.refresh_from_db(fields=self.LIFECYCLE_FIELDS)
 
         if _provision:
@@ -340,11 +333,7 @@ class Branch(JobsMixin, PrimaryModel):
         if active_branch.get() == self:
             raise AbortRequest(_("The active branch cannot be deleted."))
 
-        # Delete the row before dropping the schema so a blocked deletion (e.g. a Branch
-        # in a transitional state, rejected by the pre_delete receiver) does not strand
-        # the schema. The atomic block ensures that if deprovision() fails after the row
-        # is deleted, the row delete is rolled back too — PostgreSQL DDL (DROP SCHEMA) is
-        # transactional, so neither side is left orphaned.
+        # Row delete and schema drop must succeed or fail together — see #445.
         with transaction.atomic():
             result = super().delete(*args, **kwargs)
             self.deprovision()

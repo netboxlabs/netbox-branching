@@ -13,7 +13,7 @@ from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.forms import BranchForm
 from netbox_branching.models import Branch
-from netbox_branching.signals import pre_deprovision
+from netbox_branching.signals import post_deprovision, pre_deprovision
 from netbox_branching.utilities import get_tables_to_replicate
 
 from .utils import fetchall, fetchone
@@ -278,18 +278,26 @@ class BranchTestCase(TransactionTestCase):
             )
             self.assertIsNotNone(cursor.fetchone(), msg="Schema was unexpectedly dropped on blocked delete")
 
-    def test_delete_rolls_back_when_deprovision_fails(self):
+    def _assert_branch_and_schema_intact(self, branch_pk, schema_name):
+        self.assertTrue(Branch.objects.filter(pk=branch_pk).exists())
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
+                [schema_name]
+            )
+            self.assertIsNotNone(cursor.fetchone(), msg="Schema unexpectedly missing")
+
+    def test_delete_rolls_back_row_when_deprovision_raises(self):
         """
-        If deprovision() raises after super().delete() has already removed the row,
-        the atomic block must roll back the row delete and the schema drop together,
-        leaving both the Branch row and its schema intact.
+        A failure raised inside deprovision() (before DROP SCHEMA runs) must roll back
+        the row delete that super().delete() already performed, leaving both intact.
         """
         branch = Branch(name='Branch 1')
         branch.save(provision=False)
         branch.provision(user=None)
 
-        # Capture identifiers up front — Django's Collector sets instance.pk to None
-        # after running the DELETE, and that mutation is not undone by a rollback.
+        # Capture identifiers up front: Django's Collector sets instance.pk to None
+        # after running the DELETE, and that mutation is not undone by rollback.
         branch_pk = branch.pk
         schema_name = branch.schema_name
 
@@ -303,13 +311,29 @@ class BranchTestCase(TransactionTestCase):
         finally:
             pre_deprovision.disconnect(boom, sender=Branch)
 
-        # The branch row must still exist (atomic rolled back the super().delete())
-        self.assertTrue(Branch.objects.filter(pk=branch_pk).exists())
+        self._assert_branch_and_schema_intact(branch_pk, schema_name)
 
-        # The schema must still exist (DROP SCHEMA never executed)
-        with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
-                [schema_name]
-            )
-            self.assertIsNotNone(cursor.fetchone(), msg="Schema was unexpectedly dropped despite failed deprovision")
+    def test_delete_rolls_back_schema_drop_when_failure_follows(self):
+        """
+        If a failure is raised after DROP SCHEMA has already executed, the atomic
+        block must roll back the DDL too — verifying the PostgreSQL DDL-is-transactional
+        property the fix relies on.
+        """
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+        branch.provision(user=None)
+
+        branch_pk = branch.pk
+        schema_name = branch.schema_name
+
+        def boom(sender, **kwargs):
+            raise RuntimeError("simulated post-drop failure")
+
+        post_deprovision.connect(boom, sender=Branch, weak=False)
+        try:
+            with self.assertRaises(RuntimeError):
+                branch.delete()
+        finally:
+            post_deprovision.disconnect(boom, sender=Branch)
+
+        self._assert_branch_and_schema_intact(branch_pk, schema_name)
