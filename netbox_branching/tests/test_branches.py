@@ -288,6 +288,11 @@ class BranchTestCase(TransactionTestCase):
         branch.save(provision=False)
         branch.provision(user=None)
 
+        # Capture identifiers up front — Django's Collector sets instance.pk to None
+        # after running the DELETE, and that mutation is not undone by a rollback.
+        branch_pk = branch.pk
+        schema_name = branch.schema_name
+
         def boom(sender, **kwargs):
             raise RuntimeError("simulated deprovision failure")
 
@@ -299,12 +304,12 @@ class BranchTestCase(TransactionTestCase):
             pre_deprovision.disconnect(boom, sender=Branch)
 
         # The branch row must still exist (atomic rolled back the super().delete())
-        self.assertTrue(Branch.objects.filter(pk=branch.pk).exists())
+        self.assertTrue(Branch.objects.filter(pk=branch_pk).exists())
 
         # The schema must still exist (DROP SCHEMA never executed)
         with connection.cursor() as cursor:
             cursor.execute(
                 "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
-                [branch.schema_name]
+                [schema_name]
             )
             self.assertIsNotNone(cursor.fetchone(), msg="Schema was unexpectedly dropped despite failed deprovision")
