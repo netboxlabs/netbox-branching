@@ -3,7 +3,7 @@ import uuid
 
 from core.choices import ObjectChangeActionChoices
 from core.models import Job
-from dcim.models import Cable, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
+from dcim.models import Cable, CableTermination, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections
@@ -507,6 +507,7 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, TransactionTestCase):
         with event_tracking(request):
             cable = Cable(a_terminations=[iface_a], b_terminations=[iface_b])
             cable.save()
+        cable_pk = cable.pk
 
         branch = Branch(name='Branch With Cable Delete')
         branch.save(provision=False)
@@ -515,7 +516,7 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, TransactionTestCase):
         try:
             # Delete the cable inside the branch
             response = self.client.delete(
-                reverse('dcim-api:cable-detail', kwargs={'pk': cable.pk}),
+                reverse('dcim-api:cable-detail', kwargs={'pk': cable_pk}),
                 **{**self.header, 'HTTP_X_NETBOX_BRANCH': branch.schema_id},
             )
             self.assertEqual(response.status_code, 204)
@@ -529,5 +530,22 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, TransactionTestCase):
                 **{**self.header, 'HTTP_X_NETBOX_BRANCH': branch.schema_id},
             )
             self.assertEqual(response.status_code, 200)
+
+            # The CableTermination ChangeDiffs must serialize via the
+            # object_repr fallback: their nested serializer would otherwise
+            # dereference the (now-deleted) Cable and raise DoesNotExist.
+            # Asserting `object` is a string equal to `object_repr` (rather
+            # than a nested dict) proves the fallback fired.
+            ct_type = ContentType.objects.get_for_model(CableTermination)
+            results = json.loads(response.content)['results']
+            termination_diffs = [
+                r for r in results
+                if r['object_type'] == f'{ct_type.app_label}.{ct_type.model}'
+            ]
+            self.assertEqual(len(termination_diffs), 2)
+            for diff in termination_diffs:
+                self.assertEqual(diff['action']['value'], ObjectChangeActionChoices.ACTION_DELETE)
+                self.assertTrue(diff['object_repr'])
+                self.assertEqual(diff['object'], diff['object_repr'])
         finally:
             connections[branch.connection_name].close()
