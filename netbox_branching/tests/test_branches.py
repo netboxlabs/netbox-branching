@@ -7,9 +7,11 @@ from django.test import TransactionTestCase, override_settings
 from django.utils import timezone
 from extras.validators import CustomValidator
 from netbox.plugins import get_plugin_config
+from utilities.exceptions import AbortRequest
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import SKIP_INDEXES
+from netbox_branching.forms import BranchForm
 from netbox_branching.models import Branch
 from netbox_branching.utilities import get_tables_to_replicate
 
@@ -176,12 +178,12 @@ class BranchTestCase(TransactionTestCase):
 
         # Set creation time to 9 days in the past
         branch.last_sync = timezone.now() - timedelta(days=9)
-        branch.save()
+        branch.save(update_merge_sync_fields=True)
         self.assertFalse(branch.is_stale)
 
         # Set creation time to 11 days in the past
         branch.last_sync = timezone.now() - timedelta(days=11)
-        branch.save()
+        branch.save(update_merge_sync_fields=True)
         self.assertTrue(branch.is_stale)
 
     @override_settings(CHANGELOG_RETENTION=10)
@@ -191,17 +193,17 @@ class BranchTestCase(TransactionTestCase):
 
         # Not yet in warning window (2 days ago, 8 days remaining > 7-day default threshold)
         branch.last_sync = timezone.now() - timedelta(days=2)
-        branch.save()
+        branch.save(update_merge_sync_fields=True)
         self.assertIsNone(branch.stale_warning)
 
         # Within warning window (4 days ago, 6 days remaining <= 7-day default threshold)
         branch.last_sync = timezone.now() - timedelta(days=4)
-        branch.save()
+        branch.save(update_merge_sync_fields=True)
         self.assertEqual(branch.stale_warning, 6)
 
         # Already stale (11 days ago) — warning should not show
         branch.last_sync = timezone.now() - timedelta(days=11)
-        branch.save()
+        branch.save(update_merge_sync_fields=True)
         self.assertIsNone(branch.stale_warning)
 
     @override_settings(CHANGELOG_RETENTION=7)
@@ -211,5 +213,66 @@ class BranchTestCase(TransactionTestCase):
         branch.save(provision=False)
 
         branch.last_sync = timezone.now() - timedelta(days=6)
-        branch.save()
+        branch.save(update_merge_sync_fields=True)
         self.assertEqual(branch.stale_warning, 1)
+
+    def test_edit_form_preserves_lifecycle_fields(self):
+        """
+        Regression test for issue #445: editing a Branch through the form must not
+        overwrite lifecycle fields (status, last_sync, etc.) that may have been
+        updated by a background job after the form's instance was loaded.
+        """
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+
+        # Simulate a form instance loaded while status was still NEW
+        stale_instance = Branch.objects.get(pk=branch.pk)
+        self.assertEqual(stale_instance.status, BranchStatusChoices.NEW)
+
+        # Concurrently, a background job updates lifecycle state
+        sync_time = timezone.now() - timedelta(minutes=1)
+        Branch.objects.filter(pk=branch.pk).update(
+            status=BranchStatusChoices.READY,
+            last_sync=sync_time,
+        )
+
+        # The user submits the edit form against the stale instance
+        form = BranchForm(
+            data={'name': 'Renamed Branch', 'description': '', 'comments': ''},
+            instance=stale_instance,
+        )
+        self.assertTrue(form.is_valid(), msg=form.errors)
+        form.save()
+
+        # The name change persisted, lifecycle fields were not clobbered
+        updated = Branch.objects.get(pk=branch.pk)
+        self.assertEqual(updated.name, 'Renamed Branch')
+        self.assertEqual(updated.status, BranchStatusChoices.READY)
+        self.assertEqual(updated.last_sync, sync_time)
+
+    def test_delete_transitional_branch_preserves_schema(self):
+        """
+        Regression test for issue #445: a delete attempt against a Branch in a
+        transitional state must be blocked AND must not deprovision the schema.
+        """
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+        branch.provision(user=None)
+
+        # Move the branch into a transitional state, as a background job would
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.PROVISIONING)
+        branch.refresh_from_db()
+
+        with self.assertRaises(AbortRequest):
+            branch.delete()
+
+        # The branch row must still exist
+        self.assertTrue(Branch.objects.filter(pk=branch.pk).exists())
+
+        # The schema must still exist
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
+                [branch.schema_name]
+            )
+            self.assertIsNotNone(cursor.fetchone(), msg="Schema was unexpectedly dropped on blocked delete")
