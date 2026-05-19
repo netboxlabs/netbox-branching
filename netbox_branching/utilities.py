@@ -301,7 +301,7 @@ def update_object(instance, data, using):
     """
     Set an attribute on an object depending on the type of model field.
 
-    Plugins may opt into key normalization by defining a ``canonicalize_data``
+    Plugins may opt into key normalization by defining a ``resolve_field_aliases``
     classmethod on their model.  It is called once at the top of this function
     and returns a dict whose keys have been translated to the model's current
     attribute names (e.g. walking rename history for fields that were renamed
@@ -314,9 +314,9 @@ def update_object(instance, data, using):
     instance.snapshot()
     m2m_assignments = {}
 
-    canonicalize = getattr(type(instance), 'canonicalize_data', None)
-    if canonicalize is not None:
-        data = canonicalize(data)
+    resolve_aliases = getattr(type(instance), 'resolve_field_aliases', None)
+    if resolve_aliases is not None:
+        data = resolve_aliases(data)
 
     for attr, value in data.items():
         # Account for custom field data

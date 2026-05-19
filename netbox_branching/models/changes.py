@@ -201,20 +201,20 @@ class ChangeDiff(models.Model):
         Record any conflicting changes between the modified and current object data.
 
         Plugins whose dynamically-named fields can be renamed may opt into key
-        normalization by defining a ``canonicalize_data`` classmethod on the
+        normalization by defining a ``resolve_field_aliases`` classmethod on the
         model.  When present, ``original``/``modified``/``current`` are each
-        canonicalized once before comparison so that a rename in one snapshot
-        doesn't appear as a divergent key set.  Models without the hook are
-        compared as-is.
+        passed through it once before comparison so that a rename in one
+        snapshot doesn't appear as a divergent key set.  Models without the
+        hook are compared as-is.
         """
         if self.original is None:
             return
         model = self.object_type.model_class()
-        canonicalize = getattr(model, 'canonicalize_data', None) if model is not None else None
-        if canonicalize is not None:
-            original = canonicalize(self.original)
-            modified = canonicalize(self.modified)
-            current = canonicalize(self.current) if self.current is not None else None
+        resolve_aliases = getattr(model, 'resolve_field_aliases', None) if model is not None else None
+        if resolve_aliases is not None:
+            original = resolve_aliases(self.original)
+            modified = resolve_aliases(self.modified)
+            current = resolve_aliases(self.current) if self.current is not None else None
         else:
             original = self.original
             modified = self.modified
