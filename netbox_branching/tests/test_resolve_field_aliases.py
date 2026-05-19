@@ -1,24 +1,25 @@
 """
-Tests for the ``Model.resolve_field_aliases`` opt-in classmethod hook.
+Tests for the ``Model.resolve_field_aliases`` opt-in classmethod hook and
+the ``compute_conflicts`` public utility.
 
-The hook is called from two places in netbox-branching:
+The hook is called from one place inside netbox-branching:
 
 * ``netbox_branching.utilities.update_object`` — once at the top, before the
-  per-attribute apply loop runs.
-* ``netbox_branching.models.changes.ChangeDiff._update_conflicts`` — once on
-  each of ``original`` / ``modified`` / ``current`` before the conflict
-  comparison.
+  per-attribute apply loop runs.  Lets plugins translate stale ``ObjectChange``
+  keys (e.g. after a field rename) to current attribute names so the apply
+  loop can match them against ``instance._meta.get_field(attr)``.
 
-These tests verify both call sites: that the hook is invoked when present, is
-skipped when absent, and that its return value (rather than the original data)
-is what subsequent logic sees.
+Plugins that also need ``ChangeDiff.conflicts`` recomputed against normalized
+dicts should connect a ``post_save`` receiver on ``ChangeDiff`` and call
+``netbox_branching.models.changes.compute_conflicts`` themselves — the
+algorithm is exposed publicly for that purpose and is unit-tested below.
 """
 from unittest.mock import patch
 
 from django.test import TestCase
 from ipam.models import Prefix
 
-from netbox_branching.models.changes import ChangeDiff
+from netbox_branching.models.changes import compute_conflicts
 from netbox_branching.utilities import update_object
 
 
@@ -76,105 +77,66 @@ class UpdateObjectResolveAliasesTests(TestCase):
                 update_object(prefix, {'description': 'x'}, using='default')
 
 
-class ChangeDiffResolveAliasesTests(TestCase):
-    """``ChangeDiff._update_conflicts`` consults the hook before comparing dicts."""
+class ComputeConflictsTests(TestCase):
+    """``compute_conflicts`` is a pure function exposing branching's 3-way diff algorithm."""
 
-    def _make_diff(self, action='update', original=None, modified=None, current=None):
-        """Build a ChangeDiff instance in memory (no save).
+    UPDATE = 'update'
+    DELETE = 'delete'
 
-        ``_update_conflicts`` is called by ``save()`` but is itself a pure
-        method that reads only the dict fields and the action.  Constructing
-        a non-persisted instance is enough to exercise it directly.
-        """
-        # Use a Prefix ObjectType — the actual model only matters when
-        # resolve_field_aliases is patched onto it.
-        from core.models import ObjectType
-        diff = ChangeDiff(
-            action=action,
-            original=original,
-            modified=modified,
-            current=current,
-            object_type=ObjectType.objects.get_for_model(Prefix),
+    def test_original_none_returns_none(self):
+        self.assertIsNone(compute_conflicts(self.UPDATE, None, {'a': 1}, {'a': 1}))
+
+    def test_update_no_conflicts_when_three_dicts_agree(self):
+        # original=a, modified=b, current=a → branch changed, main untouched → not a conflict
+        self.assertIsNone(compute_conflicts(
+            self.UPDATE, {'k': 'a'}, {'k': 'b'}, {'k': 'a'},
+        ))
+
+    def test_update_conflict_when_modified_and_current_diverge(self):
+        # original=a, modified=b, current=c → both sides changed differently → conflict
+        self.assertEqual(
+            compute_conflicts(self.UPDATE, {'k': 'a'}, {'k': 'b'}, {'k': 'c'}),
+            ['k'],
         )
-        return diff
 
-    def test_hook_absent_uses_dicts_asis(self):
-        """Without ``resolve_field_aliases``, comparison runs against the raw dicts."""
-        diff = self._make_diff(
-            original={'description': 'a'},
-            modified={'description': 'b'},
-            current={'description': 'a'},
+    def test_update_current_none_flags_all_branch_changes(self):
+        # Object deleted in main; every branch modification is a conflict.
+        self.assertEqual(
+            compute_conflicts(self.UPDATE, {'a': 1, 'b': 2}, {'a': 1, 'b': 99}, None),
+            ['b'],
         )
-        diff._update_conflicts()
-        # original=a, modified=b, current=a:
-        #   a != b  (True), a != a (False)  → not a conflict
-        self.assertIsNone(diff.conflicts)
 
-    def test_hook_invoked_when_present(self):
-        """``_update_conflicts`` calls ``resolve_field_aliases`` for each of the three dicts."""
-        called_with = []
-
-        def trace(data):
-            called_with.append(data)
-            return data
-
-        with patch.object(Prefix, 'resolve_field_aliases', staticmethod(trace), create=True):
-            diff = self._make_diff(
-                original={'a': 1},
-                modified={'a': 2},
-                current={'a': 1},
-            )
-            diff._update_conflicts()
-
-        # Should have been called for original, modified, and current.
-        self.assertEqual(len(called_with), 3)
-        self.assertEqual(called_with[0], {'a': 1})  # original
-        self.assertEqual(called_with[1], {'a': 2})  # modified
-        self.assertEqual(called_with[2], {'a': 1})  # current
-
-    def test_alias_resolution_aligns_divergent_keys(self):
-        """A rename-style resolver makes a previously-divergent key set match."""
-
-        def resolve_aliases(data):
-            # Rewrite 'old_name' → 'new_name'.
-            return {('new_name' if k == 'old_name' else k): v for k, v in data.items()}
-
-        with patch.object(Prefix, 'resolve_field_aliases', staticmethod(resolve_aliases), create=True):
-            diff = self._make_diff(
-                original={'old_name': 'a'},     # pre-rename snapshot
-                modified={'new_name': 'b'},     # post-rename snapshot
-                current={'old_name': 'a'},      # main's view (rename not applied yet)
-            )
-            # After alias resolution all three become {'new_name': ...}.
-            # Without the hook this would raise KeyError on `modified['old_name']`.
-            diff._update_conflicts()
-
-        # original=a, modified=b, current=a → 3-way comparison: not a conflict.
-        self.assertIsNone(diff.conflicts)
-
-    def test_current_none_uses_modified_directly(self):
-        """When current is None (object deleted in main), comparison uses original vs modified only."""
-        diff = self._make_diff(
-            action='update',
-            original={'description': 'a'},
-            modified={'description': 'b'},
-            current=None,
+    def test_update_divergent_keys_do_not_raise(self):
+        """A key present in ``original`` but missing from ``modified`` no longer KeyErrors."""
+        # original={old:'a'}, modified={new:'b'}, current=None
+        # Pre-fix this raised KeyError on modified['old'].  Now: old != None → conflict.
+        self.assertEqual(
+            compute_conflicts(self.UPDATE, {'old': 'a'}, {'new': 'b'}, None),
+            ['old'],
         )
-        diff._update_conflicts()
-        # All branch modifications are conflicts when current is None.
-        self.assertEqual(diff.conflicts, ['description'])
 
-    def test_hook_raising_propagates_in_conflict_detection(self):
-        """A buggy resolve_field_aliases surfaces from _update_conflicts too."""
+    def test_update_divergent_keys_with_current(self):
+        # Verifies the 3-way branch also tolerates divergent keys via .get().
+        self.assertEqual(
+            compute_conflicts(
+                self.UPDATE,
+                {'old': 'a'}, {'new': 'b'}, {'old': 'a'},
+            ),
+            ['old'],
+        )
 
-        def bad(data):
-            raise RuntimeError('boom')
+    def test_delete_current_none_returns_none(self):
+        # Deleted on both sides → not a conflict.
+        self.assertIsNone(compute_conflicts(self.DELETE, {'k': 'a'}, {}, None))
 
-        with patch.object(Prefix, 'resolve_field_aliases', staticmethod(bad), create=True):
-            diff = self._make_diff(
-                original={'a': 1},
-                modified={'a': 2},
-                current={'a': 1},
-            )
-            with self.assertRaises(RuntimeError):
-                diff._update_conflicts()
+    def test_delete_conflict_when_main_modified(self):
+        # Branch deleted; main modified → conflict.
+        self.assertEqual(
+            compute_conflicts(self.DELETE, {'k': 'a'}, {}, {'k': 'b'}),
+            ['k'],
+        )
+
+    def test_empty_conflict_list_returns_none(self):
+        # Result of [] (no conflicts) should normalize to None to match the
+        # ChangeDiff.conflicts NULL-when-clean convention.
+        self.assertIsNone(compute_conflicts(self.UPDATE, {'k': 'a'}, {'k': 'a'}, {'k': 'a'}))

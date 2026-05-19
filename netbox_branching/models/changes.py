@@ -17,7 +17,51 @@ __all__ = (
     'AppliedChange',
     'ChangeDiff',
     'ObjectChange',
+    'compute_conflicts',
 )
+
+
+def compute_conflicts(action, original, modified, current):
+    """
+    Pure 3-way diff between ``original`` / ``modified`` / ``current`` data dicts.
+
+    Used by ``ChangeDiff._update_conflicts`` and exposed publicly so plugins
+    can recompute conflicts from a ``post_save`` handler when their model's
+    data dicts need normalization before comparison (e.g. dynamically-named
+    fields that may have been renamed between record-time and apply-time).
+
+    Uses ``.get(k)`` against ``modified`` and ``current`` because the three
+    dicts can carry different keys for the same logical field — a direct
+    subscript would ``KeyError`` whenever a key is present on one side but
+    not the others.  For the common case where all three dicts share the
+    same key set, ``.get`` behaves identically to ``[]``.
+
+    Returns a list of conflicting attribute names, or ``None`` if no conflicts
+    (matching the existing ``ChangeDiff.conflicts`` convention).
+    """
+    if original is None:
+        return None
+    conflicts = None
+    if action == ObjectChangeActionChoices.ACTION_UPDATE:
+        if current is None:
+            # Object was deleted in main; all branch modifications are in conflict
+            conflicts = [k for k, v in original.items() if v != modified.get(k)]
+        else:
+            conflicts = [
+                k for k, v in original.items()
+                if v != modified.get(k)
+                and v != current.get(k)
+                and modified.get(k) != current.get(k)
+            ]
+    elif action == ObjectChangeActionChoices.ACTION_DELETE:
+        if current is None:
+            # Object was also deleted in main; no conflict
+            return None
+        conflicts = [
+            k for k, v in original.items()
+            if v != current.get(k)
+        ]
+    return conflicts or None
 
 
 class ObjectChange(ObjectChange_):
@@ -200,44 +244,18 @@ class ChangeDiff(models.Model):
         """
         Record any conflicting changes between the modified and current object data.
 
-        Plugins whose dynamically-named fields can be renamed may opt into key
-        normalization by defining a ``resolve_field_aliases`` classmethod on the
-        model.  When present, ``original``/``modified``/``current`` are each
-        passed through it once before comparison so that a rename in one
-        snapshot doesn't appear as a divergent key set.  Models without the
-        hook are compared as-is.
+        Plugins whose ``original``/``modified``/``current`` snapshots may carry
+        divergent key sets (e.g. dynamically-named fields that were renamed
+        between record-time and compare-time) can connect a ``post_save``
+        receiver on ``ChangeDiff`` and recompute ``conflicts`` against
+        normalized dicts via ``compute_conflicts`` — see
+        ``docs/plugin-development.md``.
         """
         if self.original is None:
             return
-        model = self.object_type.model_class()
-        resolve_aliases = getattr(model, 'resolve_field_aliases', None) if model is not None else None
-        if resolve_aliases is not None:
-            original = resolve_aliases(self.original)
-            modified = resolve_aliases(self.modified)
-            current = resolve_aliases(self.current) if self.current is not None else None
-        else:
-            original = self.original
-            modified = self.modified
-            current = self.current
-        conflicts = None
-        if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
-            if current is None:
-                # Object was deleted in main; all branch modifications are in conflict
-                conflicts = [k for k, v in original.items() if v != modified[k]]
-            else:
-                conflicts = [
-                    k for k, v in original.items()
-                    if v != modified[k] and v != current.get(k) and modified[k] != current.get(k)
-                ]
-        elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
-            if current is None:
-                # Object was also deleted in main; no conflict
-                return
-            conflicts = [
-                k for k, v in original.items()
-                if v != current.get(k)
-            ]
-        self.conflicts = conflicts or None
+        self.conflicts = compute_conflicts(
+            self.action, self.original, self.modified, self.current,
+        )
 
     @cached_property
     def altered_in_modified(self):

@@ -157,9 +157,7 @@ A resolver returning `True` does **not** override the `exempt_models` filter. Af
 
 ## Handling Renamed Fields: `Model.resolve_field_aliases`
 
-Plugins whose models can be modified at runtime (e.g. user-defined schemas where individual fields can be added, removed, or renamed) face a subtle problem when their changes are replayed across sync, merge, or revert: a stored `ObjectChange` data dict may carry a field-name key that no longer matches the model's current attribute set.
-
-For example, a model's `description` field may have been renamed to `details_long` in a branch.  The branch's `ObjectChange` records use the new name; main's still use the old name.  When sync replays main's records onto the branch, or merge replays the branch's records onto main, `update_object()` tries to do `instance._meta.get_field(attr)` against the *target* schema's view — which may not recognise the name as it appears in the data dict.
+Plugins whose models can be modified at runtime (e.g. user-defined schemas where individual fields can be added, removed, or renamed) face a subtle problem when their changes are replayed across sync, merge, or revert: a stored `ObjectChange` data dict may carry a field-name key that no longer matches the model's current attribute set. `update_object()` tries to do `instance._meta.get_field(attr)` against the *target* schema's view, and any stale keys are silently dropped.
 
 To support this, models may optionally define a `resolve_field_aliases` classmethod:
 
@@ -179,25 +177,7 @@ class MyModel(NetBoxModel):
         return result
 ```
 
-When present, netbox-branching invokes this method in two places:
-
-| Call site | When | Effect |
-|---|---|---|
-| `update_object()` (`netbox_branching/utilities.py`) | Each UPDATE replay during sync, merge, or revert-undo | The dict passed to the apply loop has keys translated to the model's current attribute names |
-| `ChangeDiff._update_conflicts()` (`netbox_branching/models/changes.py`) | Each `ChangeDiff.save()`, triggered by `ObjectChange` post-save | `original`, `modified`, and `current` are each passed through the resolver before comparison so a rename in one snapshot doesn't appear as a divergent key set |
-
-The hook is **opt-in**.  Models that don't define `resolve_field_aliases` use the data dict as-is — existing static-model behavior is unchanged.
-
-### When to define `resolve_field_aliases`
-
-- Your plugin's models have attributes that can be renamed at runtime (e.g. user-controlled schema).
-- You're seeing `KeyError` in `ChangeDiff._update_conflicts()` because key sets across `original`/`modified`/`current` diverge for your model.
-- `update_object()` is silently dropping writes because `instance._meta.get_field(attr)` raises `FieldDoesNotExist` for stale keys in the data dict.
-
-### When *not* to define it
-
-- Static models — attributes don't change between record-time and apply-time.  The hook is unnecessary overhead.
-- Models where every replay path goes through `deserialize_object()` (CREATE actions, DELETE-undo).  Those already have their own model-level hook.
+When present, `update_object()` calls this method once at the top of each UPDATE replay (during sync, merge, or revert-undo) so the apply loop sees keys that match the model's current field set. The hook is **opt-in** — models without it use the data dict as-is, so static-model behavior is unchanged.
 
 ### Hook contract
 
@@ -209,9 +189,35 @@ The hook is **opt-in**.  Models that don't define `resolve_field_aliases` use th
 | Idempotency | Should be idempotent: calling twice produces the same result as calling once |
 | Empty input | Should handle `None` / `{}` gracefully (typically by returning the input unchanged) |
 
-### Collision handling
+If two raw keys resolve to the same target attribute (e.g. squash-merged data carries both the old name and the new name with one of them carrying a sentinel `None` from `deep_compare_dict`'s "new-only-in-post" handling), the plugin's resolver decides which value wins. Branching does not impose a rule.
 
-If two raw keys resolve to the same target attribute (e.g. squash-merged data carries both the old name and the new name), the plugin's resolver decides which value wins.  A common convention is "prefer the non-None value", which handles the squash-merge case where `deep_compare_dict` may emit a sentinel `None` under the new name.  Branching does not impose a rule — that's a plugin-level concern.
+### Recomputing `ChangeDiff.conflicts` post-creation
+
+`ChangeDiff._update_conflicts()` compares `original`/`modified`/`current` using the public `netbox_branching.models.changes.compute_conflicts(action, original, modified, current)` algorithm. The 3-way diff uses `.get(k)` everywhere, so divergent key sets across the three dicts no longer raise `KeyError` — but they may still produce false-positive conflicts when the same logical field appears under different keys (e.g. mid-rename).
+
+If your plugin needs `conflicts` recomputed against alias-resolved dicts, connect a `post_save` receiver on `ChangeDiff` and call `compute_conflicts()` yourself:
+
+```python
+from django.db.models.signals import post_save
+from django.dispatch import receiver
+from netbox_branching.models import ChangeDiff
+from netbox_branching.models.changes import compute_conflicts
+
+
+@receiver(post_save, sender=ChangeDiff)
+def recompute_conflicts(sender, instance, **kwargs):
+    model = instance.object_type.model_class()
+    resolver = getattr(model, 'resolve_field_aliases', None) if model else None
+    if resolver is None:
+        return
+    original = resolver(instance.original)
+    modified = resolver(instance.modified)
+    current = resolver(instance.current) if instance.current is not None else None
+    new_conflicts = compute_conflicts(instance.action, original, modified, current)
+    if new_conflicts != instance.conflicts:
+        # Write via .update() to skip save() and avoid _update_conflicts re-entry.
+        sender.objects.filter(pk=instance.pk).update(conflicts=new_conflicts)
+```
 
 ## Custom Validators
 
