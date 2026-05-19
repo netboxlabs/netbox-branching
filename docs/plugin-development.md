@@ -40,7 +40,7 @@ Models that represent **network inventory or topology** — devices, sites, pref
 
 - User accounts, API tokens, and permissions
 - Plugin configuration or feature-flag style settings
-- Schema-defining records (e.g. custom object type definitions) where branching the schema independently of the data it governs would cause inconsistencies
+- Schema-defining records where branching the schema independently of the data it governs would cause inconsistencies
 
 If your plugin includes models in this category that happen to use `ChangeLoggingMixin`, consider registering them in `exempt_models` so they behave as global records regardless of whether a branch is active.
 
@@ -157,9 +157,9 @@ A resolver returning `True` does **not** override the `exempt_models` filter. Af
 
 ## Handling Renamed Fields: `Model.resolve_field_aliases`
 
-Plugins whose models can be modified at runtime (e.g. user-defined custom object types where individual fields can be added, removed, or renamed) face a subtle problem when their changes are replayed across sync, merge, or revert: a stored `ObjectChange` data dict may carry a field-name key that no longer matches the model's current attribute set.
+Plugins whose models can be modified at runtime (e.g. user-defined schemas where individual fields can be added, removed, or renamed) face a subtle problem when their changes are replayed across sync, merge, or revert: a stored `ObjectChange` data dict may carry a field-name key that no longer matches the model's current attribute set.
 
-For example, a custom object type's `description` field may have been renamed to `details_long` in a branch.  The branch's `ObjectChange` records use the new name; main's still use the old name.  When sync replays main's records onto the branch, or merge replays the branch's records onto main, `update_object()` tries to do `instance._meta.get_field(attr)` against the *target* schema's view — which may not recognise the name as it appears in the data dict.
+For example, a model's `description` field may have been renamed to `details_long` in a branch.  The branch's `ObjectChange` records use the new name; main's still use the old name.  When sync replays main's records onto the branch, or merge replays the branch's records onto main, `update_object()` tries to do `instance._meta.get_field(attr)` against the *target* schema's view — which may not recognise the name as it appears in the data dict.
 
 To support this, models may optionally define a `resolve_field_aliases` classmethod:
 
