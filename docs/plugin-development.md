@@ -155,63 +155,69 @@ Registered as above, this routes all matching through-table queries to the activ
 
 A resolver returning `True` does **not** override the `exempt_models` filter. After a resolver opts a model in, `supports_branching` still applies the configured exempt list. So you can use the two together: register a resolver that includes a whole class of plugin models, then exempt specific ones via `PLUGINS_CONFIG`.
 
-## Handling Renamed Fields: `Model.resolve_field_aliases`
+## Handling Renamed Fields: `register_objectchange_field_migrator`
 
 Plugins whose models can be modified at runtime (e.g. user-defined schemas where individual fields can be added, removed, or renamed) face a subtle problem when their changes are replayed across sync, merge, or revert: a stored `ObjectChange` data dict may carry a field-name key that no longer matches the model's current attribute set.
 
 For example, a model's `description` field may have been renamed to `details_long` in a branch.  The branch's `ObjectChange` records use the new name; main's still use the old name.  When sync replays main's records onto the branch, or merge replays the branch's records onto main, `update_object()` tries to do `instance._meta.get_field(attr)` against the *target* schema's view — which may not recognise the name as it appears in the data dict.
 
-To support this, models may optionally define a `resolve_field_aliases` classmethod:
+To support this, plugins register a migrator callable from their `AppConfig.ready()`:
 
 ```python
-class MyModel(NetBoxModel):
-    ...
+from netbox_branching.utilities import register_objectchange_field_migrator
 
-    @classmethod
-    def resolve_field_aliases(cls, data):
-        """Rewrite stale field-name keys in `data` to current attribute names."""
-        if not data:
-            return data
-        result = {}
-        for raw_key, value in data.items():
-            target = _resolve_current_name(cls, raw_key)  # plugin-specific
-            result[target] = value
-        return result
+
+def my_objectchange_field_migrator(model, data):
+    """Rewrite stale field-name keys in `data` to current attribute names."""
+    if model._meta.app_label != 'my_plugin':
+        return None  # defer — this migrator doesn't own this model
+    result = {}
+    for raw_key, value in data.items():
+        target = _resolve_current_name(model, raw_key)  # plugin-specific
+        result[target] = value
+    return result
+
+
+class MyPluginConfig(PluginConfig):
+    def ready(self):
+        super().ready()
+        register_objectchange_field_migrator(my_objectchange_field_migrator)
 ```
 
-When present, netbox-branching invokes this method in two places:
+Registered migrators are consulted in two places:
 
 | Call site | When | Effect |
 |---|---|---|
 | `update_object()` (`netbox_branching/utilities.py`) | Each UPDATE replay during sync, merge, or revert-undo | The dict passed to the apply loop has keys translated to the model's current attribute names |
-| `ChangeDiff._update_conflicts()` (`netbox_branching/models/changes.py`) | Each `ChangeDiff.save()`, triggered by `ObjectChange` post-save | `original`, `modified`, and `current` are each passed through the resolver before comparison so a rename in one snapshot doesn't appear as a divergent key set |
+| `ChangeDiff._update_conflicts()` (`netbox_branching/models/changes.py`) | Each `ChangeDiff.save()`, triggered by `ObjectChange` post-save | `original`, `modified`, and `current` are each passed through the migrator before comparison so a rename in one snapshot doesn't appear as a divergent key set |
 
-The hook is **opt-in**.  Models that don't define `resolve_field_aliases` use the data dict as-is — existing static-model behavior is unchanged.
+The mechanism is **opt-in**.  Models whose plugin hasn't registered a migrator — or whose registered migrators all return `None` — use the data dict as-is, so existing static-model behavior is unchanged.
 
-### When to define `resolve_field_aliases`
+### When to register a migrator
 
 - Your plugin's models have attributes that can be renamed at runtime (e.g. user-controlled schema).
 - You're seeing `KeyError` in `ChangeDiff._update_conflicts()` because key sets across `original`/`modified`/`current` diverge for your model.
 - `update_object()` is silently dropping writes because `instance._meta.get_field(attr)` raises `FieldDoesNotExist` for stale keys in the data dict.
 
-### When *not* to define it
+### When *not* to register one
 
 - Static models — attributes don't change between record-time and apply-time.  The hook is unnecessary overhead.
 - Models where every replay path goes through `deserialize_object()` (CREATE actions, DELETE-undo).  Those already have their own model-level hook.
 
-### Hook contract
+### Migrator contract
 
 | Aspect | Contract |
 |---|---|
-| Receives | A `dict` (the raw data from `ObjectChange` storage or a snapshot field) |
-| Returns | A `dict` with keys translated; values unchanged |
-| Errors | Propagate normally — a buggy resolver should surface, not silently misroute writes |
-| Idempotency | Should be idempotent: calling twice produces the same result as calling once |
-| Empty input | Should handle `None` / `{}` gracefully (typically by returning the input unchanged) |
+| Signature | `migrator(model, data) -> dict \| None` |
+| Returns `dict` | Replaces ``data`` for subsequent processing.  First non-``None`` return wins. |
+| Returns `None` | Defer to the next registered migrator — this one doesn't own this model. |
+| Errors | Logged with `logger.exception(...)` and treated as ``None``; subsequent migrators still run.  Buggy migrators should be discoverable in logs without crashing replays. |
+| Idempotency | Should be idempotent: calling twice produces the same result as calling once. |
+| Empty input | Branching short-circuits empty ``data`` (``None`` / ``{}``) before consulting any migrator. |
 
 ### Collision handling
 
-If two raw keys resolve to the same target attribute (e.g. squash-merged data carries both the old name and the new name), the plugin's resolver decides which value wins.  A common convention is "prefer the non-None value", which handles the squash-merge case where `deep_compare_dict` may emit a sentinel `None` under the new name.  Branching does not impose a rule — that's a plugin-level concern.
+If two raw keys resolve to the same target attribute (e.g. squash-merged data carries both the old name and the new name), the migrator decides which value wins.  A common convention is "prefer the non-None value", which handles the squash-merge case where `deep_compare_dict` may emit a sentinel `None` under the new name.  Branching does not impose a rule — that's a plugin-level concern.
 
 ## Custom Validators
 

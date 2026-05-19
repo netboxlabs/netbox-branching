@@ -51,7 +51,9 @@ __all__ = (
     'is_api_request',
     'record_applied_change',
     'register_branching_resolver',
+    'register_objectchange_field_migrator',
     'resolve_changes_summary',
+    'resolve_objectchange_field_migration',
     'supports_branching',
     'track_branch_connection',
     'update_object',
@@ -156,6 +158,55 @@ def get_branchable_object_types():
 
 
 _branching_resolvers = []
+_objectchange_field_migrators = []
+
+
+def register_objectchange_field_migrator(migrator):
+    """
+    Register a callable that rewrites field-name keys in ObjectChange data.
+
+    Plugins whose models can be modified at runtime (e.g. user-defined schemas
+    where individual fields can be renamed) use this hook to translate stale
+    field-name keys in a stored data dict to the model's current attribute
+    names before the data is applied or compared.  Branching invokes the
+    registered migrators from ``update_object`` (each UPDATE replay during
+    sync/merge/revert-undo) and from ``ChangeDiff._update_conflicts`` (each
+    ChangeDiff save), so a rename in one snapshot doesn't appear as a
+    divergent key set.
+
+    Signature: ``migrator(model, data) -> dict | None``
+        dict — return value replaces ``data`` for subsequent processing
+        None — defer to the next migrator (this migrator doesn't own this model)
+
+    The first non-``None`` return wins.  Migrators should be idempotent and
+    should handle empty input (``None`` / ``{}``) gracefully.
+    """
+    if not callable(migrator):
+        raise TypeError('ObjectChange field migrator must be callable')
+    _objectchange_field_migrators.append(migrator)
+
+
+def resolve_objectchange_field_migration(model, data):
+    """
+    Apply the first registered migrator that claims ``model``.
+
+    Returns the (possibly translated) ``data`` dict.  When no migrator
+    claims the model, returns ``data`` unchanged.  Empty input is returned
+    as-is without consulting any migrator.
+    """
+    if not data or model is None:
+        return data
+    for migrator in _objectchange_field_migrators:
+        try:
+            result = migrator(model, data)
+        except Exception:
+            logger.exception(
+                'objectchange field migrator %r raised; treating as None', migrator
+            )
+            continue
+        if result is not None:
+            return result
+    return data
 
 
 def register_branching_resolver(resolver):
@@ -301,12 +352,12 @@ def update_object(instance, data, using):
     """
     Set an attribute on an object depending on the type of model field.
 
-    Plugins may opt into key normalization by defining a ``resolve_field_aliases``
-    classmethod on their model.  It is called once at the top of this function
-    and returns a dict whose keys have been translated to the model's current
-    attribute names (e.g. walking rename history for fields that were renamed
-    between when an ObjectChange was recorded and when it is being replayed).
-    For models that don't define the hook, the data is used as-is.
+    Plugins may translate stale field-name keys in ``data`` by registering
+    a migrator via ``register_objectchange_field_migrator``.  The registered
+    migrators are consulted here once at the top of the function (e.g. to
+    walk rename history for fields renamed between when an ObjectChange was
+    recorded and when it is being replayed).  When no migrator claims the
+    model, ``data`` is used as-is.
     """
     # Avoid AppRegistryNotReady exception
     from taggit.managers import TaggableManager
@@ -314,9 +365,7 @@ def update_object(instance, data, using):
     instance.snapshot()
     m2m_assignments = {}
 
-    resolve_aliases = getattr(type(instance), 'resolve_field_aliases', None)
-    if resolve_aliases is not None:
-        data = resolve_aliases(data)
+    data = resolve_objectchange_field_migration(type(instance), data)
 
     for attr, value in data.items():
         # Account for custom field data
