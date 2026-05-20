@@ -53,7 +53,6 @@ __all__ = (
     'register_branching_resolver',
     'register_objectchange_field_migrator',
     'resolve_changes_summary',
-    'resolve_objectchange_field_migration',
     'supports_branching',
     'track_branch_connection',
     'update_object',
