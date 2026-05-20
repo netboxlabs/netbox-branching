@@ -156,8 +156,11 @@
               {% else %}
                 <span class="text-green">
                   <i class="mdi mdi-check-bold"></i>
-                  {% trans "None found" %}
+                  {% trans "No field-level conflicts found" %}
                 </span>
+                <div class="small text-muted">
+                  {% trans "Note: Database constraint violations (e.g. duplicate names or slugs) can only be detected during merge." %}
+                </div>
               {% endif %}
             </td>
           </tr>
