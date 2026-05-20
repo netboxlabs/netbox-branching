@@ -163,23 +163,15 @@ _objectchange_field_migrators = []
 
 def register_objectchange_field_migrator(migrator):
     """
-    Register a callable that rewrites field-name keys in ObjectChange data.
+    Register a callable that rewrites field-name keys in an ObjectChange data
+    dict before the dict is applied or compared.
 
-    Plugins whose models can be modified at runtime (e.g. user-defined schemas
-    where individual fields can be renamed) use this hook to translate stale
-    field-name keys in a stored data dict to the model's current attribute
-    names before the data is applied or compared.  Branching invokes the
-    registered migrators from ``update_object`` (each UPDATE replay during
-    sync/merge/revert-undo) and from ``ChangeDiff._update_conflicts`` (each
-    ChangeDiff save), so a rename in one snapshot doesn't appear as a
-    divergent key set.
+    Signature: ``migrator(model, data) -> dict | None``.  Returning a dict
+    replaces ``data`` for subsequent processing; returning ``None`` defers to
+    the next registered migrator.  The first non-``None`` return wins.
 
-    Signature: ``migrator(model, data) -> dict | None``
-        dict — return value replaces ``data`` for subsequent processing
-        None — defer to the next migrator (this migrator doesn't own this model)
-
-    The first non-``None`` return wins.  Migrators should be idempotent and
-    should handle empty input (``None`` / ``{}``) gracefully.
+    Internal extension point.  Not part of the public plugin API and subject
+    to change without notice; external plugins should not rely on it.
     """
     if not callable(migrator):
         raise TypeError('ObjectChange field migrator must be callable')
@@ -188,11 +180,12 @@ def register_objectchange_field_migrator(migrator):
 
 def resolve_objectchange_field_migration(model, data):
     """
-    Apply the first registered migrator that claims ``model``.
+    Apply the first registered migrator that claims ``model`` and return the
+    (possibly translated) ``data`` dict.  When no migrator claims the model,
+    ``data`` is returned unchanged; empty input is returned as-is without
+    consulting any migrator.
 
-    Returns the (possibly translated) ``data`` dict.  When no migrator
-    claims the model, returns ``data`` unchanged.  Empty input is returned
-    as-is without consulting any migrator.
+    Internal helper; not part of the public API.
     """
     if not data or model is None:
         return data
@@ -352,12 +345,13 @@ def update_object(instance, data, using):
     """
     Set an attribute on an object depending on the type of model field.
 
-    Plugins may translate stale field-name keys in ``data`` by registering
-    a migrator via ``register_objectchange_field_migrator``.  The registered
-    migrators are consulted here once at the top of the function (e.g. to
-    walk rename history for fields renamed between when an ObjectChange was
-    recorded and when it is being replayed).  When no migrator claims the
-    model, ``data`` is used as-is.
+    ``data`` is passed through any registered ObjectChange field migrators
+    once at the top of the function, so stale field-name keys can be
+    rewritten to the model's current attribute names before the apply loop
+    runs.  When no migrator claims the model, ``data`` is used as-is.
+
+    The migrator hook is internal and subject to change; external plugins
+    should not rely on it.
     """
     # Avoid AppRegistryNotReady exception
     from taggit.managers import TaggableManager

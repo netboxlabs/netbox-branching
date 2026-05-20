@@ -204,12 +204,13 @@ class ChangeDiff(models.Model):
         """
         Record any conflicting changes between the modified and current object data.
 
-        Plugins whose dynamically-named fields can be renamed may register a
-        migrator via ``register_objectchange_field_migrator``.  When a migrator
-        claims this model, ``original``/``modified``/``current`` are each
-        passed through it once before comparison so that a rename in one
-        snapshot doesn't appear as a divergent key set.  Models without a
-        registered migrator are compared as-is.
+        ``original``, ``modified``, and ``current`` are each passed through any
+        registered ObjectChange field migrators before comparison so that a
+        rename in one snapshot doesn't appear as a divergent key set.  Models
+        without a registered migrator are compared as-is.
+
+        The migrator hook is internal and subject to change; external plugins
+        should not rely on it.
         """
         if self.original is None:
             return
