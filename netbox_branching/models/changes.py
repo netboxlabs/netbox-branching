@@ -222,11 +222,11 @@ class ChangeDiff(models.Model):
         if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             if current is None:
                 # Object was deleted in main; all branch modifications are in conflict
-                conflicts = [k for k, v in original.items() if v != modified.get(k)]
+                conflicts = [k for k, v in original.items() if v != modified[k]]
             else:
                 conflicts = [
                     k for k, v in original.items()
-                    if v != modified.get(k) and v != current.get(k) and modified.get(k) != current.get(k)
+                    if v != modified[k] and v != current.get(k) and modified[k] != current.get(k)
                 ]
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
             if current is None:
