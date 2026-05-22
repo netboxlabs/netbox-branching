@@ -238,9 +238,9 @@ class ChangeDiff(models.Model):
             ]
         self.conflicts = conflicts or None
 
-    # Display properties below read raw dicts; migration is only applied where
-    # snapshots are compared (``_update_conflicts``).  If migrating here, also
-    # update the raw-dict lookups in ``views.py`` to avoid KeyErrors.
+    # The cached properties below intentionally compare raw (un-migrated) dicts.
+    # ``views.py`` indexes into ``original``/``modified``/``current`` using the
+    # keys these properties return, so the key set must match the raw dicts.
     @cached_property
     def altered_in_modified(self):
         """
