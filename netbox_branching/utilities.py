@@ -181,12 +181,11 @@ def resolve_objectchange_field_migration(model, data):
     """
     Apply the first registered migrator that claims ``model`` and return the
     (possibly translated) ``data`` dict.  When no migrator claims the model,
-    ``data`` is returned unchanged; empty input is returned as-is without
-    consulting any migrator.
+    ``data`` is returned unchanged.
 
     Internal helper; not part of the public API.
     """
-    if not data or model is None:
+    if data is None or model is None:
         return data
     for migrator in _objectchange_field_migrators:
         try:
