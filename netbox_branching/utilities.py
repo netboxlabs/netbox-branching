@@ -51,7 +51,6 @@ __all__ = (
     'is_api_request',
     'record_applied_change',
     'register_branching_resolver',
-    'register_dependency_resolver',
     'register_objectchange_field_migrator',
     'resolve_changes_summary',
     'supports_branching',
@@ -159,7 +158,6 @@ def get_branchable_object_types():
 
 _branching_resolvers = []
 _objectchange_field_migrators = []
-_dependency_resolvers = []
 
 
 def register_objectchange_field_migrator(migrator):
@@ -201,56 +199,6 @@ def resolve_objectchange_field_migration(model, data):
         if result is not None:
             return result
     return data
-
-
-def register_dependency_resolver(resolver):
-    """
-    Register a callable that contributes extra cross-change dependency edges
-    to the squash merge strategy's FK graph.
-
-    Use when a model's relationships aren't expressed through Django FK /
-    GenericForeignKey fields — for example, when a plugin stores object
-    references in custom-shaped postchange_data that the default
-    ``_get_fk_references`` cannot inspect.
-
-    Signature: ``resolver(model, data, changed_objects) -> Iterable[tuple]``
-        ``model`` — the model class for the change being analyzed
-        ``data`` — the relevant ``prechange_data`` / ``postchange_data`` dict
-        ``changed_objects`` — set of ``(app.model, pk)`` keys currently in flight
-        return value — iterable of ``(app.model, pk)`` keys this change depends on
-
-    The returned keys are filtered against ``changed_objects`` by the caller;
-    resolvers may return any candidates without checking membership themselves.
-
-    Internal extension point — not part of the public plugin API and subject
-    to change without notice.
-    """
-    if not callable(resolver):
-        raise TypeError('Dependency resolver must be callable')
-    _dependency_resolvers.append(resolver)
-
-
-def resolve_extra_dependencies(model, data, changed_objects):
-    """Collect dependency keys from every registered dependency resolver.
-
-    Returns a set of ``(app.model, pk)`` tuples already filtered to those
-    present in ``changed_objects``.  Exceptions in a resolver are logged
-    and treated as an empty contribution so one bad plugin can't break
-    the dependency graph build.
-    """
-    if not data or model is None:
-        return set()
-    references = set()
-    for resolver in _dependency_resolvers:
-        try:
-            for ref in resolver(model, data, changed_objects) or ():
-                if ref in changed_objects:
-                    references.add(ref)
-        except Exception:
-            logger.exception(
-                'dependency resolver %r raised; treating as empty', resolver
-            )
-    return references
 
 
 def register_branching_resolver(resolver):

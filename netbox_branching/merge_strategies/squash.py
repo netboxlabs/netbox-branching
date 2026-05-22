@@ -7,15 +7,28 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, models
+from django.dispatch import Signal
 from netbox.context_managers import event_tracking
 
 from ..error_report import annotate_validation_error
-from ..utilities import resolve_extra_dependencies
 from .strategy import MergeStrategy
 
 __all__ = (
     'SquashMergeStrategy',
+    'squash_dependency_graph_built',
 )
+
+
+# Fired by ``SquashMergeStrategy`` after its FK / GFK dependency graph has been
+# built and before topological ordering.  Receivers may mutate each
+# ``CollapsedChange``'s ``depends_on`` / ``depended_by`` sets to add extra
+# edges for relationships squash can't see (plugin-defined shapes, models
+# that store object references outside Django's standard field types, etc.).
+#
+# kwargs:
+#   collapsed_changes — dict of CollapsedChange keyed by (app.model, pk).
+#                       Mutate in place; the return value is ignored.
+squash_dependency_graph_built = Signal()
 
 
 class ActionType(StrEnum):
@@ -298,22 +311,6 @@ class SquashMergeStrategy(MergeStrategy):
                     if ref_key in changed_objects:
                         references.add(ref_key)
 
-        # Check ManyToMany fields — postchange_data carries the target PK list.
-        # Self-referential M2M in particular references other in-flight CREATEs.
-        for field in model_class._meta.local_many_to_many:
-            values = data.get(field.name)
-            if not values:
-                continue
-            related_ct = ContentType.objects.get_for_model(field.related_model)
-            app_label, model = related_ct.natural_key()
-            model_label = f"{app_label}.{model}"
-            for target_pk in values:
-                if not isinstance(target_pk, int):
-                    continue
-                ref_key = (model_label, target_pk)
-                if ref_key in changed_objects:
-                    references.add(ref_key)
-
         # Check GenericForeignKey fields
         for field in model_class._meta.private_fields:
             if isinstance(field, GenericForeignKey):
@@ -332,11 +329,6 @@ class SquashMergeStrategy(MergeStrategy):
                             references.add(ref_key)
                     except ContentType.DoesNotExist:
                         pass
-
-        # Plugin-contributed references — for relationships that aren't
-        # expressed via Django FK / GenericForeignKey fields (e.g. dynamic
-        # polymorphic M2M shapes that live on a custom descriptor).
-        references |= resolve_extra_dependencies(model_class, data, changed_objects)
 
         return references
 
@@ -706,6 +698,10 @@ class SquashMergeStrategy(MergeStrategy):
         )
 
         SquashMergeStrategy._build_fk_dependency_graph(deletes, updates, creates, logger)
+        squash_dependency_graph_built.send(
+            sender=SquashMergeStrategy,
+            collapsed_changes=to_process,
+        )
         ordered_keys = SquashMergeStrategy._dependency_order_by_references(to_process, logger)
 
         # Convert keys back to collapsed changes
