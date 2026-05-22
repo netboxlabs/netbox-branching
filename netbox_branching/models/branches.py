@@ -288,17 +288,38 @@ class Branch(JobsMixin, PrimaryModel):
                     ).format(max=max_working_branches)
                 )
 
-    def save(self, provision=True, *args, **kwargs):
+    # Fields owned by background jobs; excluded from save() by default to avoid clobbering. See #445.
+    LIFECYCLE_FIELDS = (
+        'status', 'last_sync', 'merged_time', 'merged_by', 'applied_migrations',
+    )
+
+    def save(self, provision=True, update_merge_sync_fields=False, *args, **kwargs):
         """
         Args:
             provision: If True, automatically enqueue a background Job to provision the Branch. (Set this
                        to False if you will call provision() on the instance manually.)
+            update_merge_sync_fields: If True, the caller intends to write lifecycle fields and the
+                       pre-save exclusion is skipped. Used by internal lifecycle methods
+                       (sync/migrate/merge/revert).
         """
         from netbox_branching.jobs import ProvisionBranchJob
 
         _provision = provision and self.pk is None
+        _shield_lifecycle = (
+            self.pk and not update_merge_sync_fields and 'update_fields' not in kwargs
+        )
+
+        if _shield_lifecycle:
+            kwargs['update_fields'] = [
+                f.name for f in self._meta.concrete_fields
+                if f.name not in self.LIFECYCLE_FIELDS and not f.primary_key
+            ]
 
         super().save(*args, **kwargs)
+
+        if _shield_lifecycle:
+            # Refresh excluded fields so callers (notably DRF response serializers) see current state.
+            self.refresh_from_db(fields=self.LIFECYCLE_FIELDS)
 
         if _provision:
             # Enqueue a background job to provision the Branch
@@ -312,10 +333,12 @@ class Branch(JobsMixin, PrimaryModel):
         if active_branch.get() == self:
             raise AbortRequest(_("The active branch cannot be deleted."))
 
-        # Deprovision the schema
-        self.deprovision()
+        # Row delete and schema drop must succeed or fail together — see #445.
+        with transaction.atomic():
+            result = super().delete(*args, **kwargs)
+            self.deprovision()
 
-        return super().delete(*args, **kwargs)
+        return result
 
     @staticmethod
     def _generate_schema_id(length=8):
@@ -659,7 +682,7 @@ class Branch(JobsMixin, PrimaryModel):
         logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
         self.last_sync = timezone.now()
         self.status = BranchStatusChoices.READY
-        self.save()
+        self.save(update_merge_sync_fields=True)
 
         # Record a branch event for the sync
         logger.debug(f"Recording branch event: {BranchEventTypeChoices.SYNCED}")
@@ -738,7 +761,7 @@ class Branch(JobsMixin, PrimaryModel):
         # Reset Branch status to ready
         logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
         self.status = BranchStatusChoices.READY
-        self.save()
+        self.save(update_merge_sync_fields=True)
 
         # Record a branch event for the migration
         logger.debug(f"Recording branch event: {BranchEventTypeChoices.MIGRATED}")
@@ -808,7 +831,7 @@ class Branch(JobsMixin, PrimaryModel):
         self.status = BranchStatusChoices.MERGED
         self.merged_time = timezone.now()
         self.merged_by = user
-        self.save()
+        self.save(update_merge_sync_fields=True)
 
         # Record a branch event for the merge
         logger.debug(f"Recording branch event: {BranchEventTypeChoices.MERGED}")
@@ -884,7 +907,7 @@ class Branch(JobsMixin, PrimaryModel):
         self.merged_time = None
         self.merged_by = None
         self.merge_strategy = None
-        self.save()
+        self.save(update_merge_sync_fields=True)
 
         # Record a branch event for the merge
         logger.debug(f"Recording branch event: {BranchEventTypeChoices.REVERTED}")
@@ -1065,12 +1088,12 @@ class Branch(JobsMixin, PrimaryModel):
         if not self.can_archive:
             raise Exception("Archiving this branch is not permitted.")
 
-        # Deprovision the branch's schema
-        self.deprovision()
-
-        # Update the branch's status to "archived"
-        Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.ARCHIVED)
-        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.ARCHIVED)
+        # Drop the schema and flip the status atomically so a failure after the schema
+        # has been dropped does not leave an un-archived Branch with no schema.
+        with transaction.atomic():
+            self.deprovision()
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.ARCHIVED)
+            BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.ARCHIVED)
 
     archive.alters_data = True
 
