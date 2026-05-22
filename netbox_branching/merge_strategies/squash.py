@@ -10,6 +10,7 @@ from django.db import DEFAULT_DB_ALIAS, models
 from netbox.context_managers import event_tracking
 
 from ..error_report import annotate_validation_error
+from ..utilities import resolve_extra_dependencies
 from .strategy import MergeStrategy
 
 __all__ = (
@@ -297,6 +298,22 @@ class SquashMergeStrategy(MergeStrategy):
                     if ref_key in changed_objects:
                         references.add(ref_key)
 
+        # Check ManyToMany fields — postchange_data carries the target PK list.
+        # Self-referential M2M in particular references other in-flight CREATEs.
+        for field in model_class._meta.local_many_to_many:
+            values = data.get(field.name)
+            if not values:
+                continue
+            related_ct = ContentType.objects.get_for_model(field.related_model)
+            app_label, model = related_ct.natural_key()
+            model_label = f"{app_label}.{model}"
+            for target_pk in values:
+                if not isinstance(target_pk, int):
+                    continue
+                ref_key = (model_label, target_pk)
+                if ref_key in changed_objects:
+                    references.add(ref_key)
+
         # Check GenericForeignKey fields
         for field in model_class._meta.private_fields:
             if isinstance(field, GenericForeignKey):
@@ -315,6 +332,11 @@ class SquashMergeStrategy(MergeStrategy):
                             references.add(ref_key)
                     except ContentType.DoesNotExist:
                         pass
+
+        # Plugin-contributed references — for relationships that aren't
+        # expressed via Django FK / GenericForeignKey fields (e.g. dynamic
+        # polymorphic M2M shapes that live on a custom descriptor).
+        references |= resolve_extra_dependencies(model_class, data, changed_objects)
 
         return references
 
