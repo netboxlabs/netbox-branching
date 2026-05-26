@@ -40,7 +40,7 @@ Models that represent **network inventory or topology** — devices, sites, pref
 
 - User accounts, API tokens, and permissions
 - Plugin configuration or feature-flag style settings
-- Schema-defining records (e.g. custom object type definitions) where branching the schema independently of the data it governs would cause inconsistencies
+- Schema-defining records where branching the schema independently of the data it governs would cause inconsistencies
 
 If your plugin includes models in this category that happen to use `ChangeLoggingMixin`, consider registering them in `exempt_models` so they behave as global records regardless of whether a branch is active.
 
