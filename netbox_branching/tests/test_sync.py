@@ -20,6 +20,7 @@ from dcim.models import (
     DeviceType,
     Interface,
     Manufacturer,
+    Platform,
     Region,
     Site,
     VirtualChassis,
@@ -551,6 +552,58 @@ class SyncTestCase(TransactionTestCase):
 
         branch.refresh_from_db()
         self.assertGreater(branch.last_sync, initial_last_sync)
+
+    def test_sync_mptt_create_new_parent_then_reparent_in_main(self):
+        """
+        Reproducer for #531.
+
+        Scenario:
+          1. Create Platform "Windows Server OS" in main
+          2. Create branch (do not activate)
+          3. In main: rename to "Windows Server"
+          4. In main: create new Platform "Windows" (root)
+          5. In main: set "Windows Server".parent = "Windows"
+          6. Sync branch — should not raise
+                 "Cannot assign self or child platform as parent."
+        """
+        with event_tracking(self.request):
+            p = Platform.objects.create(name='Windows Server OS', slug='windows-server-os')
+            p_id = p.id
+
+        branch = self._create_and_provision_branch()
+
+        with event_tracking(self.request):
+            p = Platform.objects.get(id=p_id)
+            p.snapshot()
+            p.name = 'Windows Server'
+            p.slug = 'windows-server'
+            p.save()
+
+            windows = Platform.objects.create(name='Windows', slug='windows')
+            windows_id = windows.id
+
+            ws = Platform.objects.get(id=p_id)
+            ws.snapshot()
+            ws.parent = Platform.objects.get(id=windows_id)
+            ws.save()
+
+        # Sync branch — must not raise
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            ws_in_branch = Platform.objects.get(id=p_id)
+            self.assertEqual(ws_in_branch.name, 'Windows Server')
+            self.assertEqual(ws_in_branch.parent_id, windows_id)
+
+            # MPTT tree consistency: tree fields must have been recomputed against the
+            # branch's local state, not carried over from main. (#531)
+            windows_in_branch = Platform.objects.get(id=windows_id)
+            self.assertEqual(windows_in_branch.level, 0)
+            self.assertEqual(ws_in_branch.level, 1)
+            self.assertEqual(ws_in_branch.tree_id, windows_in_branch.tree_id)
+            self.assertGreater(ws_in_branch.lft, windows_in_branch.lft)
+            self.assertLess(ws_in_branch.rght, windows_in_branch.rght)
+            self.assertEqual(list(ws_in_branch.get_ancestors()), [windows_in_branch])
 
     def test_sync_mptt_branch_and_main_extend_tree(self):
         """
