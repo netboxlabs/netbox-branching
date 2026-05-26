@@ -1,13 +1,15 @@
 import json
+import uuid
 
 from core.choices import ObjectChangeActionChoices
 from core.models import Job
-from dcim.models import Site
+from dcim.models import Cable, CableTermination, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections
-from django.test import Client, TransactionTestCase
+from django.test import Client, RequestFactory, TransactionTestCase
 from django.urls import reverse
+from netbox.context_managers import event_tracking
 from users.models import Token
 
 from netbox_branching.choices import BranchStatusChoices
@@ -478,5 +480,72 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, TransactionTestCase):
             result = json.loads(response.content)['results'][0]
             self.assertIn('diff', result)
             self.assertEqual(result['diff'], {'original': {}, 'modified': {}, 'current': {}})
+        finally:
+            connections[branch.connection_name].close()
+
+    def test_changediff_list_cable_deleted_in_branch(self):
+        """
+        Regression test for #498: when a Cable is deleted inside a branch, the
+        cascade also deletes CableTerminations whose nested serializer
+        dereferences the (now-absent) Cable.  With the X-NetBox-Branch header
+        active, BranchAwareRouter routes those FK lookups to the branch schema,
+        where the Cable no longer exists.  The changes API must still return
+        200 rather than surfacing Cable.DoesNotExist as a 500.
+        """
+        # Set up cable + terminations in main, before the branch is provisioned
+        manufacturer = Manufacturer.objects.create(name='Mfr', slug='mfr')
+        device_type = DeviceType.objects.create(manufacturer=manufacturer, model='DT', slug='dt')
+        device_role = DeviceRole.objects.create(name='Role', slug='role')
+        site = Site.objects.create(name='Cable Site', slug='cable-site')
+        device_a = Device.objects.create(name='A', device_type=device_type, role=device_role, site=site)
+        device_b = Device.objects.create(name='B', device_type=device_type, role=device_role, site=site)
+        iface_a = Interface.objects.create(device=device_a, name='eth0', type='1000base-t')
+        iface_b = Interface.objects.create(device=device_b, name='eth0', type='1000base-t')
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+        with event_tracking(request):
+            cable = Cable(a_terminations=[iface_a], b_terminations=[iface_b])
+            cable.save()
+        cable_pk = cable.pk
+
+        branch = Branch(name='Branch With Cable Delete')
+        branch.save(provision=False)
+        branch.provision(self.user)
+
+        try:
+            # Delete the cable inside the branch
+            response = self.client.delete(
+                reverse('dcim-api:cable-detail', kwargs={'pk': cable_pk}),
+                **{**self.header, 'HTTP_X_NETBOX_BRANCH': branch.schema_id},
+            )
+            self.assertEqual(response.status_code, 204)
+
+            # Query the changes API with the branch still active.  Without the
+            # fix this 500s with "Cable matching query does not exist."
+            url = reverse('plugins-api:netbox_branching-api:changediff-list')
+            response = self.client.get(
+                url,
+                {'branch_id': branch.pk},
+                **{**self.header, 'HTTP_X_NETBOX_BRANCH': branch.schema_id},
+            )
+            self.assertEqual(response.status_code, 200)
+
+            # The CableTermination ChangeDiffs must serialize via the
+            # object_repr fallback: their nested serializer would otherwise
+            # dereference the (now-deleted) Cable and raise DoesNotExist.
+            # Asserting `object` is a string equal to `object_repr` (rather
+            # than a nested dict) proves the fallback fired.
+            ct_type = ContentType.objects.get_for_model(CableTermination)
+            results = json.loads(response.content)['results']
+            termination_diffs = [
+                r for r in results
+                if r['object_type'] == f'{ct_type.app_label}.{ct_type.model}'
+            ]
+            self.assertEqual(len(termination_diffs), 2)
+            for diff in termination_diffs:
+                self.assertEqual(diff['action']['value'], ObjectChangeActionChoices.ACTION_DELETE)
+                self.assertTrue(diff['object_repr'])
+                self.assertEqual(diff['object'], diff['object_repr'])
         finally:
             connections[branch.connection_name].close()
