@@ -73,9 +73,9 @@ class SyncTestCase(TransactionTestCase):
             self.device_role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1')
 
     def tearDown(self):
-        """Clean up branch connections."""
+        """Close any branch connections that were actually opened during the test."""
         for branch in Branch.objects.all():
-            if hasattr(connections, branch.connection_name):
+            if hasattr(connections._connections, branch.connection_name):
                 connections[branch.connection_name].close()
 
     def _create_and_provision_branch(self, name='Test Branch'):

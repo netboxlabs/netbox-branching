@@ -360,9 +360,9 @@ class ObjectValidationTestCase(TransactionTestCase):
         self.user = User.objects.create_user(username='testuser')
 
     def tearDown(self):
-        """Clean up branch connections."""
+        """Close any branch connections that were actually opened during the test."""
         for branch in Branch.objects.all():
-            if hasattr(connections, branch.connection_name):
+            if hasattr(connections._connections, branch.connection_name):
                 connections[branch.connection_name].close()
 
     def _create_and_provision_branch(self, name='Test Branch'):

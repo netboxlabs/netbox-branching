@@ -195,6 +195,15 @@ class JobRunWrapperTestCase(TestCase):
     # MigrateBranchJob ---------------------------------------------------------
 
     def test_migrate_job_swallows_abort_transaction(self):
+        """
+        MigrateBranchJob.run() has no ``commit`` parameter — Branch.migrate()
+        does not currently support dry-run, so no production path triggers
+        AbortTransaction here. The job nevertheless wraps the call in
+        ``except AbortTransaction`` defensively, mirroring the other lifecycle
+        jobs; this test pins that protection so a refactor that drops the
+        try/except can't go unnoticed (and so adding a real dry-run mode in
+        the future starts from a known-good baseline).
+        """
         job_stub = self._make_job_stub()
         with mock.patch.object(Branch, 'migrate', side_effect=AbortTransaction):
             MigrateBranchJob(job_stub).run()

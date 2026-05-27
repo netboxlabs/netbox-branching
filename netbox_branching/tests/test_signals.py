@@ -62,8 +62,13 @@ class BranchSignalTestCase(TransactionTestCase):
         self.request = request
 
     def tearDown(self):
+        # Close any branch connections that were actually opened during the test.
+        # `connections._connections` is the thread-local that holds initialized
+        # connections — checking `hasattr(connections, alias)` (no __getattr__)
+        # or `alias in connections` (falls through to iterating DATABASES, which
+        # only yields 'default') would both silently do nothing.
         for branch in Branch.objects.all():
-            if hasattr(connections, branch.connection_name):
+            if hasattr(connections._connections, branch.connection_name):
                 connections[branch.connection_name].close()
 
     # -------------------------------------------------------------------------
