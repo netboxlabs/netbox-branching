@@ -1,12 +1,12 @@
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import TestCase, override_settings
 from ipam.models import Prefix
 
 from netbox_branching.models import Branch
 from netbox_branching.utilities import DynamicSchemaDict, supports_branching
 
 
-class ConfigTestCase(TransactionTestCase):
-    serialized_rollback = True
+class ConfigTestCase(TestCase):
+    # Pure in-memory checks (no schema DDL), so TestCase is sufficient.
 
     @override_settings(PLUGINS_CONFIG={
         'netbox_branching': {
