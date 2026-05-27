@@ -9,6 +9,7 @@ except ImportError:
 __all__ = (
     'BRANCH_ACTIONS',
     'BRANCH_HEADER',
+    'CONNECTION_MODELS',
     'COOKIE_NAME',
     'EXEMPT_MODELS',
     'EXEMPT_PATHS',
@@ -41,6 +42,12 @@ EXEMPT_PATHS = (
 
 # URL query parameter name
 QUERY_PARAM = '_branch'
+
+# Models whose CREATE operations must be deferred to the end of a squash merge
+# so that all related objects (e.g. terminations) exist before path tracing fires.
+CONNECTION_MODELS = (
+    'dcim.cable',
+)
 
 # Models which do not support change logging, but whose database tables
 # must be replicated for each branch to ensure proper functionality

@@ -2,7 +2,6 @@
 Tests for Branch merge functionality with common base class and iterative merge strategy.
 """
 import time
-import unittest
 import uuid
 
 from dcim.models import (
@@ -966,7 +965,6 @@ class BaseMergeTests:
         self.assertEqual(device2.virtual_chassis_id, vc_id)
         self.assertEqual(vc.master_id, device1_id)
 
-    @unittest.skip('Squash merge does not retrace cable paths after CREATE — see #150')
     def test_merge_cable_path_recalculation(self):
         """
         Test that cable paths are recalculated after merging a branch containing a new cable.
