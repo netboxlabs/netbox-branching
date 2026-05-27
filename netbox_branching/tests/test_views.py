@@ -16,7 +16,7 @@ from utilities.testing import ViewTestCases, create_tags
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import QUERY_PARAM
-from netbox_branching.models import Branch
+from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
 from netbox_branching.views import BaseBranchActionView
@@ -131,6 +131,221 @@ class BranchBulkMigrateViewTestCase(TestCase):
             'return_url': '/plugins/branching/branches/',
         })
         self.assertNotEqual(response.status_code, 200)
+
+
+class BranchActionViewTestCase(TestCase):
+    """
+    Cover the UI confirmation views for sync / merge / revert.
+
+    These views (BranchSyncView, BranchMergeView, BranchRevertView) all extend
+    BaseBranchActionView and share GET / POST plumbing for showing the
+    confirmation page and enqueuing the corresponding background job. The
+    API endpoint tests in test_api.py exercise the REST path; this class
+    covers the parallel UI path. Job enqueue is mocked so no schema work
+    happens and the test doesn't depend on Redis being available.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_user(username='actionview_super', is_superuser=True)
+        cls.unprivileged_user = User.objects.create_user(username='actionview_noperms')
+
+        # status=NEW means get_unmerged_changes() / get_unsynced_changes() both
+        # return .none(), so _get_changes_summary works without a real schema.
+        cls.new_branch = Branch(name='New Branch', status=BranchStatusChoices.NEW)
+        cls.new_branch.save(provision=False)
+
+        cls.ready_branch = Branch(name='Ready Branch', status=BranchStatusChoices.READY)
+        cls.ready_branch.save(provision=False)
+
+        cls.merged_branch = Branch(name='Merged Branch', status=BranchStatusChoices.MERGED)
+        cls.merged_branch.save(provision=False)
+
+    def setUp(self):
+        self.client.force_login(self.superuser)
+
+    def tearDown(self):
+        # Tests mock the *Job.enqueue calls, so nothing should land in the
+        # real RQ queue — but flush it anyway to avoid leaking state if a
+        # future test asserts emptiness.
+        get_queue('default').connection.flushall()
+
+    def _url(self, action, branch):
+        return reverse(f'plugins:netbox_branching:branch_{action}', kwargs={'pk': branch.pk})
+
+    # ---- sync ---------------------------------------------------------------
+
+    def test_sync_get_renders_confirmation_page(self):
+        response = self.client.get(self._url('sync', self.new_branch))
+        self.assertEqual(response.status_code, 200)
+
+    def test_sync_post_enqueues_job_and_redirects(self):
+        # READY status is required by BaseBranchActionView.valid_states for sync.
+        # get_unsynced_changes() for READY queries the main DB — no schema dependency.
+        with patch('netbox_branching.views.SyncBranchJob.enqueue') as mock_enqueue:
+            response = self.client.post(
+                self._url('sync', self.ready_branch),
+                data={'commit': 'on'},
+            )
+        mock_enqueue.assert_called_once()
+        self.assertEqual(response.status_code, 302)
+
+    def test_sync_post_with_wrong_status_shows_error(self):
+        """A NEW branch must not be syncable; the error message is flashed and no job enqueued."""
+        with patch('netbox_branching.views.SyncBranchJob.enqueue') as mock_enqueue:
+            response = self.client.post(
+                self._url('sync', self.new_branch),
+                data={'commit': 'on'},
+            )
+        mock_enqueue.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        msg_texts = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any('state' in t.lower() for t in msg_texts))
+
+    def test_sync_requires_permission(self):
+        self.client.force_login(self.unprivileged_user)
+        response = self.client.post(
+            self._url('sync', self.ready_branch),
+            data={'commit': 'on'},
+        )
+        self.assertNotEqual(response.status_code, 302)
+
+    # ---- merge --------------------------------------------------------------
+
+    def test_merge_get_renders_confirmation_page(self):
+        # NEW status keeps get_unmerged_changes() at .none(), avoiding the
+        # branch-schema query path.
+        response = self.client.get(self._url('merge', self.new_branch))
+        self.assertEqual(response.status_code, 200)
+
+    def test_merge_post_persists_strategy_and_enqueues_job(self):
+        """
+        BranchMergeView's do_action assigns form.cleaned_data['merge_strategy']
+        to branch.merge_strategy and saves before enqueueing. This is the only
+        action view that mutates the branch row, so the merge_strategy
+        round-trip is worth a direct assertion.
+        """
+        # The form will call get_unmerged_changes() on render if invalid; we
+        # short-circuit the schema query by patching it on the model.
+        with (
+            patch('netbox_branching.views.MergeBranchJob.enqueue') as mock_enqueue,
+            patch.object(Branch, 'get_unmerged_changes', return_value=ObjectChange.objects.none()),
+        ):
+            response = self.client.post(
+                self._url('merge', self.ready_branch),
+                data={'commit': 'on', 'merge_strategy': 'iterative'},
+            )
+        mock_enqueue.assert_called_once()
+        self.assertEqual(response.status_code, 302)
+        self.ready_branch.refresh_from_db()
+        self.assertEqual(self.ready_branch.merge_strategy, 'iterative')
+
+    # ---- revert -------------------------------------------------------------
+
+    def test_revert_get_renders_confirmation_page(self):
+        response = self.client.get(self._url('revert', self.merged_branch))
+        self.assertEqual(response.status_code, 200)
+
+    def test_revert_post_enqueues_job_and_redirects(self):
+        # Revert requires status=MERGED. get_action_summary returns None for revert,
+        # so no schema queries are triggered.
+        with patch('netbox_branching.views.RevertBranchJob.enqueue') as mock_enqueue:
+            response = self.client.post(
+                self._url('revert', self.merged_branch),
+                data={'commit': 'on'},
+            )
+        mock_enqueue.assert_called_once()
+        self.assertEqual(response.status_code, 302)
+
+    def test_revert_post_with_wrong_status_shows_error(self):
+        """A READY branch (not MERGED) must not be revertable."""
+        with patch('netbox_branching.views.RevertBranchJob.enqueue') as mock_enqueue:
+            response = self.client.post(
+                self._url('revert', self.ready_branch),
+                data={'commit': 'on'},
+            )
+        mock_enqueue.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+
+
+class BranchArchiveViewTestCase(TestCase):
+    """Cover BranchArchiveView: GET, POST happy path, wrong-status path."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_user(username='archiveview_super', is_superuser=True)
+        cls.merged = Branch(name='Merged To Archive', status=BranchStatusChoices.MERGED)
+        cls.merged.save(provision=False)
+        cls.ready = Branch(name='Ready Cannot Archive', status=BranchStatusChoices.READY)
+        cls.ready.save(provision=False)
+
+    def setUp(self):
+        self.client.force_login(self.superuser)
+        self.url_merged = reverse(
+            'plugins:netbox_branching:branch_archive', kwargs={'pk': self.merged.pk}
+        )
+        self.url_ready = reverse(
+            'plugins:netbox_branching:branch_archive', kwargs={'pk': self.ready.pk}
+        )
+
+    def test_archive_get_renders_confirmation_for_merged_branch(self):
+        response = self.client.get(self.url_merged)
+        self.assertEqual(response.status_code, 200)
+
+    def test_archive_post_archives_merged_branch(self):
+        # archive() is a Branch method that sets status=ARCHIVED and deprovisions
+        # the schema. We patch it so the schema-drop is a no-op for this test.
+        with patch.object(Branch, 'archive') as mock_archive:
+            response = self.client.post(self.url_merged, data={'confirm': 'on'})
+        mock_archive.assert_called_once()
+        self.assertEqual(response.status_code, 302)
+
+    def test_archive_get_for_non_merged_branch_shows_error(self):
+        """
+        BranchArchiveView._validate flashes an error and returns a redirect
+        when status != MERGED. The view calls self._validate but ignores its
+        return value in get(), so the page still renders — but the error
+        message must be present.
+        """
+        response = self.client.get(self.url_ready)
+        msg_texts = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any('merged' in t.lower() for t in msg_texts))
+
+
+class BranchMigrateViewTestCase(TestCase):
+    """Cover the single-branch BranchMigrateView (the bulk one is tested separately)."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_user(username='migrateview_super', is_superuser=True)
+        cls.pending = Branch(name='Pending Migrate', status=BranchStatusChoices.PENDING_MIGRATIONS)
+        cls.pending.save(provision=False)
+        cls.ready = Branch(name='Ready Migrate', status=BranchStatusChoices.READY)
+        cls.ready.save(provision=False)
+
+    def setUp(self):
+        self.client.force_login(self.superuser)
+
+    def _url(self, branch):
+        return reverse('plugins:netbox_branching:branch_migrate', kwargs={'pk': branch.pk})
+
+    def test_migrate_get_renders_for_pending_branch(self):
+        response = self.client.get(self._url(self.pending))
+        self.assertEqual(response.status_code, 200)
+
+    def test_migrate_post_enqueues_job_for_pending_branch(self):
+        with patch('netbox_branching.views.MigrateBranchJob.enqueue') as mock_enqueue:
+            response = self.client.post(self._url(self.pending), data={'confirm': 'on'})
+        mock_enqueue.assert_called_once()
+        self.assertEqual(response.status_code, 302)
+
+    def test_migrate_post_with_wrong_status_shows_error(self):
+        with patch('netbox_branching.views.MigrateBranchJob.enqueue') as mock_enqueue:
+            response = self.client.post(self._url(self.ready), data={'confirm': 'on'})
+        mock_enqueue.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        msg_texts = [str(m) for m in get_messages(response.wsgi_request)]
+        self.assertTrue(any('not ready' in t.lower() for t in msg_texts))
 
 
 class ObjectValidationTestCase(TransactionTestCase):
@@ -407,3 +622,73 @@ class ChangesSummaryTestCase(TestCase):
         summary = BaseBranchActionView._get_changes_summary(ObjectChange.objects.all())
         keys = list(summary['creates'].keys())
         self.assertEqual(keys, [self.device_ct, self.site_ct])
+
+
+class ChangeDiffViewTestCase(TestCase):
+    """
+    Cover ChangeDiffView.get_extra_context's three conditional branches:
+    CREATE (original=None) skips the branch-diff computation;
+    UPDATE (both original and modified set) computes the diffs;
+    DELETE (modified=None) skips the branch-diff computation.
+    Without these, the view's diff-rendering logic is exercised only by the
+    list view, which doesn't open individual records.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_user(username='diffview_super', is_superuser=True)
+        cls.branch = Branch(name='Diff View Branch', status=BranchStatusChoices.READY)
+        cls.branch.save(provision=False)
+        cls.site = Site.objects.create(name='Diff Site', slug='diff-site-view')
+        cls.site_ct = ContentType.objects.get_for_model(Site)
+
+    def setUp(self):
+        self.client.force_login(self.superuser)
+
+    def _make_diff(self, action, original, modified, current):
+        diff = ChangeDiff(
+            branch=self.branch,
+            object_type=self.site_ct,
+            object_id=self.site.pk,
+            object_repr=str(self.site),
+            action=action,
+            original=original,
+            modified=modified,
+            current=current,
+        )
+        diff.save()
+        return diff
+
+    def _url(self, diff):
+        return reverse('plugins:netbox_branching:changediff', args=[diff.pk])
+
+    def test_create_diff_renders(self):
+        diff = self._make_diff(
+            action=ObjectChangeActionChoices.ACTION_CREATE,
+            original=None,
+            modified={'name': 'New', 'description': 'created in branch'},
+            current=None,
+        )
+        response = self.client.get(self._url(diff))
+        self.assertEqual(response.status_code, 200)
+
+    def test_update_diff_renders_with_field_diffs(self):
+        """Both branches of the conditional fire when original + modified + current are all present."""
+        diff = self._make_diff(
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            original={'name': 'Diff Site', 'description': ''},
+            modified={'name': 'Diff Site', 'description': 'changed in branch'},
+            current={'name': 'Diff Site', 'description': 'changed in main'},
+        )
+        response = self.client.get(self._url(diff))
+        self.assertEqual(response.status_code, 200)
+
+    def test_delete_diff_renders(self):
+        diff = self._make_diff(
+            action=ObjectChangeActionChoices.ACTION_DELETE,
+            original={'name': 'Diff Site', 'description': ''},
+            modified=None,
+            current=None,
+        )
+        response = self.client.get(self._url(diff))
+        self.assertEqual(response.status_code, 200)
