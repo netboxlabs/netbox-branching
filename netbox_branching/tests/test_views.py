@@ -17,6 +17,7 @@ from utilities.testing import ViewTestCases, create_tags
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.models import Branch
+from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
 from netbox_branching.views import BaseBranchActionView
 
@@ -151,30 +152,7 @@ class ObjectValidationTestCase(TransactionTestCase):
 
     def _create_and_provision_branch(self, name='Test Branch'):
         """Helper to create and provision a branch."""
-        import time
-
-        branch = Branch(name=name)
-        branch.save(provision=False)
-        branch.provision(user=self.user)
-
-        # Wait for branch to be provisioned (background task)
-        max_wait = 30  # Maximum 30 seconds
-        wait_interval = 0.1  # Check every 100ms
-        elapsed = 0
-
-        while elapsed < max_wait:
-            branch.refresh_from_db()
-            if branch.status == BranchStatusChoices.READY:
-                break
-            time.sleep(wait_interval)
-            elapsed += wait_interval
-        else:
-            raise TimeoutError(
-                f"Branch {branch.name} did not become READY within {max_wait} seconds. "
-                f"Status: {branch.status}"
-            )
-
-        return branch
+        return provision_branch(user=self.user, name=name)
 
     def test_edit_object_deleted_in_main_shows_error(self):
         """

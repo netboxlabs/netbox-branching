@@ -9,7 +9,6 @@ changes and applies them to main.
 Unlike merge, there are no different strategies for sync — changes are always
 applied iteratively in chronological order.
 """
-import time
 import uuid
 
 from dcim.models import (
@@ -35,6 +34,7 @@ from netbox.context_managers import event_tracking
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
+from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
 
 User = get_user_model()
@@ -78,28 +78,8 @@ class SyncTestCase(TransactionTestCase):
                 connections[branch.connection_name].close()
 
     def _create_and_provision_branch(self, name='Test Branch'):
-        """Helper to create and provision a branch, waiting until READY."""
-        branch = Branch(name=name, merge_strategy='squash')
-        branch.save(provision=False)
-        branch.provision(user=self.user)
-
-        max_wait = 30
-        wait_interval = 0.1
-        elapsed = 0
-
-        while elapsed < max_wait:
-            branch.refresh_from_db()
-            if branch.status == BranchStatusChoices.READY:
-                break
-            time.sleep(wait_interval)
-            elapsed += wait_interval
-        else:
-            raise TimeoutError(
-                f"Branch {branch.name} did not become READY within {max_wait} seconds. "
-                f"Status: {branch.status}"
-            )
-
-        return branch
+        """Helper to create and provision a branch."""
+        return provision_branch(user=self.user, name=name, merge_strategy='squash')
 
     # -------------------------------------------------------------------------
     # No-op scenario
