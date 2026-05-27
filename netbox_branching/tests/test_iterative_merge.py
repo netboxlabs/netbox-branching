@@ -23,6 +23,7 @@ from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
 from extras.models import Tag
 from netbox.context_managers import event_tracking
+from utilities.exceptions import AbortTransaction
 
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
@@ -1031,6 +1032,64 @@ class BaseMergeTests:
         self.assertTrue(Site.objects.filter(id=site_id).exists())
         site = Site.objects.get(id=site_id)
         self.assertEqual(site.description, 'Original')
+
+    # -------------------------------------------------------------------------
+    # Dry-run (commit=False)
+    #
+    # merge() and revert() both wrap their work in a transaction and raise
+    # AbortTransaction when commit=False. The except block then restores the
+    # branch's pre-call status and re-raises. These tests pin down that
+    # contract at the model level for both merge strategies (the mixin is
+    # inherited by SquashMergeTestCase too).
+    # -------------------------------------------------------------------------
+
+    def test_merge_commit_false_rolls_back_and_preserves_status(self):
+        branch = self._create_and_provision_branch()
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # Make a change in the branch so merge has work to do
+        with activate_branch(branch), event_tracking(request):
+            Site.objects.create(name='Branch-only Site', slug='branch-only-dryrun')
+
+        with self.assertRaises(AbortTransaction):
+            branch.merge(user=self.user, commit=False)
+
+        # Branch returned to READY (not MERGED)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+        # The site did not land in main
+        self.assertFalse(
+            Site.objects.filter(slug='branch-only-dryrun').exists(),
+            msg='commit=False must not persist branch changes into main',
+        )
+
+    def test_revert_commit_false_rolls_back_and_preserves_merged_status(self):
+        branch = self._create_and_provision_branch()
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with activate_branch(branch), event_tracking(request):
+            site = Site.objects.create(name='To Revert', slug='to-revert-dryrun')
+        branch.merge(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        self.assertTrue(Site.objects.filter(pk=site.pk).exists())
+
+        with self.assertRaises(AbortTransaction):
+            branch.revert(user=self.user, commit=False)
+
+        # Branch stays MERGED; the site is still in main (revert was rolled back)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        self.assertTrue(
+            Site.objects.filter(pk=site.pk).exists(),
+            msg='commit=False must not undo the previously merged change',
+        )
 
 
 class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):

@@ -31,6 +31,7 @@ from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
 from extras.models import Tag
 from netbox.context_managers import event_tracking
+from utilities.exceptions import AbortTransaction
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
@@ -941,3 +942,35 @@ class SyncTestCase(TransactionTestCase):
         # Object remains absent from branch schema (branch deletion stands)
         with activate_branch(branch):
             self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+    # -------------------------------------------------------------------------
+    # Dry-run (commit=False)
+    # -------------------------------------------------------------------------
+
+    def test_sync_commit_false_rolls_back_and_preserves_status(self):
+        """
+        sync(commit=False) raises AbortTransaction inside the atomic block to
+        roll back any work, and the outer handler restores the branch status
+        to READY. The exception then propagates so the caller can distinguish
+        a dry-run from a successful commit. This is the contract users rely on
+        when previewing a sync before committing.
+        """
+        # Create a change in main AFTER provisioning so sync has work to do
+        branch = self._create_and_provision_branch()
+
+        with event_tracking(self.request):
+            Site.objects.create(name='Pending Site', slug='pending-site-dryrun')
+
+        with self.assertRaises(AbortTransaction):
+            branch.sync(user=self.user, commit=False)
+
+        # Status restored
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+        # The site was NOT pulled into the branch schema
+        with activate_branch(branch):
+            self.assertFalse(
+                Site.objects.filter(slug='pending-site-dryrun').exists(),
+                msg="commit=False must not persist the synced change into the branch schema",
+            )

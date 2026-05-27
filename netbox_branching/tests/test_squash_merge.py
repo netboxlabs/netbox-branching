@@ -747,3 +747,51 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.READY)
         self.assertFalse(Location.objects.filter(id=location_id).exists())
+
+    def test_merge_squash_collapse_update_then_delete(self):
+        """
+        A branch that updates an existing object then deletes it must collapse
+        to a single DELETE in the squashed output. The intermediate UPDATE
+        state must never land in main — without proper collapse, the row
+        would briefly take the updated form before being deleted, which a
+        downstream signal handler could observe and act on.
+
+        CREATE+DELETE→SKIP and CREATE+UPDATE+DELETE→SKIP are already covered
+        by test_merge_after_sync_cascade_delete_of_branch_only_object and
+        test_merge_after_sync_cascade_delete_of_branch_modified_object;
+        this fills the remaining UPDATE+DELETE→DELETE transition.
+        """
+        # Site exists in main BEFORE provisioning so the branch inherits it
+        with event_tracking(self._make_request()):
+            site = Site.objects.create(
+                name='Doomed Site', slug='doomed-site', description='Original'
+            )
+        site_id = site.id
+
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            s = Site.objects.get(id=site_id)
+            s.snapshot()
+            s.description = 'Intermediate'
+            s.save()
+
+            Site.objects.get(id=site_id).delete()
+
+        self._assert_object_changes(branch, Site, site_id, 2, ['update', 'delete'])
+
+        branch.merge(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        self.assertFalse(
+            Site.objects.filter(id=site_id).exists(),
+            msg='UPDATE+DELETE must collapse to a single DELETE; main row remains',
+        )
+
+    def _make_request(self):
+        """Build a per-test request for event_tracking()."""
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+        return request

@@ -13,7 +13,7 @@ surface as confusing routing errors. The tests here pin down the contracts of
 each primitive in isolation so regressions can be diagnosed quickly.
 """
 from dcim.models import Site
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from netbox_branching.contextvars import active_branch
 from netbox_branching.database import BranchAwareRouter
@@ -120,6 +120,21 @@ class BranchAwareRouterTestCase(TestCase):
         self._activate(self.branch)
         self.assertIsNone(self.router.db_for_read(Branch))
         self.assertIsNone(self.router.db_for_write(Branch))
+
+    @override_settings(PLUGINS_CONFIG={
+        'netbox_branching': {'exempt_models': ['dcim.site']},
+    })
+    def test_exempt_model_routes_to_main_even_when_branch_active(self):
+        """
+        exempt_models is read dynamically by supports_branching() on every
+        query, so adding a model to the list must immediately stop the router
+        from sending it to the branch — even for a branch that was provisioned
+        before the model was exempted. Without this guarantee, exempting a
+        model in a running NetBox process wouldn't take effect until restart.
+        """
+        self._activate(self.branch)
+        self.assertIsNone(self.router.db_for_write(Site))
+        self.assertIsNone(self.router.db_for_read(Site))
 
     def test_object_change_always_routes_to_active_branch(self):
         """

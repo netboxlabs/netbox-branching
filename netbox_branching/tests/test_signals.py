@@ -202,3 +202,26 @@ class BranchSignalTestCase(TransactionTestCase):
         self.assertEqual(len(post), 1)
         self.assertEqual(pre[0][1]['user'], self.user)
         self.assertEqual(post[0][1]['user'], self.user)
+
+    # -------------------------------------------------------------------------
+    # receiver exception handling
+    # -------------------------------------------------------------------------
+
+    def test_receiver_exception_propagates_through_send(self):
+        """
+        The plugin uses Signal.send() (not send_robust), so a raising receiver
+        aborts the dispatch and propagates the exception. Third-party
+        integrations rely on this contract — if it ever changes to
+        send_robust, post_X failures would be swallowed and downstream state
+        would diverge silently.
+        """
+
+        def boom(sender, **kwargs):
+            raise RuntimeError('boom from receiver')
+
+        branch_signals.post_provision.connect(boom, weak=False, dispatch_uid='boom_test')
+        try:
+            with self.assertRaises(RuntimeError):
+                provision_branch(user=self.user)
+        finally:
+            branch_signals.post_provision.disconnect(dispatch_uid='boom_test')
