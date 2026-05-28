@@ -40,7 +40,10 @@ post_revert = Signal()
 #
 # kwargs:
 #   collapsed_changes — dict of CollapsedChange keyed by (app.model, pk).
-#                       Mutate in place; the return value is ignored.
+#                       Bidirectional-cycle splits also add synthetic UPDATE
+#                       entries keyed by (app.model, pk, 'update_<field>');
+#                       match object identity on key[:2]. Mutate in place;
+#                       the return value is ignored.
 #   operation — 'merge' or 'revert'. Revert reverses the topological order
 #               after sorting, so edges added unconditionally still apply in
 #               reverse; receivers that only want their edges to influence
