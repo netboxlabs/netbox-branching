@@ -63,6 +63,23 @@ __all__ = (
 # of SET LOCAL — value is passed as a query parameter rather than interpolated.
 _SET_SEARCH_PATH = "SELECT pg_catalog.set_config('search_path', %s, true)"
 
+# Max length of ObjectChange.message, cached at import time to avoid a _meta lookup
+# inside the sync loop.
+_OBJECTCHANGE_MESSAGE_MAX_LENGTH = ObjectChange_._meta.get_field('message').max_length
+
+
+def _serialize_for_sync(obj):
+    """
+    Serialize an object for sync-time pre/post snapshots, matching the format
+    record_change_diff expects on ObjectChange.postchange_data_clean.
+
+    Defensive: every branchable model inherits ChangeLoggingMixin.serialize_object,
+    so the utility-function fallback should not be reached in practice.
+    """
+    if hasattr(obj, 'serialize_object'):
+        return obj.serialize_object(exclude=['created', 'last_updated'])
+    return serialize_object(obj, exclude=['created', 'last_updated'])
+
 
 @contextmanager
 def _branch_isolated_runsql(branch_schema, main_schema):
@@ -549,38 +566,30 @@ class Branch(JobsMixin, PrimaryModel):
     # Branch actions
     #
 
-    def _apply_sync_update(self, change, user, logger, request_id):
+    def _apply_sync_update(self, change, user, logger, request_id, touched_object_keys):
         """
         Apply a non-DELETE change from main and, when the branch has also touched the
         same object, record a sync-originated ObjectChange so the merge replay does
         not undo it (#28).
-        """
-        # Avoid a circular import
-        from .changes import ChangeDiff
 
-        model_class = change.changed_object_type.model_class()
-        content_type = change.changed_object_type
+        ``touched_object_keys`` is a set of ``(content_type_id, object_id)`` tuples
+        for which the branch has at least one ChangeDiff. It is pre-fetched once by
+        the caller to avoid an N+1 query inside the sync loop.
+        """
+        content_type_id = change.changed_object_type_id
         object_id = change.changed_object_id
 
         # If the branch has not touched this object, no merge-time conflict is possible
-        has_branch_change = ChangeDiff.objects.filter(
-            branch=self, object_type=content_type, object_id=object_id,
-        ).exists()
-        if not has_branch_change:
+        if (content_type_id, object_id) not in touched_object_keys:
             change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
             return
 
-        # Defensive: every branchable model inherits ChangeLoggingMixin.serialize_object,
-        # so the utility-function fallback should not be reached in practice.
-        def _serialize(obj):
-            if hasattr(obj, 'serialize_object'):
-                return obj.serialize_object(exclude=['created', 'last_updated'])
-            return serialize_object(obj, exclude=['created', 'last_updated'])
+        model_class = change.changed_object_type.model_class()
 
         # Capture the branch's state before applying main's change
         try:
             before = model_class.objects.using(self.connection_name).get(pk=object_id)
-            prechange_data = _serialize(before)
+            prechange_data = _serialize_for_sync(before)
         except model_class.DoesNotExist:
             # Branch already removed the object; let apply() handle it via skip_missing
             change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
@@ -594,19 +603,18 @@ class Branch(JobsMixin, PrimaryModel):
             after = model_class.objects.using(self.connection_name).get(pk=object_id)
         except model_class.DoesNotExist:
             return
-        postchange_data = _serialize(after)
+        postchange_data = _serialize_for_sync(after)
         if prechange_data == postchange_data:
             return
 
         # Create via the core model, not the proxy: Django dispatches proxy post_save
         # with the proxy as sender, which would bypass record_change_diff.
-        message_max_length = ObjectChange_._meta.get_field('message').max_length
         sync_message = (
             f'Synced from main (originally by {change.user_name or "system"})'
-        )[:message_max_length]
+        )[:_OBJECTCHANGE_MESSAGE_MAX_LENGTH]
         ObjectChange_.objects.using(self.connection_name).create(
             action=ObjectChangeActionChoices.ACTION_UPDATE,
-            changed_object_type=content_type,
+            changed_object_type_id=content_type_id,
             changed_object_id=object_id,
             object_repr=str(after),
             prechange_data=prechange_data,
@@ -732,6 +740,15 @@ class Branch(JobsMixin, PrimaryModel):
                 models = set()
                 branchable_models = {ct.model_class() for ct in get_branchable_object_types()}
 
+                # Pre-fetch the set of objects the branch has touched so _apply_sync_update
+                # can do an in-memory check instead of a per-change ChangeDiff.exists() query.
+                # _apply_sync_update never creates a new ChangeDiff (it only updates
+                # existing ones via record_change_diff), so the set is stable for the loop.
+                from .changes import ChangeDiff
+                touched_object_keys = set(
+                    ChangeDiff.objects.filter(branch=self).values_list('object_type_id', 'object_id')
+                )
+
                 # Apply each change from the main schema
                 for change in changes:
                     model_class = change.changed_object_type.model_class()
@@ -742,7 +759,7 @@ class Branch(JobsMixin, PrimaryModel):
                         )
                         models.update(cascade_models)
                     else:
-                        self._apply_sync_update(change, user, logger, request_id)
+                        self._apply_sync_update(change, user, logger, request_id, touched_object_keys)
 
                 if not commit:
                     raise AbortTransaction()
