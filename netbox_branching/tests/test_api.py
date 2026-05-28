@@ -7,7 +7,7 @@ from dcim.models import Cable, CableTermination, Device, DeviceRole, DeviceType,
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections
-from django.test import Client, RequestFactory, TransactionTestCase
+from django.test import Client, RequestFactory, TestCase, TransactionTestCase
 from django.urls import reverse
 from netbox.context_managers import event_tracking
 from users.models import Token
@@ -124,7 +124,9 @@ class APITestCase(BaseAPITestCase, TransactionTestCase):
         self.assertEqual(results[0]['name'], 'Site 2')
 
 
-class BranchArchiveAPITestCase(BaseAPITestCase, TransactionTestCase):
+class BranchArchiveAPITestCase(BaseAPITestCase, TestCase):
+    # No branch provisioning here — every test creates a Branch row with
+    # provision=False, so the outer transaction TestCase provides is sufficient.
 
     def test_archive_endpoint_success(self):
         branch = Branch(name='Test Branch', status=BranchStatusChoices.MERGED)
@@ -356,19 +358,21 @@ class BranchConflictAPITestMixin:
         self.assertEqual(len(data['conflicts']), 2)
 
 
-class BranchSyncAPITestCase(BranchConflictAPITestMixin, BaseBranchAPITestCase, TransactionTestCase):
+class BranchSyncAPITestCase(BranchConflictAPITestMixin, BaseBranchAPITestCase, TestCase):
+    # The sync/merge/revert endpoints enqueue an AsyncJob; the job itself does
+    # not run in these tests, so no schema DDL happens and TestCase suffices.
     action = 'sync'
     valid_status = BranchStatusChoices.READY
     invalid_status = BranchStatusChoices.NEW
 
 
-class BranchMergeAPITestCase(BranchConflictAPITestMixin, BaseBranchAPITestCase, TransactionTestCase):
+class BranchMergeAPITestCase(BranchConflictAPITestMixin, BaseBranchAPITestCase, TestCase):
     action = 'merge'
     valid_status = BranchStatusChoices.READY
     invalid_status = BranchStatusChoices.NEW
 
 
-class BranchRevertAPITestCase(BaseBranchAPITestCase, TransactionTestCase):
+class BranchRevertAPITestCase(BaseBranchAPITestCase, TestCase):
     action = 'revert'
     valid_status = BranchStatusChoices.MERGED
     invalid_status = BranchStatusChoices.READY

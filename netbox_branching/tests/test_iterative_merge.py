@@ -1,7 +1,6 @@
 """
 Tests for Branch merge functionality with common base class and iterative merge strategy.
 """
-import time
 import unittest
 import uuid
 
@@ -24,9 +23,11 @@ from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
 from extras.models import Tag
 from netbox.context_managers import event_tracking
+from utilities.exceptions import AbortTransaction
 
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
+from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
 
 User = get_user_model()
@@ -68,35 +69,14 @@ class BaseMergeTests:
             self.device_role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1')
 
     def tearDown(self):
-        """Clean up branch connections."""
+        """Close any branch connections that were actually opened during the test."""
         for branch in Branch.objects.all():
-            if hasattr(connections, branch.connection_name):
+            if hasattr(connections._connections, branch.connection_name):
                 connections[branch.connection_name].close()
 
     def _create_and_provision_branch(self, name='Test Branch'):
         """Helper to create and provision a branch using the subclass's merge strategy."""
-        branch = Branch(name=name, merge_strategy=self.MERGE_STRATEGY)
-        branch.save(provision=False)
-        branch.provision(user=self.user)
-
-        # Wait for branch to be provisioned (background task)
-        max_wait = 30  # Maximum 30 seconds
-        wait_interval = 0.1  # Check every 100ms
-        elapsed = 0
-
-        while elapsed < max_wait:
-            branch.refresh_from_db()
-            if branch.status == BranchStatusChoices.READY:
-                break
-            time.sleep(wait_interval)
-            elapsed += wait_interval
-        else:
-            raise TimeoutError(
-                f"Branch {branch.name} did not become READY within {max_wait} seconds. "
-                f"Status: {branch.status}"
-            )
-
-        return branch
+        return provision_branch(user=self.user, name=name, merge_strategy=self.MERGE_STRATEGY)
 
     def _assert_object_changes(self, branch, model, object_id, expected_count, expected_actions=None):
         """
@@ -1052,6 +1032,64 @@ class BaseMergeTests:
         self.assertTrue(Site.objects.filter(id=site_id).exists())
         site = Site.objects.get(id=site_id)
         self.assertEqual(site.description, 'Original')
+
+    # -------------------------------------------------------------------------
+    # Dry-run (commit=False)
+    #
+    # merge() and revert() both wrap their work in a transaction and raise
+    # AbortTransaction when commit=False. The except block then restores the
+    # branch's pre-call status and re-raises. These tests pin down that
+    # contract at the model level for both merge strategies (the mixin is
+    # inherited by SquashMergeTestCase too).
+    # -------------------------------------------------------------------------
+
+    def test_merge_commit_false_rolls_back_and_preserves_status(self):
+        branch = self._create_and_provision_branch()
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # Make a change in the branch so merge has work to do
+        with activate_branch(branch), event_tracking(request):
+            Site.objects.create(name='Branch-only Site', slug='branch-only-dryrun')
+
+        with self.assertRaises(AbortTransaction):
+            branch.merge(user=self.user, commit=False)
+
+        # Branch returned to READY (not MERGED)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+        # The site did not land in main
+        self.assertFalse(
+            Site.objects.filter(slug='branch-only-dryrun').exists(),
+            msg='commit=False must not persist branch changes into main',
+        )
+
+    def test_revert_commit_false_rolls_back_and_preserves_merged_status(self):
+        branch = self._create_and_provision_branch()
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with activate_branch(branch), event_tracking(request):
+            site = Site.objects.create(name='To Revert', slug='to-revert-dryrun')
+        branch.merge(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        self.assertTrue(Site.objects.filter(pk=site.pk).exists())
+
+        with self.assertRaises(AbortTransaction):
+            branch.revert(user=self.user, commit=False)
+
+        # Branch stays MERGED; the site is still in main (revert was rolled back)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        self.assertTrue(
+            Site.objects.filter(pk=site.pk).exists(),
+            msg='commit=False must not undo the previously merged change',
+        )
 
 
 class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
