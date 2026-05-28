@@ -549,6 +549,80 @@ class Branch(JobsMixin, PrimaryModel):
     # Branch actions
     #
 
+    def _apply_sync_update(self, change, user, logger, request_id):
+        """
+        Apply a non-DELETE change from main to the branch schema. When the branch has
+        also touched the same object (an existing ChangeDiff indicates a branch-side
+        ObjectChange exists), record a sync-originated ObjectChange in the branch
+        schema so the merge replay produces the synced value rather than the branch's
+        stale pre-sync value (issue #28).
+        """
+        # Avoid a circular import
+        from .changes import ChangeDiff
+
+        model_class = change.changed_object_type.model_class()
+        content_type = change.changed_object_type
+        object_id = change.changed_object_id
+
+        # If the branch has not touched this object, no merge-time conflict is possible —
+        # apply the change with no further bookkeeping (preserves the historical fast path).
+        has_branch_change = ChangeDiff.objects.filter(
+            branch=self, object_type=content_type, object_id=object_id,
+        ).exists()
+        if not has_branch_change:
+            change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+            return
+
+        # Capture the branch's state before applying main's change
+        try:
+            before = model_class.objects.using(self.connection_name).get(pk=object_id)
+            if hasattr(before, 'serialize_object'):
+                prechange_data = before.serialize_object(exclude=['created', 'last_updated'])
+            else:
+                prechange_data = serialize_object(before, exclude=['created', 'last_updated'])
+        except model_class.DoesNotExist:
+            # Branch already removed the object; let apply() decide what to do (skip_missing).
+            change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+            return
+
+        # Apply the change from main onto the branch
+        change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+
+        # Capture the branch's state after applying main's change
+        try:
+            after = model_class.objects.using(self.connection_name).get(pk=object_id)
+        except model_class.DoesNotExist:
+            return
+        if hasattr(after, 'serialize_object'):
+            postchange_data = after.serialize_object(exclude=['created', 'last_updated'])
+        else:
+            postchange_data = serialize_object(after, exclude=['created', 'last_updated'])
+        if prechange_data == postchange_data:
+            return
+
+        # Record the sync as an ObjectChange in the branch schema. The merge replay
+        # of this entry overwrites whatever the branch's earlier change set, restoring
+        # the value that was accepted from main during the sync. Create through the
+        # core (non-proxy) model so the post_save signal reaches receivers registered
+        # against core.models.ObjectChange — Django sends proxy-model signals with the
+        # proxy class as sender, which would otherwise bypass record_change_diff and
+        # leave ChangeDiff.modified (and the conflict marker) stale.
+        ObjectChange_.objects.using(self.connection_name).create(
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            changed_object_type=content_type,
+            changed_object_id=object_id,
+            object_repr=str(after),
+            prechange_data=prechange_data,
+            postchange_data=postchange_data,
+            user=user,
+            user_name=user.username if user else '',
+            request_id=request_id,
+        )
+        logger.debug(
+            f'Recorded sync-applied change to {model_class._meta.verbose_name} {after} '
+            f'(supersedes prior branch change on conflicting fields)'
+        )
+
     def _handle_sync_delete(self, change, branchable_models, user, logger, request_id=None):
         """
         Apply a DELETE change to the branch schema and record ObjectChange entries for any
@@ -662,7 +736,7 @@ class Branch(JobsMixin, PrimaryModel):
                         )
                         models.update(cascade_models)
                     else:
-                        change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+                        self._apply_sync_update(change, user, logger, request_id)
 
                 if not commit:
                     raise AbortTransaction()

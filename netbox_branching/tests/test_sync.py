@@ -33,7 +33,7 @@ from django.urls import reverse
 from extras.models import Tag
 from netbox.context_managers import event_tracking
 
-from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.utilities import activate_branch
 
@@ -77,9 +77,9 @@ class SyncTestCase(TransactionTestCase):
             if hasattr(connections, branch.connection_name):
                 connections[branch.connection_name].close()
 
-    def _create_and_provision_branch(self, name='Test Branch'):
+    def _create_and_provision_branch(self, name='Test Branch', merge_strategy=BranchMergeStrategyChoices.SQUASH):
         """Helper to create and provision a branch, waiting until READY."""
-        branch = Branch(name=name, merge_strategy='squash')
+        branch = Branch(name=name, merge_strategy=merge_strategy)
         branch.save(provision=False)
         branch.provision(user=self.user)
 
@@ -231,6 +231,66 @@ class SyncTestCase(TransactionTestCase):
 
         branch.refresh_from_db()
         self.assertGreater(branch.last_sync, initial_last_sync)
+
+    def _run_sync_conflict_merge_scenario(self, merge_strategy):
+        """
+        Reproduce issue #28 against a specific merge strategy: branch and main both
+        modify site.status, the branch is synced (accepting main's value), and the
+        branch is then merged. Merging must preserve main's synced value.
+        """
+        with event_tracking(self.request):
+            site = Site.objects.create(
+                name=f'Conflict Site {merge_strategy}',
+                slug=f'conflict-site-{merge_strategy}',
+                status='active',
+            )
+            site_id = site.id
+
+        branch = self._create_and_provision_branch(
+            name=f'Conflict Branch {merge_strategy}', merge_strategy=merge_strategy,
+        )
+
+        # Main: active → staging
+        with event_tracking(self.request):
+            main_site = Site.objects.get(id=site_id)
+            main_site.snapshot()
+            main_site.status = 'staging'
+            main_site.save()
+
+        # Branch: active → planned
+        with activate_branch(branch), event_tracking(self.request):
+            branch_site = Site.objects.get(id=site_id)
+            branch_site.snapshot()
+            branch_site.status = 'planned'
+            branch_site.save()
+
+        # ChangeDiff records a conflict on status
+        content_type = ContentType.objects.get_for_model(Site)
+        diff = ChangeDiff.objects.get(branch=branch, object_type=content_type, object_id=site_id)
+        self.assertIsNotNone(diff.conflicts)
+        self.assertIn('status', diff.conflicts)
+
+        # Sync: main's value (staging) overwrites the branch's value (planned)
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertEqual(Site.objects.get(id=site_id).status, 'staging')
+
+        # The acknowledged conflict should no longer appear on the ChangeDiff
+        diff.refresh_from_db()
+        self.assertIsNone(diff.conflicts)
+
+        # Merge: main must keep the synced value, not revert to the branch's pre-sync value
+        branch.merge(user=self.user, commit=True)
+        self.assertEqual(Site.objects.get(id=site_id).status, 'staging')
+
+    def test_sync_conflict_resolution_preserved_on_merge_squash(self):
+        """Regression test for issue #28 against the squash merge strategy."""
+        self._run_sync_conflict_merge_scenario(BranchMergeStrategyChoices.SQUASH)
+
+    def test_sync_conflict_resolution_preserved_on_merge_iterative(self):
+        """Regression test for issue #28 against the iterative merge strategy."""
+        self._run_sync_conflict_merge_scenario(BranchMergeStrategyChoices.ITERATIVE)
 
     def test_sync_m2m_tags_concurrent_changes(self):
         """
