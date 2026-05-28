@@ -570,13 +570,17 @@ class Branch(JobsMixin, PrimaryModel):
             change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
             return
 
+        # Defensive: every branchable model inherits ChangeLoggingMixin.serialize_object,
+        # so the utility-function fallback should not be reached in practice.
+        def _serialize(obj):
+            if hasattr(obj, 'serialize_object'):
+                return obj.serialize_object(exclude=['created', 'last_updated'])
+            return serialize_object(obj, exclude=['created', 'last_updated'])
+
         # Capture the branch's state before applying main's change
         try:
             before = model_class.objects.using(self.connection_name).get(pk=object_id)
-            if hasattr(before, 'serialize_object'):
-                prechange_data = before.serialize_object(exclude=['created', 'last_updated'])
-            else:
-                prechange_data = serialize_object(before, exclude=['created', 'last_updated'])
+            prechange_data = _serialize(before)
         except model_class.DoesNotExist:
             # Branch already removed the object; let apply() handle it via skip_missing
             change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
@@ -590,10 +594,7 @@ class Branch(JobsMixin, PrimaryModel):
             after = model_class.objects.using(self.connection_name).get(pk=object_id)
         except model_class.DoesNotExist:
             return
-        if hasattr(after, 'serialize_object'):
-            postchange_data = after.serialize_object(exclude=['created', 'last_updated'])
-        else:
-            postchange_data = serialize_object(after, exclude=['created', 'last_updated'])
+        postchange_data = _serialize(after)
         if prechange_data == postchange_data:
             return
 
@@ -601,7 +602,7 @@ class Branch(JobsMixin, PrimaryModel):
         # with the proxy as sender, which would bypass record_change_diff.
         message_max_length = ObjectChange_._meta.get_field('message').max_length
         sync_message = (
-            f'Applied from branch sync (main change by {change.user_name or "system"})'
+            f'Synced from main (originally by {change.user_name or "system"})'
         )[:message_max_length]
         ObjectChange_.objects.using(self.connection_name).create(
             action=ObjectChangeActionChoices.ACTION_UPDATE,
@@ -723,9 +724,11 @@ class Branch(JobsMixin, PrimaryModel):
             # ChangeDiff updates (written to the default DB via record_change_diff
             # when the synthetic ObjectChange is saved) roll back together with the
             # branch-schema writes if AbortTransaction is raised (e.g. commit=False).
-            with activate_branch(self), \
-                    transaction.atomic(using=DEFAULT_DB_ALIAS), \
-                    transaction.atomic(using=self.connection_name):
+            with (
+                activate_branch(self),
+                transaction.atomic(using=DEFAULT_DB_ALIAS),
+                transaction.atomic(using=self.connection_name),
+            ):
                 models = set()
                 branchable_models = {ct.model_class() for ct in get_branchable_object_types()}
 

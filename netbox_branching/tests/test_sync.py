@@ -12,6 +12,7 @@ applied iteratively in chronological order.
 import time
 import uuid
 
+from core.models import ObjectChange as CoreObjectChange
 from dcim.models import (
     Cable,
     CablePath,
@@ -384,7 +385,6 @@ class SyncTestCase(TransactionTestCase):
 
         # Capture the branch's ObjectChange count for this site before sync so we can
         # assert that the early-return path did not write a synthetic ObjectChange.
-        from core.models import ObjectChange as CoreObjectChange
         content_type = ContentType.objects.get_for_model(Site)
         pre_sync_change_count = CoreObjectChange.objects.using(branch.connection_name).filter(
             changed_object_type=content_type, changed_object_id=site_id,
