@@ -551,11 +551,9 @@ class Branch(JobsMixin, PrimaryModel):
 
     def _apply_sync_update(self, change, user, logger, request_id):
         """
-        Apply a non-DELETE change from main to the branch schema. When the branch has
-        also touched the same object (an existing ChangeDiff indicates a branch-side
-        ObjectChange exists), record a sync-originated ObjectChange in the branch
-        schema so the merge replay produces the synced value rather than the branch's
-        stale pre-sync value (issue #28).
+        Apply a non-DELETE change from main and, when the branch has also touched the
+        same object, record a sync-originated ObjectChange so the merge replay does
+        not undo it (#28).
         """
         # Avoid a circular import
         from .changes import ChangeDiff
@@ -564,8 +562,7 @@ class Branch(JobsMixin, PrimaryModel):
         content_type = change.changed_object_type
         object_id = change.changed_object_id
 
-        # If the branch has not touched this object, no merge-time conflict is possible —
-        # apply the change with no further bookkeeping (preserves the historical fast path).
+        # If the branch has not touched this object, no merge-time conflict is possible
         has_branch_change = ChangeDiff.objects.filter(
             branch=self, object_type=content_type, object_id=object_id,
         ).exists()
@@ -581,7 +578,7 @@ class Branch(JobsMixin, PrimaryModel):
             else:
                 prechange_data = serialize_object(before, exclude=['created', 'last_updated'])
         except model_class.DoesNotExist:
-            # Branch already removed the object; let apply() decide what to do (skip_missing).
+            # Branch already removed the object; let apply() handle it via skip_missing
             change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
             return
 
@@ -600,13 +597,8 @@ class Branch(JobsMixin, PrimaryModel):
         if prechange_data == postchange_data:
             return
 
-        # Record the sync as an ObjectChange in the branch schema. The merge replay
-        # of this entry overwrites whatever the branch's earlier change set, restoring
-        # the value that was accepted from main during the sync. Create through the
-        # core (non-proxy) model so the post_save signal reaches receivers registered
-        # against core.models.ObjectChange — Django sends proxy-model signals with the
-        # proxy class as sender, which would otherwise bypass record_change_diff and
-        # leave ChangeDiff.modified (and the conflict marker) stale.
+        # Create via the core model, not the proxy: Django dispatches proxy post_save
+        # with the proxy as sender, which would bypass record_change_diff.
         ObjectChange_.objects.using(self.connection_name).create(
             action=ObjectChangeActionChoices.ACTION_UPDATE,
             changed_object_type=content_type,

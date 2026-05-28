@@ -267,8 +267,7 @@ class SyncTestCase(TransactionTestCase):
         # ChangeDiff records a conflict on status
         content_type = ContentType.objects.get_for_model(Site)
         diff = ChangeDiff.objects.get(branch=branch, object_type=content_type, object_id=site_id)
-        self.assertIsNotNone(diff.conflicts)
-        self.assertIn('status', diff.conflicts)
+        self.assertIn('status', diff.conflicts or [])
 
         # Sync: main's value (staging) overwrites the branch's value (planned)
         branch.sync(user=self.user, commit=True)
