@@ -599,6 +599,7 @@ class Branch(JobsMixin, PrimaryModel):
 
         # Create via the core model, not the proxy: Django dispatches proxy post_save
         # with the proxy as sender, which would bypass record_change_diff.
+        sync_message = f'Applied from branch sync (main change by {change.user_name or "system"})'[:200]
         ObjectChange_.objects.using(self.connection_name).create(
             action=ObjectChangeActionChoices.ACTION_UPDATE,
             changed_object_type=content_type,
@@ -609,6 +610,7 @@ class Branch(JobsMixin, PrimaryModel):
             user=user,
             user_name=user.username if user else '',
             request_id=request_id,
+            message=sync_message,
         )
         logger.debug(
             f'Recorded sync-applied change to {model_class._meta.verbose_name} {after} '
