@@ -9,7 +9,6 @@ changes and applies them to main.
 Unlike merge, there are no different strategies for sync — changes are always
 applied iteratively in chronological order.
 """
-import time
 import uuid
 
 from core.models import ObjectChange as CoreObjectChange
@@ -33,9 +32,11 @@ from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
 from extras.models import Tag
 from netbox.context_managers import event_tracking
+from utilities.exceptions import AbortTransaction
 
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
+from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
 
 User = get_user_model()
@@ -73,34 +74,14 @@ class SyncTestCase(TransactionTestCase):
             self.device_role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1')
 
     def tearDown(self):
-        """Clean up branch connections."""
+        """Close any branch connections that were actually opened during the test."""
         for branch in Branch.objects.all():
-            if hasattr(connections, branch.connection_name):
+            if hasattr(connections._connections, branch.connection_name):
                 connections[branch.connection_name].close()
 
     def _create_and_provision_branch(self, name='Test Branch', merge_strategy=BranchMergeStrategyChoices.SQUASH):
-        """Helper to create and provision a branch, waiting until READY."""
-        branch = Branch(name=name, merge_strategy=merge_strategy)
-        branch.save(provision=False)
-        branch.provision(user=self.user)
-
-        max_wait = 30
-        wait_interval = 0.1
-        elapsed = 0
-
-        while elapsed < max_wait:
-            branch.refresh_from_db()
-            if branch.status == BranchStatusChoices.READY:
-                break
-            time.sleep(wait_interval)
-            elapsed += wait_interval
-        else:
-            raise TimeoutError(
-                f"Branch {branch.name} did not become READY within {max_wait} seconds. "
-                f"Status: {branch.status}"
-            )
-
-        return branch
+        """Helper to create and provision a branch."""
+        return provision_branch(user=self.user, name=name, merge_strategy=merge_strategy)
 
     # -------------------------------------------------------------------------
     # No-op scenario
@@ -1210,3 +1191,35 @@ class SyncTestCase(TransactionTestCase):
         # Object remains absent from branch schema (branch deletion stands)
         with activate_branch(branch):
             self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+    # -------------------------------------------------------------------------
+    # Dry-run (commit=False)
+    # -------------------------------------------------------------------------
+
+    def test_sync_commit_false_rolls_back_and_preserves_status(self):
+        """
+        sync(commit=False) raises AbortTransaction inside the atomic block to
+        roll back any work, and the outer handler restores the branch status
+        to READY. The exception then propagates so the caller can distinguish
+        a dry-run from a successful commit. This is the contract users rely on
+        when previewing a sync before committing.
+        """
+        # Create a change in main AFTER provisioning so sync has work to do
+        branch = self._create_and_provision_branch()
+
+        with event_tracking(self.request):
+            Site.objects.create(name='Pending Site', slug='pending-site-dryrun')
+
+        with self.assertRaises(AbortTransaction):
+            branch.sync(user=self.user, commit=False)
+
+        # Status restored
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+        # The site was NOT pulled into the branch schema
+        with activate_branch(branch):
+            self.assertFalse(
+                Site.objects.filter(slug='pending-site-dryrun').exists(),
+                msg="commit=False must not persist the synced change into the branch schema",
+            )

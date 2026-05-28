@@ -42,7 +42,7 @@ class BranchNotification(PluginTemplateExtension):
             object_type=ct,
             object_id=instance.pk
         ).exclude(
-            branch__status=BranchStatusChoices.MERGED
+            branch__status__in=(BranchStatusChoices.MERGED, BranchStatusChoices.ARCHIVED)
         ).exclude(
             branch=active_branch.get()
         )
