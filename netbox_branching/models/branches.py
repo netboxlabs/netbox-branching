@@ -599,7 +599,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         # Create via the core model, not the proxy: Django dispatches proxy post_save
         # with the proxy as sender, which would bypass record_change_diff.
-        sync_message = f'Applied from branch sync (main change by {change.user_name or "system"})'[:200]
+        message_max_length = ObjectChange_._meta.get_field('message').max_length
+        sync_message = (
+            f'Applied from branch sync (main change by {change.user_name or "system"})'
+        )[:message_max_length]
         ObjectChange_.objects.using(self.connection_name).create(
             action=ObjectChangeActionChoices.ACTION_UPDATE,
             changed_object_type=content_type,
@@ -716,7 +719,13 @@ class Branch(JobsMixin, PrimaryModel):
         request_id = uuid.uuid4()
 
         try:
-            with activate_branch(self), transaction.atomic(using=self.connection_name):
+            # Wrap both the default DB and the branch schema in atomic blocks so that
+            # ChangeDiff updates (written to the default DB via record_change_diff
+            # when the synthetic ObjectChange is saved) roll back together with the
+            # branch-schema writes if AbortTransaction is raised (e.g. commit=False).
+            with activate_branch(self), \
+                    transaction.atomic(using=DEFAULT_DB_ALIAS), \
+                    transaction.atomic(using=self.connection_name):
                 models = set()
                 branchable_models = {ct.model_class() for ct in get_branchable_object_types()}
 

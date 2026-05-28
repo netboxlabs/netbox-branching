@@ -382,11 +382,25 @@ class SyncTestCase(TransactionTestCase):
             main_site.status = 'staging'
             main_site.save()
 
+        # Capture the branch's ObjectChange count for this site before sync so we can
+        # assert that the early-return path did not write a synthetic ObjectChange.
+        from core.models import ObjectChange as CoreObjectChange
+        content_type = ContentType.objects.get_for_model(Site)
+        pre_sync_change_count = CoreObjectChange.objects.using(branch.connection_name).filter(
+            changed_object_type=content_type, changed_object_id=site_id,
+        ).count()
+
         # Sync should not raise; main's update lands on a branch row that no longer exists
         branch.sync(user=self.user, commit=True)
 
         with activate_branch(branch):
             self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+        # No synthetic ObjectChange should have been written for this object during sync
+        post_sync_change_count = CoreObjectChange.objects.using(branch.connection_name).filter(
+            changed_object_type=content_type, changed_object_id=site_id,
+        ).count()
+        self.assertEqual(post_sync_change_count, pre_sync_change_count)
 
         # Merge: branch's DELETE wins on main
         branch.merge(user=self.user, commit=True)
