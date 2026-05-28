@@ -51,7 +51,7 @@ from netbox_branching.utilities import (
     supports_branching,
 )
 
-from .changes import ObjectChange
+from .changes import ChangeDiff, ObjectChange
 
 __all__ = (
     'Branch',
@@ -575,6 +575,9 @@ class Branch(JobsMixin, PrimaryModel):
         ``touched_object_keys`` is a set of ``(content_type_id, object_id)`` tuples
         for which the branch has at least one ChangeDiff. It is pre-fetched once by
         the caller to avoid an N+1 query inside the sync loop.
+
+        Sequential main changes to the same object produce one synthetic per change;
+        merge replay applies them in order and lands on main's final value.
         """
         content_type_id = change.changed_object_type_id
         object_id = change.changed_object_id
@@ -744,7 +747,6 @@ class Branch(JobsMixin, PrimaryModel):
                 # can do an in-memory check instead of a per-change ChangeDiff.exists() query.
                 # _apply_sync_update never creates a new ChangeDiff (it only updates
                 # existing ones via record_change_diff), so the set is stable for the loop.
-                from .changes import ChangeDiff
                 touched_object_keys = set(
                     ChangeDiff.objects.filter(branch=self).values_list('object_type_id', 'object_id')
                 )
