@@ -14,7 +14,7 @@ from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.forms import BranchForm
 from netbox_branching.models import Branch
 from netbox_branching.signals import post_deprovision, pre_deprovision
-from netbox_branching.utilities import get_tables_to_replicate
+from netbox_branching.utilities import BranchActionIndicator, get_tables_to_replicate
 
 from .utils import fetchall, fetchone
 
@@ -337,3 +337,115 @@ class BranchTestCase(TransactionTestCase):
             post_deprovision.disconnect(boom, sender=Branch)
 
         self._assert_branch_and_schema_intact(branch_pk, schema_name)
+
+    # -------------------------------------------------------------------------
+    # Lifecycle action guards
+    #
+    # sync/merge/revert all check the branch's status and (for sync) staleness
+    # before doing any work. The checks fire before pre_X signals, so a wrong
+    # status raises an exception immediately. These tests pin down the guards
+    # so a refactor of the lifecycle methods cannot silently relax them.
+    # -------------------------------------------------------------------------
+
+    def test_sync_raises_when_branch_not_ready(self):
+        branch = Branch(name='Branch 1', status=BranchStatusChoices.FAILED)
+        branch.save(provision=False)
+        with self.assertRaisesRegex(Exception, 'not ready to sync'):
+            branch.sync(user=None)
+
+    def test_merge_raises_when_branch_not_ready(self):
+        branch = Branch(name='Branch 1', status=BranchStatusChoices.SYNCING)
+        branch.save(provision=False)
+        with self.assertRaisesRegex(Exception, 'not ready to merge'):
+            branch.merge(user=None)
+
+    def test_revert_raises_when_branch_not_merged(self):
+        branch = Branch(name='Branch 1', status=BranchStatusChoices.READY)
+        branch.save(provision=False)
+        with self.assertRaisesRegex(Exception, 'Only merged branches can be reverted'):
+            branch.revert(user=None)
+
+    @override_settings(CHANGELOG_RETENTION=10)
+    def test_sync_raises_when_branch_is_stale(self):
+        """
+        is_stale is tested as a property elsewhere; this test confirms sync()
+        enforces it as a precondition. Without this test, a refactor could
+        accidentally drop the guard and let a stale branch attempt to apply
+        changes whose ObjectChange rows have already been garbage-collected
+        out of the main schema.
+        """
+        branch = Branch(name='Branch 1', status=BranchStatusChoices.READY)
+        branch.save(provision=False)
+        # Push last_sync past the CHANGELOG_RETENTION window
+        Branch.objects.filter(pk=branch.pk).update(
+            last_sync=timezone.now() - timedelta(days=11),
+        )
+        branch.refresh_from_db()
+        self.assertTrue(branch.is_stale)
+        with self.assertRaisesRegex(Exception, 'stale and can no longer be synced'):
+            branch.sync(user=None)
+
+    # -------------------------------------------------------------------------
+    # Pre-action validators
+    #
+    # PLUGINS_CONFIG can register validators (e.g. sync_validators) that gate
+    # the corresponding lifecycle action. The mechanism is loaded once in
+    # AppConfig.ready(), but the underlying registration API is exposed for
+    # direct use too. These tests cover the registration API; the AppConfig
+    # path is exercised in production whenever the plugin loads.
+    # -------------------------------------------------------------------------
+
+    def test_preaction_validator_returning_false_blocks_action(self):
+        def blocker(branch):
+            return BranchActionIndicator(False, 'blocked by test')
+
+        Branch.register_preaction_check(blocker, 'sync')
+        try:
+            branch = Branch(name='Branch 1', status=BranchStatusChoices.READY)
+            branch.save(provision=False)
+            indicator = branch.can_sync
+            self.assertFalse(indicator)
+            self.assertEqual(indicator.message, 'blocked by test')
+        finally:
+            Branch._preaction_validators['sync'].discard(blocker)
+
+    def test_preaction_validator_blocks_sync_call_with_message(self):
+        """can_sync gates sync(); a blocking validator must surface there too."""
+        def blocker(branch):
+            return BranchActionIndicator(False, 'blocked by test')
+
+        Branch.register_preaction_check(blocker, 'sync')
+        try:
+            branch = Branch(name='Branch 1', status=BranchStatusChoices.READY)
+            branch.save(provision=False)
+            with self.assertRaisesRegex(Exception, 'not permitted'):
+                branch.sync(user=None)
+        finally:
+            Branch._preaction_validators['sync'].discard(blocker)
+
+    def test_preaction_validator_returning_falsy_non_indicator_is_wrapped(self):
+        """
+        Backwards compatibility: pre-v0.6.0 validators returned plain bools.
+        _can_do_action wraps a falsy non-indicator return as
+        BranchActionIndicator(False, ...). This protects integrations that
+        still use the old contract.
+        """
+        def legacy_blocker(branch):
+            return False
+
+        Branch.register_preaction_check(legacy_blocker, 'merge')
+        try:
+            branch = Branch(name='Branch 1', status=BranchStatusChoices.READY)
+            branch.save(provision=False)
+            indicator = branch.can_merge
+            self.assertFalse(indicator)
+            self.assertIsInstance(indicator, BranchActionIndicator)
+        finally:
+            Branch._preaction_validators['merge'].discard(legacy_blocker)
+
+    def test_register_preaction_check_rejects_unknown_action(self):
+        def noop(branch):
+            return BranchActionIndicator(True)
+
+        with self.assertRaisesRegex(ValueError, 'Invalid branch action'):
+            Branch.register_preaction_check(noop, 'not_a_real_action')

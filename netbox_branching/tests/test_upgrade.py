@@ -16,7 +16,6 @@ the branch schema, and the signal handlers disconnected during the job must
 be reconnected afterwards.
 """
 import gzip
-import time
 import uuid
 import weakref
 from pathlib import Path
@@ -39,6 +38,7 @@ from netbox_branching.contextvars import active_branch as active_branch_var
 from netbox_branching.jobs import MigrateBranchJob
 from netbox_branching.models import Branch
 from netbox_branching.signal_receivers import validate_branching_operations
+from netbox_branching.tests.utils import provision_branch
 
 User = get_user_model()
 
@@ -195,32 +195,13 @@ class MigrateBranchSignalTestCase(TransactionTestCase):
         self.request = request
 
     def tearDown(self):
+        # Close any branch connections that were actually opened during the test.
         for branch in Branch.objects.all():
-            if hasattr(connections, branch.connection_name):
+            if hasattr(connections._connections, branch.connection_name):
                 connections[branch.connection_name].close()
 
     def _create_and_provision_branch(self, name='Test Branch'):
-        branch = Branch(name=name, merge_strategy='squash')
-        branch.save(provision=False)
-        branch.provision(user=self.user)
-
-        max_wait = 30
-        wait_interval = 0.1
-        elapsed = 0
-
-        while elapsed < max_wait:
-            branch.refresh_from_db()
-            if branch.status == BranchStatusChoices.READY:
-                break
-            time.sleep(wait_interval)
-            elapsed += wait_interval
-        else:
-            raise TimeoutError(
-                f"Branch {branch.name} did not become READY within {max_wait} seconds. "
-                f"Status: {branch.status}"
-            )
-
-        return branch
+        return provision_branch(user=self.user, name=name, merge_strategy='squash')
 
     def test_migrate_job_does_not_create_spurious_objectchanges(self):
         """
