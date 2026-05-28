@@ -60,7 +60,7 @@ class BaseFilterSetTests:
             return [(f'{related_name}_id', django_filters.ModelMultipleChoiceFilter)]
 
         # Tags
-        if TaggableManager is not None and type(field) is TaggableManager:
+        if TaggableManager is not None and isinstance(field, TaggableManager):
             return [('tag', None)]
 
         # All other fields – just check presence, not class
