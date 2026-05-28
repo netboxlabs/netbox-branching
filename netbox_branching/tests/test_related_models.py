@@ -13,7 +13,6 @@ Covered models:
 Note: tenancy.contactgroupmembership was removed in NetBox 4.4 and is no
 longer applicable to any supported NetBox version.
 """
-import time
 import uuid
 
 from dcim.choices import PortTypeChoices
@@ -42,7 +41,7 @@ from netbox.context import current_request
 from netbox.context_managers import event_tracking
 
 from netbox_branching.contextvars import active_branch as active_branch_var
-from netbox_branching.models import Branch
+from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
 
 User = get_user_model()
@@ -83,15 +82,7 @@ class RelatedModelsTestCase(TransactionTestCase):
                 connections[alias].close()
 
     def _provision_branch(self, name='Test Branch'):
-        branch = Branch(name=name)
-        branch.save(provision=False)
-        branch.provision(user=self.user)
-        for _ in range(300):
-            branch.refresh_from_db()
-            if branch.status == 'ready':
-                break
-            time.sleep(0.1)
-        return branch
+        return provision_branch(user=self.user, name=name)
 
     def _make_request(self):
         request = RequestFactory().get(reverse('home'))

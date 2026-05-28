@@ -104,3 +104,32 @@ class RequestTestCase(TestCase):
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.cookies[COOKIE_NAME].value, '', msg="Stale cookie was not cleared")
+
+    # -------------------------------------------------------------------------
+    # Paranoid paths
+    #
+    # The middleware catches ObjectDoesNotExist from get_active_branch() and
+    # returns HTTP 400. These tests pin that contract down so a refactor that
+    # narrows the except clause (or stops catching at all) is caught early —
+    # a non-existent branch ID slipping through would otherwise produce a 500
+    # somewhere downstream where the failure mode is harder to interpret.
+    # -------------------------------------------------------------------------
+
+    @override_settings(LOGIN_REQUIRED=False)
+    def test_query_param_with_nonexistent_branch_returns_400(self):
+        url = reverse('home')
+        response = self.client.get(f'{url}?{QUERY_PARAM}=nonexist')
+        self.assertEqual(response.status_code, 400)
+
+    @override_settings(LOGIN_REQUIRED=False)
+    def test_api_header_with_nonexistent_branch_returns_400(self):
+        """
+        get_active_branch routes API requests with the X-NetBox-Branch header
+        through Branch.objects.get(), which raises Branch.DoesNotExist for an
+        unknown schema_id — caught by the middleware and surfaced as 400.
+        """
+        response = self.client.get(
+            reverse('api-root'),
+            HTTP_X_NETBOX_BRANCH='nonexist',
+        )
+        self.assertEqual(response.status_code, 400)
