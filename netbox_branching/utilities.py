@@ -27,6 +27,8 @@ from .constants import (
 )
 from .contextvars import active_branch
 
+logger = logging.getLogger(__name__)
+
 # Thread-local storage for tracking branch connection aliases (matches Django's approach)
 # Note: Aliases are tracked once and never removed, matching Django's pattern where
 # DATABASES.keys() is static. Memory overhead is negligible (string references only).
@@ -49,6 +51,8 @@ __all__ = (
     'get_tables_to_replicate',
     'is_api_request',
     'record_applied_change',
+    'register_branching_resolver',
+    'register_objectchange_field_migrator',
     'resolve_changes_summary',
     'supports_branching',
     'track_branch_connection',
@@ -153,6 +157,73 @@ def get_branchable_object_types():
     return ObjectType.objects.with_feature('branching')
 
 
+_branching_resolvers = []
+_objectchange_field_migrators = []
+
+
+def register_objectchange_field_migrator(migrator):
+    """
+    Register a callable that rewrites field-name keys in an ObjectChange data
+    dict before the dict is applied or compared.
+
+    Signature: ``migrator(model, data) -> dict | None``.  Returning a dict
+    replaces ``data`` for subsequent processing; returning ``None`` defers to
+    the next registered migrator.  The first non-``None`` return wins.
+
+    Internal extension point.  Not part of the public plugin API and subject
+    to change without notice; external plugins should not rely on it.
+    """
+    if not callable(migrator):
+        raise TypeError('ObjectChange field migrator must be callable')
+    _objectchange_field_migrators.append(migrator)
+
+
+def resolve_objectchange_field_migration(model, data):
+    """
+    Apply the first registered migrator that claims ``model`` and return the
+    (possibly translated) ``data`` dict.  When no migrator claims the model,
+    ``data`` is returned unchanged.
+
+    Internal helper; not part of the public API.
+    """
+    if data is None or model is None:
+        return data
+    for migrator in _objectchange_field_migrators:
+        try:
+            result = migrator(model, data)
+        except Exception:
+            logger.exception(
+                'objectchange field migrator %r raised; treating as None', migrator
+            )
+            continue
+        if result is not None:
+            return result
+    return data
+
+
+def register_branching_resolver(resolver):
+    """
+    Register a callable that determines branching support for a model.
+
+    Resolvers run after the explicit ``INCLUDE_MODELS`` check and before the
+    default ``ChangeLoggingMixin`` heuristic.  Used by plugins whose models
+    don't follow the standard NetBox change-logging mixin pattern but still
+    need to be routed to the active branch's schema — e.g. dynamically-
+    generated M2M through models that share a parent's branchable status
+    but are themselves plain ``models.Model`` subclasses.
+
+    Signature: ``resolver(model) -> bool | None``
+        True  — model is branchable, route to active branch
+        False — model is not branchable, route to main
+        None  — defer to next resolver / default heuristic
+
+    The first non-``None`` return wins.
+    """
+    if not callable(resolver):
+        raise TypeError('Branching resolver must be callable')
+    _branching_resolvers.append(resolver)
+
+
 def supports_branching(model):
     """
     Returns True if branching is supported for the given model; otherwise False.
@@ -167,19 +238,33 @@ def supports_branching(model):
     if label in INCLUDE_MODELS:
         return True
 
-    # RunPython data migrations receive historical models from the migration's
-    # StateApps. Those don't inherit ChangeLoggingMixin even when the live
-    # model does, so the issubclass() check would mis-classify them and the
-    # router would send branch-aware queries to main. Resolve to the live
-    # registry for an accurate class-hierarchy check.
-    try:
-        resolved_model = live_apps.get_model(model._meta.app_label, model._meta.model_name)
-    except LookupError:
-        resolved_model = model
+    # Plugin-registered resolvers — let plugins extend branching to their
+    # non-ChangeLoggingMixin models when appropriate.
+    for resolver in _branching_resolvers:
+        try:
+            result = resolver(model)
+        except Exception:
+            logger.exception('branching resolver %r raised; treating as None', resolver)
+            continue
+        if result is not None:
+            if not result:
+                return False
+            # True: still apply the exempt-models filter below.
+            break
+    else:
+        # RunPython data migrations receive historical models from the migration's
+        # StateApps. Those don't inherit ChangeLoggingMixin even when the live
+        # model does, so the issubclass() check would mis-classify them and the
+        # router would send branch-aware queries to main. Resolve to the live
+        # registry for an accurate class-hierarchy check.
+        try:
+            resolved_model = live_apps.get_model(model._meta.app_label, model._meta.model_name)
+        except LookupError:
+            resolved_model = model
 
-    # Exclude models which do not support change logging
-    if not issubclass(resolved_model, ChangeLoggingMixin):
-        return False
+        # Exclude models which do not support change logging
+        if not issubclass(resolved_model, ChangeLoggingMixin):
+            return False
 
     # TODO: Make this more efficient
     # Check for exempted models
@@ -268,12 +353,22 @@ def clear_mptt_fields(instance):
 def update_object(instance, data, using):
     """
     Set an attribute on an object depending on the type of model field.
+
+    ``data`` is passed through any registered ObjectChange field migrators
+    once at the top of the function, so stale field-name keys can be
+    rewritten to the model's current attribute names before the apply loop
+    runs.  When no migrator claims the model, ``data`` is used as-is.
+
+    The migrator hook is internal and subject to change; external plugins
+    should not rely on it.
     """
     # Avoid AppRegistryNotReady exception
     from taggit.managers import TaggableManager
     logger = logging.getLogger('netbox_branching.utilities.update_object')
     instance.snapshot()
     m2m_assignments = {}
+
+    data = resolve_objectchange_field_migration(type(instance), data)
 
     for attr, value in data.items():
         # Account for custom field data
