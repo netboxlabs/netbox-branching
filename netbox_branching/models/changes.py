@@ -12,7 +12,12 @@ from mptt.models import MPTTModel
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
 
-from netbox_branching.utilities import clear_mptt_fields, full_clean_with_file_check, update_object
+from netbox_branching.utilities import (
+    clear_mptt_fields,
+    full_clean_with_file_check,
+    resolve_objectchange_field_migration,
+    update_object,
+)
 
 __all__ = (
     'AppliedChange',
@@ -213,29 +218,44 @@ class ChangeDiff(models.Model):
     def _update_conflicts(self):
         """
         Record any conflicting changes between the modified and current object data.
+
+        ``original``, ``modified``, and ``current`` are each passed through any
+        registered ObjectChange field migrators before comparison so that a
+        rename in one snapshot doesn't appear as a divergent key set.  Models
+        without a registered migrator are compared as-is.
+
+        The migrator hook is internal and subject to change; external plugins
+        should not rely on it.
         """
         if self.original is None:
             return
+        model = self.object_type.model_class()
+        original = resolve_objectchange_field_migration(model, self.original)
+        modified = resolve_objectchange_field_migration(model, self.modified)
+        current = resolve_objectchange_field_migration(model, self.current)
         conflicts = None
         if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
-            if self.current is None:
+            if current is None:
                 # Object was deleted in main; all branch modifications are in conflict
-                conflicts = [k for k, v in self.original.items() if v != self.modified[k]]
+                conflicts = [k for k, v in original.items() if v != modified[k]]
             else:
                 conflicts = [
-                    k for k, v in self.original.items()
-                    if v != self.modified[k] and v != self.current.get(k) and self.modified[k] != self.current.get(k)
+                    k for k, v in original.items()
+                    if v != modified[k] and v != current.get(k) and modified[k] != current.get(k)
                 ]
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
-            if self.current is None:
+            if current is None:
                 # Object was also deleted in main; no conflict
                 return
             conflicts = [
-                k for k, v in self.original.items()
-                if v != self.current.get(k)
+                k for k, v in original.items()
+                if v != current.get(k)
             ]
         self.conflicts = conflicts or None
 
+    # The cached properties below intentionally compare raw (un-migrated) dicts.
+    # ``views.py`` indexes into ``original``/``modified``/``current`` using the
+    # keys these properties return, so the key set must match the raw dicts.
     @cached_property
     def altered_in_modified(self):
         """

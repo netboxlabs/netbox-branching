@@ -10,6 +10,7 @@ from django.db import DEFAULT_DB_ALIAS, models
 from netbox.context_managers import event_tracking
 
 from ..error_report import annotate_validation_error
+from ..signals import squash_dependency_graph_built
 from .strategy import MergeStrategy
 
 __all__ = (
@@ -196,7 +197,9 @@ class SquashMergeStrategy(MergeStrategy):
         SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
 
         # Order collapsed changes based on dependencies
-        ordered_changes = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger)
+        ordered_changes = SquashMergeStrategy._order_collapsed_changes(
+            collapsed_changes, logger, operation='merge'
+        )
 
         # Apply collapsed changes in order
         logger.info(f"Applying {len(ordered_changes)} collapsed changes...")
@@ -241,7 +244,9 @@ class SquashMergeStrategy(MergeStrategy):
         SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
 
         # Order collapsed changes for revert (reverse of merge order)
-        merge_order = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger)
+        merge_order = SquashMergeStrategy._order_collapsed_changes(
+            collapsed_changes, logger, operation='revert'
+        )
         ordered_changes = list(reversed(merge_order))
 
         # Undo collapsed changes in dependency order
@@ -625,7 +630,7 @@ class SquashMergeStrategy(MergeStrategy):
         return ordered
 
     @staticmethod
-    def _order_collapsed_changes(collapsed_changes, logger):
+    def _order_collapsed_changes(collapsed_changes, logger, operation):
         """
         Order collapsed changes respecting dependencies and time.
 
@@ -644,6 +649,11 @@ class SquashMergeStrategy(MergeStrategy):
         - DELETEs generally happen first to free unique constraints
         - UPDATEs that remove FK references happen before their associated DELETEs
         - CREATEs happen before UPDATEs/CREATEs that reference them
+
+        ``operation`` is forwarded to ``squash_dependency_graph_built`` receivers
+        as either ``'merge'`` or ``'revert'`` so they can scope any extra edges
+        they add (revert reverses the resulting order, so unconditional edges
+        still participate).
 
         Returns: ordered list of CollapsedChange objects
         """
@@ -684,6 +694,11 @@ class SquashMergeStrategy(MergeStrategy):
         )
 
         SquashMergeStrategy._build_fk_dependency_graph(deletes, updates, creates, logger)
+        squash_dependency_graph_built.send(
+            sender=SquashMergeStrategy,
+            collapsed_changes=to_process,
+            operation=operation,
+        )
         ordered_keys = SquashMergeStrategy._dependency_order_by_references(to_process, logger)
 
         # Convert keys back to collapsed changes
