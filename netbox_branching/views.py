@@ -129,7 +129,7 @@ class GroupedChangesViewMixin:
     ChangesTable when `request_id` is present in the query string (drill-down from either
     the Request ID link or a Created/Updated/Deleted count link).
     """
-    grouped_table = tables.ChangesGroupedTable
+    table = tables.ChangesGroupedTable
     flat_table = tables.ChangesTable
 
     @staticmethod
@@ -141,9 +141,9 @@ class GroupedChangesViewMixin:
         groups = list(
             qs.values('request_id', 'changed_object_type_id', 'user_name').annotate(
                 time=Min('time'),
-                creates=Count('pk', filter=Q(action='create')),
-                updates=Count('pk', filter=Q(action='update')),
-                deletes=Count('pk', filter=Q(action='delete')),
+                creates=Count('pk', filter=Q(action=ObjectChangeActionChoices.ACTION_CREATE)),
+                updates=Count('pk', filter=Q(action=ObjectChangeActionChoices.ACTION_UPDATE)),
+                deletes=Count('pk', filter=Q(action=ObjectChangeActionChoices.ACTION_DELETE)),
             ).order_by('time')
         )
         ct_ids = {g['changed_object_type_id'] for g in groups if g['changed_object_type_id']}
@@ -158,7 +158,8 @@ class GroupedChangesViewMixin:
         return self._aggregate(queryset)
 
     def get_table(self, data, request, bulk_actions=True):
-        self.table = self.flat_table if self._is_drilldown(request) else self.grouped_table
+        if self._is_drilldown(request):
+            self.table = self.flat_table
         return super().get_table(data, request, bulk_actions)
 
 
