@@ -67,9 +67,7 @@ GROUPED_TYPE = (
 )
 
 GROUPED_REQUEST_ID = (
-    '<a href="?request_id={{ record.request_id }}'
-    '&changed_object_type_id={{ record.changed_object_type_id }}">'
-    '{{ record.request_id }}</a>'
+    '<a href="?request_id={{ record.request_id }}">{{ record.request_id }}</a>'
 )
 
 GROUPED_COUNT = (

@@ -134,7 +134,7 @@ class GroupedChangesViewMixin:
 
     @staticmethod
     def _is_drilldown(request):
-        return 'request_id' in request.GET and 'changed_object_type_id' in request.GET
+        return 'request_id' in request.GET
 
     @staticmethod
     def _aggregate(qs):
