@@ -62,10 +62,14 @@ OBJECTCHANGE_REQUEST_ID = """
 
 GROUPED_TYPE = (
     '{% if record.changed_object_type %}'
+    '{{ record.changed_object_type.name|capfirst }}'
+    '{% endif %}'
+)
+
+GROUPED_REQUEST_ID = (
     '<a href="?request_id={{ record.request_id }}'
     '&changed_object_type_id={{ record.changed_object_type_id }}">'
-    "{{ record.changed_object_type|stringformat:'s'|capfirst }}</a>"
-    '{% endif %}'
+    '{{ record.request_id }}</a>'
 )
 
 GROUPED_COUNT = (
@@ -253,14 +257,15 @@ class ChangesGroupedTable(BaseTable):
         verbose_name=_('Deleted'),
         attrs={'td': {'class': 'text-end'}, 'th': {'class': 'text-end'}},
     )
-    request_id = tables.Column(
+    request_id = tables.TemplateColumn(
+        template_code=GROUPED_REQUEST_ID,
         verbose_name=_('Request ID'),
-        accessor='request_id',
+        order_by='request_id',
     )
 
     class Meta(BaseTable.Meta):
         model = ObjectChange
         fields = (
-            'time', 'user_name', 'changed_object_type', 'creates', 'updates', 'deletes', 'request_id',
+            'time', 'user_name', 'changed_object_type', 'request_id', 'creates', 'updates', 'deletes',
         )
         default_columns = fields
