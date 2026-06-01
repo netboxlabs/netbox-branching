@@ -63,6 +63,7 @@ __all__ = (
 # of SET LOCAL — value is passed as a query parameter rather than interpolated.
 _SET_SEARCH_PATH = "SELECT pg_catalog.set_config('search_path', %s, true)"
 
+
 def _serialize_for_sync(obj):
     """
     Serialize an object for sync-time pre/post snapshots, matching the format
