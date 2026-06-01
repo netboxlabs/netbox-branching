@@ -63,11 +63,6 @@ __all__ = (
 # of SET LOCAL — value is passed as a query parameter rather than interpolated.
 _SET_SEARCH_PATH = "SELECT pg_catalog.set_config('search_path', %s, true)"
 
-# Max length of ObjectChange.message, cached at import time to avoid a _meta lookup
-# inside the sync loop.
-_OBJECTCHANGE_MESSAGE_MAX_LENGTH = ObjectChange_._meta.get_field('message').max_length
-
-
 def _serialize_for_sync(obj):
     """
     Serialize an object for sync-time pre/post snapshots, matching the format
@@ -650,6 +645,7 @@ class Branch(JobsMixin, PrimaryModel):
             return
 
         user_name = user.username if user else ''
+        message_max_length = ObjectChange_._meta.get_field('message').max_length
 
         for entry in sync_buffer.values():
             # Drop entries whose consolidated net change is a no-op (e.g. main
@@ -660,7 +656,7 @@ class Branch(JobsMixin, PrimaryModel):
             originals = ', '.join(entry['user_names']) or 'system'
             sync_message = (
                 f'Synced from main (originally by {originals})'
-            )[:_OBJECTCHANGE_MESSAGE_MAX_LENGTH]
+            )[:message_max_length]
 
             ObjectChange_.objects.using(self.connection_name).create(
                 action=ObjectChangeActionChoices.ACTION_UPDATE,
