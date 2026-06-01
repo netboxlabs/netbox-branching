@@ -9,7 +9,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.messages import get_messages
 from django.core.exceptions import ValidationError
 from django.db import connections
-from django.test import TestCase, TransactionTestCase, override_settings
+from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django_rq import get_queue
 from utilities.testing import ViewTestCases, create_tags
@@ -17,9 +17,9 @@ from utilities.testing import ViewTestCases, create_tags
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.models import Branch, ChangeDiff
+from netbox_branching.tables import ChangesGroupedTable, ChangesTable
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
-from netbox_branching.tables import ChangesGroupedTable, ChangesTable
 from netbox_branching.views import BaseBranchActionView, GroupedChangesViewMixin
 
 User = get_user_model()
@@ -769,7 +769,6 @@ class GroupedChangesViewMixinTestCase(TestCase):
         self.assertEqual(resolved[self.device_ct.id], self.device_ct)
 
     def test_is_drilldown_detects_request_id_param(self):
-        from django.test import RequestFactory
         factory = RequestFactory()
         self.assertTrue(GroupedChangesViewMixin._is_drilldown(factory.get('/?request_id=abc')))
         self.assertFalse(GroupedChangesViewMixin._is_drilldown(factory.get('/')))
