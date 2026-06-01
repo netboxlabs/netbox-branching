@@ -126,8 +126,8 @@ class GroupedChangesViewMixin:
     """
     Mixin for branch "Changes" views (Behind / Ahead / Merged). Groups ObjectChange rows
     by (request_id, changed_object_type) for the default listing; falls back to the flat
-    ChangesTable when the drill-down query params (`request_id` and `changed_object_type_id`)
-    are both present.
+    ChangesTable when `request_id` is present in the query string (drill-down from either
+    the Request ID link or a Created/Updated/Deleted count link).
     """
     grouped_table = tables.ChangesGroupedTable
     flat_table = tables.ChangesTable
@@ -139,9 +139,8 @@ class GroupedChangesViewMixin:
     @staticmethod
     def _aggregate(qs):
         groups = list(
-            qs.values('request_id', 'changed_object_type_id').annotate(
+            qs.values('request_id', 'changed_object_type_id', 'user_name').annotate(
                 time=Min('time'),
-                user_name=Min('user_name'),
                 creates=Count('pk', filter=Q(action='create')),
                 updates=Count('pk', filter=Q(action='update')),
                 deletes=Count('pk', filter=Q(action='delete')),
@@ -168,7 +167,6 @@ class BranchChangesBehindView(GroupedChangesViewMixin, generic.ObjectChildrenVie
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
-    table = tables.ChangesGroupedTable
     actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Changes Behind'),
@@ -185,7 +183,6 @@ class BranchChangesAheadView(GroupedChangesViewMixin, generic.ObjectChildrenView
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
-    table = tables.ChangesGroupedTable
     actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Changes Ahead'),
@@ -266,7 +263,6 @@ class BranchChangesMergedView(GroupedChangesViewMixin, generic.ObjectChildrenVie
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
-    table = tables.ChangesGroupedTable
     actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Changes Merged'),

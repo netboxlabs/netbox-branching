@@ -19,7 +19,8 @@ from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
-from netbox_branching.views import BaseBranchActionView
+from netbox_branching.tables import ChangesGroupedTable, ChangesTable
+from netbox_branching.views import BaseBranchActionView, GroupedChangesViewMixin
 
 User = get_user_model()
 
@@ -692,3 +693,140 @@ class ChangeDiffViewTestCase(TestCase):
         )
         response = self.client.get(self._url(diff))
         self.assertEqual(response.status_code, 200)
+
+
+class GroupedChangesViewMixinTestCase(TestCase):
+    """
+    Unit tests for GroupedChangesViewMixin: aggregation logic and table selection.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.site_ct = ContentType.objects.get(app_label='dcim', model='site')
+        cls.device_ct = ContentType.objects.get(app_label='dcim', model='device')
+
+    @staticmethod
+    def _make_change(request_id, ct, obj_id, action, user_name='alice'):
+        return ObjectChange.objects.create(
+            request_id=request_id,
+            action=action,
+            changed_object_type=ct,
+            changed_object_id=obj_id,
+            user_name=user_name,
+        )
+
+    def test_aggregate_empty_queryset(self):
+        self.assertEqual(GroupedChangesViewMixin._aggregate(ObjectChange.objects.none()), [])
+
+    def test_aggregate_counts_actions_per_group(self):
+        # Single request touching one type with all three actions on different objects
+        req = uuid.uuid4()
+        self._make_change(req, self.site_ct, 1, ObjectChangeActionChoices.ACTION_CREATE)
+        self._make_change(req, self.site_ct, 2, ObjectChangeActionChoices.ACTION_CREATE)
+        self._make_change(req, self.site_ct, 3, ObjectChangeActionChoices.ACTION_UPDATE)
+        self._make_change(req, self.site_ct, 4, ObjectChangeActionChoices.ACTION_DELETE)
+
+        groups = GroupedChangesViewMixin._aggregate(ObjectChange.objects.all())
+
+        self.assertEqual(len(groups), 1)
+        group = groups[0]
+        self.assertEqual(group['request_id'], req)
+        self.assertEqual(group['changed_object_type_id'], self.site_ct.id)
+        self.assertEqual(group['changed_object_type'], self.site_ct)
+        self.assertEqual(group['user_name'], 'alice')
+        self.assertEqual(group['creates'], 2)
+        self.assertEqual(group['updates'], 1)
+        self.assertEqual(group['deletes'], 1)
+
+    def test_aggregate_separates_requests_and_types(self):
+        # Two requests, second one touches two types → three groups total
+        req_a = uuid.uuid4()
+        req_b = uuid.uuid4()
+        self._make_change(req_a, self.site_ct, 1, ObjectChangeActionChoices.ACTION_CREATE)
+        self._make_change(req_b, self.site_ct, 2, ObjectChangeActionChoices.ACTION_UPDATE)
+        self._make_change(req_b, self.device_ct, 1, ObjectChangeActionChoices.ACTION_DELETE)
+
+        groups = GroupedChangesViewMixin._aggregate(ObjectChange.objects.all())
+
+        self.assertEqual(len(groups), 3)
+        keys = {(g['request_id'], g['changed_object_type_id']) for g in groups}
+        self.assertEqual(keys, {
+            (req_a, self.site_ct.id),
+            (req_b, self.site_ct.id),
+            (req_b, self.device_ct.id),
+        })
+
+    def test_aggregate_resolves_content_types(self):
+        # Verify ContentType lookup happens in a single batched query and attaches the object.
+        req = uuid.uuid4()
+        self._make_change(req, self.site_ct, 1, ObjectChangeActionChoices.ACTION_CREATE)
+        self._make_change(req, self.device_ct, 1, ObjectChangeActionChoices.ACTION_CREATE)
+
+        groups = GroupedChangesViewMixin._aggregate(ObjectChange.objects.all())
+
+        resolved = {g['changed_object_type_id']: g['changed_object_type'] for g in groups}
+        self.assertEqual(resolved[self.site_ct.id], self.site_ct)
+        self.assertEqual(resolved[self.device_ct.id], self.device_ct)
+
+    def test_is_drilldown_detects_request_id_param(self):
+        from django.test import RequestFactory
+        factory = RequestFactory()
+        self.assertTrue(GroupedChangesViewMixin._is_drilldown(factory.get('/?request_id=abc')))
+        self.assertFalse(GroupedChangesViewMixin._is_drilldown(factory.get('/')))
+        # Other filter params alone do not trigger drill-down
+        self.assertFalse(GroupedChangesViewMixin._is_drilldown(factory.get('/?action=create')))
+
+
+class BranchChangesViewTableSelectionTestCase(TestCase):
+    """
+    Integration tests for the branch "Changes Behind" view: confirms the grouped
+    table is used by default and the flat ChangesTable is used when drilling down.
+    Uses the "behind" view because its underlying queryset lives in the main DB,
+    so no branch schema needs to be provisioned.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_user(username='grouped_super', is_superuser=True)
+        cls.site_ct = ContentType.objects.get(app_label='dcim', model='site')
+
+        cls.branch = Branch(name='Grouped Test Branch', status=BranchStatusChoices.READY)
+        cls.branch.save(provision=False)
+
+        # Two changes in the same request → one grouped row, two flat rows
+        request_id = uuid.uuid4()
+        cls.request_id = request_id
+        ObjectChange.objects.create(
+            request_id=request_id,
+            action=ObjectChangeActionChoices.ACTION_CREATE,
+            changed_object_type=cls.site_ct,
+            changed_object_id=1,
+            object_repr='Site 1',
+            user_name='alice',
+        )
+        ObjectChange.objects.create(
+            request_id=request_id,
+            action=ObjectChangeActionChoices.ACTION_CREATE,
+            changed_object_type=cls.site_ct,
+            changed_object_id=2,
+            object_repr='Site 2',
+            user_name='alice',
+        )
+
+    def setUp(self):
+        self.client.force_login(self.superuser)
+        self.url = reverse('plugins:netbox_branching:branch_changes-behind', args=[self.branch.pk])
+
+    def test_default_view_uses_grouped_table(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.context['table'], ChangesGroupedTable)
+        # One grouped row covers both changes
+        self.assertEqual(len(response.context['table'].rows), 1)
+
+    def test_drilldown_uses_flat_table(self):
+        response = self.client.get(f'{self.url}?request_id={self.request_id}')
+        self.assertEqual(response.status_code, 200)
+        self.assertIsInstance(response.context['table'], ChangesTable)
+        # Flat table shows both raw rows
+        self.assertEqual(len(response.context['table'].rows), 2)
