@@ -6,7 +6,7 @@ from core.models import ObjectChange
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
-from django.db.models import Count, Q
+from django.db.models import Count, Min, Q
 from django.shortcuts import redirect, render
 from django.utils.translation import gettext_lazy as _
 from netbox.plugins import get_plugin_config
@@ -122,12 +122,52 @@ class BranchDiffView(generic.ObjectChildrenView):
         return ChangeDiff.objects.filter(branch=parent)
 
 
+class GroupedChangesViewMixin:
+    """
+    Mixin for branch "Changes" views (Behind / Ahead / Merged). Groups ObjectChange rows
+    by (request_id, changed_object_type) for the default listing; falls back to the flat
+    ChangesTable when `request_id` is present in the query string (drill-down from either
+    the Request ID link or a Created/Updated/Deleted count link).
+    """
+    table = tables.ChangesGroupedTable
+    flat_table = tables.ChangesTable
+
+    @staticmethod
+    def _is_drilldown(request):
+        return 'request_id' in request.GET
+
+    @staticmethod
+    def _aggregate(qs):
+        groups = list(
+            qs.values('request_id', 'changed_object_type_id', 'user_name').annotate(
+                time=Min('time'),
+                creates=Count('pk', filter=Q(action=ObjectChangeActionChoices.ACTION_CREATE)),
+                updates=Count('pk', filter=Q(action=ObjectChangeActionChoices.ACTION_UPDATE)),
+                deletes=Count('pk', filter=Q(action=ObjectChangeActionChoices.ACTION_DELETE)),
+            ).order_by('time')
+        )
+        ct_ids = {g['changed_object_type_id'] for g in groups if g['changed_object_type_id']}
+        cts = {ct.id: ct for ct in ContentType.objects.filter(id__in=ct_ids)}
+        for g in groups:
+            g['changed_object_type'] = cts.get(g['changed_object_type_id'])
+        return groups
+
+    def prep_table_data(self, request, queryset, parent):
+        if self._is_drilldown(request):
+            return queryset
+        return self._aggregate(queryset)
+
+    def get_table(self, data, request, bulk_actions=True):
+        if self._is_drilldown(request):
+            self.table = self.flat_table
+        return super().get_table(data, request, bulk_actions)
+
+
 @register_model_view(Branch, 'changes-behind')
-class BranchChangesBehindView(generic.ObjectChildrenView):
+class BranchChangesBehindView(GroupedChangesViewMixin, generic.ObjectChildrenView):
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
-    table = tables.ChangesTable
     actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Changes Behind'),
@@ -140,11 +180,10 @@ class BranchChangesBehindView(generic.ObjectChildrenView):
 
 
 @register_model_view(Branch, 'changes-ahead')
-class BranchChangesAheadView(generic.ObjectChildrenView):
+class BranchChangesAheadView(GroupedChangesViewMixin, generic.ObjectChildrenView):
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
-    table = tables.ChangesTable
     actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Changes Ahead'),
@@ -221,11 +260,10 @@ def _get_change_count(obj):
 
 
 @register_model_view(Branch, 'changes-merged')
-class BranchChangesMergedView(generic.ObjectChildrenView):
+class BranchChangesMergedView(GroupedChangesViewMixin, generic.ObjectChildrenView):
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
-    table = tables.ChangesTable
     actions = {}  # noqa: RUF012
     tab = ViewTab(
         label=_('Changes Merged'),
