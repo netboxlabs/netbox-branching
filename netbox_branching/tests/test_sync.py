@@ -11,6 +11,7 @@ applied iteratively in chronological order.
 """
 import uuid
 
+from core.models import ObjectChange as CoreObjectChange
 from dcim.models import (
     Cable,
     CablePath,
@@ -33,7 +34,7 @@ from extras.models import Tag
 from netbox.context_managers import event_tracking
 from utilities.exceptions import AbortTransaction
 
-from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
@@ -78,9 +79,9 @@ class SyncTestCase(TransactionTestCase):
             if hasattr(connections._connections, branch.connection_name):
                 connections[branch.connection_name].close()
 
-    def _create_and_provision_branch(self, name='Test Branch'):
+    def _create_and_provision_branch(self, name='Test Branch', merge_strategy=BranchMergeStrategyChoices.SQUASH):
         """Helper to create and provision a branch."""
-        return provision_branch(user=self.user, name=name, merge_strategy='squash')
+        return provision_branch(user=self.user, name=name, merge_strategy=merge_strategy)
 
     # -------------------------------------------------------------------------
     # No-op scenario
@@ -212,6 +213,254 @@ class SyncTestCase(TransactionTestCase):
 
         branch.refresh_from_db()
         self.assertGreater(branch.last_sync, initial_last_sync)
+
+    def _run_sync_conflict_merge_scenario(self, merge_strategy):
+        """
+        Reproduce issue #28 against a specific merge strategy: branch and main both
+        modify site.status, the branch is synced (accepting main's value), and the
+        branch is then merged. Merging must preserve main's synced value.
+        """
+        with event_tracking(self.request):
+            site = Site.objects.create(
+                name=f'Conflict Site {merge_strategy}',
+                slug=f'conflict-site-{merge_strategy}',
+                status='active',
+            )
+            site_id = site.id
+
+        branch = self._create_and_provision_branch(
+            name=f'Conflict Branch {merge_strategy}', merge_strategy=merge_strategy,
+        )
+
+        # Main: active → staging
+        with event_tracking(self.request):
+            main_site = Site.objects.get(id=site_id)
+            main_site.snapshot()
+            main_site.status = 'staging'
+            main_site.save()
+
+        # Branch: active → planned
+        with activate_branch(branch), event_tracking(self.request):
+            branch_site = Site.objects.get(id=site_id)
+            branch_site.snapshot()
+            branch_site.status = 'planned'
+            branch_site.save()
+
+        # ChangeDiff records a conflict on status
+        content_type = ContentType.objects.get_for_model(Site)
+        diff = ChangeDiff.objects.get(branch=branch, object_type=content_type, object_id=site_id)
+        self.assertIn('status', diff.conflicts or [])
+
+        # Sync: main's value (staging) overwrites the branch's value (planned)
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertEqual(Site.objects.get(id=site_id).status, 'staging')
+
+        # The acknowledged conflict should no longer appear on the ChangeDiff
+        diff.refresh_from_db()
+        self.assertIsNone(diff.conflicts)
+
+        # Merge: main must keep the synced value, not revert to the branch's pre-sync value
+        branch.merge(user=self.user, commit=True)
+        self.assertEqual(Site.objects.get(id=site_id).status, 'staging')
+
+    def test_sync_conflict_resolution_preserved_on_merge_squash(self):
+        """Regression test for issue #28 against the squash merge strategy."""
+        self._run_sync_conflict_merge_scenario(BranchMergeStrategyChoices.SQUASH)
+
+    def test_sync_conflict_resolution_preserved_on_merge_iterative(self):
+        """Regression test for issue #28 against the iterative merge strategy."""
+        self._run_sync_conflict_merge_scenario(BranchMergeStrategyChoices.ITERATIVE)
+
+    def _run_sync_partial_field_overlap_scenario(self, merge_strategy):
+        """
+        Branch and main edit the same object but different fields (no field-level conflict).
+        Sync must not let main's edit silently overwrite the branch's unrelated edit, and
+        merge must carry both changes through to main.
+        """
+        with event_tracking(self.request):
+            site = Site.objects.create(
+                name=f'Partial Site {merge_strategy}',
+                slug=f'partial-site-{merge_strategy}',
+                status='active',
+                description='original',
+            )
+            site_id = site.id
+
+        branch = self._create_and_provision_branch(
+            name=f'Partial Branch {merge_strategy}', merge_strategy=merge_strategy,
+        )
+
+        # Main: status active → staging (description unchanged)
+        with event_tracking(self.request):
+            main_site = Site.objects.get(id=site_id)
+            main_site.snapshot()
+            main_site.status = 'staging'
+            main_site.save()
+
+        # Branch: description original → branch-desc (status unchanged)
+        with activate_branch(branch), event_tracking(self.request):
+            branch_site = Site.objects.get(id=site_id)
+            branch_site.snapshot()
+            branch_site.description = 'branch-desc'
+            branch_site.save()
+
+        # No field-level conflict: branch and main touched different fields
+        content_type = ContentType.objects.get_for_model(Site)
+        diff = ChangeDiff.objects.get(branch=branch, object_type=content_type, object_id=site_id)
+        self.assertIsNone(diff.conflicts)
+
+        branch.sync(user=self.user, commit=True)
+
+        # After sync, branch carries main's status and its own description
+        with activate_branch(branch):
+            synced = Site.objects.get(id=site_id)
+            self.assertEqual(synced.status, 'staging')
+            self.assertEqual(synced.description, 'branch-desc')
+
+        branch.merge(user=self.user, commit=True)
+
+        # After merge, main keeps its synced status and gains the branch's description
+        merged = Site.objects.get(id=site_id)
+        self.assertEqual(merged.status, 'staging')
+        self.assertEqual(merged.description, 'branch-desc')
+
+    def test_sync_partial_field_overlap_squash(self):
+        """Branch and main edit different fields on the same object (squash)."""
+        self._run_sync_partial_field_overlap_scenario(BranchMergeStrategyChoices.SQUASH)
+
+    def test_sync_partial_field_overlap_iterative(self):
+        """Branch and main edit different fields on the same object (iterative)."""
+        self._run_sync_partial_field_overlap_scenario(BranchMergeStrategyChoices.ITERATIVE)
+
+    def _run_sync_branch_deleted_main_updated_scenario(self, merge_strategy):
+        """
+        Branch deletes an object that main subsequently updates. Sync must apply main's
+        update against a branch that no longer has the row (exercising the DoesNotExist
+        path in _apply_sync_update) without raising or writing a synthetic ObjectChange.
+        Merge must carry the branch's DELETE through to main.
+        """
+        with event_tracking(self.request):
+            site = Site.objects.create(
+                name=f'Deleted Site {merge_strategy}',
+                slug=f'deleted-site-{merge_strategy}',
+                status='active',
+            )
+            site_id = site.id
+
+        branch = self._create_and_provision_branch(
+            name=f'Deleted Branch {merge_strategy}', merge_strategy=merge_strategy,
+        )
+
+        # Branch: delete the site
+        with activate_branch(branch), event_tracking(self.request):
+            Site.objects.get(id=site_id).delete()
+
+        # Main: update the site (after the branch's delete)
+        with event_tracking(self.request):
+            main_site = Site.objects.get(id=site_id)
+            main_site.snapshot()
+            main_site.status = 'staging'
+            main_site.save()
+
+        # Capture the branch's ObjectChange count for this site before sync so we can
+        # assert that the early-return path did not write a synthetic ObjectChange.
+        content_type = ContentType.objects.get_for_model(Site)
+        pre_sync_change_count = CoreObjectChange.objects.using(branch.connection_name).filter(
+            changed_object_type=content_type, changed_object_id=site_id,
+        ).count()
+
+        # Sync should not raise; main's update lands on a branch row that no longer exists
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+        # No synthetic ObjectChange should have been written for this object during sync
+        post_sync_change_count = CoreObjectChange.objects.using(branch.connection_name).filter(
+            changed_object_type=content_type, changed_object_id=site_id,
+        ).count()
+        self.assertEqual(post_sync_change_count, pre_sync_change_count)
+
+        # Merge: branch's DELETE wins on main
+        branch.merge(user=self.user, commit=True)
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+    def test_sync_branch_deleted_main_updated_squash(self):
+        """Branch deletes an object that main later updates (squash)."""
+        self._run_sync_branch_deleted_main_updated_scenario(BranchMergeStrategyChoices.SQUASH)
+
+    def test_sync_branch_deleted_main_updated_iterative(self):
+        """Branch deletes an object that main later updates (iterative)."""
+        self._run_sync_branch_deleted_main_updated_scenario(BranchMergeStrategyChoices.ITERATIVE)
+
+    def _run_sync_multi_field_conflict_scenario(self, merge_strategy):
+        """
+        Branch and main both edit the conflicting field (status), and the branch
+        additionally edits a non-conflicting field (description). Sync accepts main's
+        status; merge must preserve both main's synced status and the branch's
+        description change.
+        """
+        with event_tracking(self.request):
+            site = Site.objects.create(
+                name=f'MultiField Site {merge_strategy}',
+                slug=f'multifield-site-{merge_strategy}',
+                status='active',
+                description='original',
+            )
+            site_id = site.id
+
+        branch = self._create_and_provision_branch(
+            name=f'MultiField Branch {merge_strategy}', merge_strategy=merge_strategy,
+        )
+
+        # Main: status active → staging
+        with event_tracking(self.request):
+            main_site = Site.objects.get(id=site_id)
+            main_site.snapshot()
+            main_site.status = 'staging'
+            main_site.save()
+
+        # Branch: status active → planned AND description original → branch-desc
+        with activate_branch(branch), event_tracking(self.request):
+            branch_site = Site.objects.get(id=site_id)
+            branch_site.snapshot()
+            branch_site.status = 'planned'
+            branch_site.description = 'branch-desc'
+            branch_site.save()
+
+        # Conflict is limited to status; description is only changed in the branch
+        content_type = ContentType.objects.get_for_model(Site)
+        diff = ChangeDiff.objects.get(branch=branch, object_type=content_type, object_id=site_id)
+        self.assertIn('status', diff.conflicts or [])
+        self.assertNotIn('description', diff.conflicts or [])
+
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            synced = Site.objects.get(id=site_id)
+            self.assertEqual(synced.status, 'staging')
+            self.assertEqual(synced.description, 'branch-desc')
+
+        # The acknowledged conflict on status should be cleared
+        diff.refresh_from_db()
+        self.assertIsNone(diff.conflicts)
+
+        branch.merge(user=self.user, commit=True)
+
+        # Main retains its synced status (not 'planned') and gains the branch's description
+        merged = Site.objects.get(id=site_id)
+        self.assertEqual(merged.status, 'staging')
+        self.assertEqual(merged.description, 'branch-desc')
+
+    def test_sync_multi_field_conflict_squash(self):
+        """End-to-end multi-field sync + merge (squash)."""
+        self._run_sync_multi_field_conflict_scenario(BranchMergeStrategyChoices.SQUASH)
+
+    def test_sync_multi_field_conflict_iterative(self):
+        """End-to-end multi-field sync + merge (iterative)."""
+        self._run_sync_multi_field_conflict_scenario(BranchMergeStrategyChoices.ITERATIVE)
 
     def test_sync_m2m_tags_concurrent_changes(self):
         """
