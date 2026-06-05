@@ -1,3 +1,5 @@
+from typing import ClassVar
+
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import pgettext_lazy
 from utilities.choices import ChoiceSet
@@ -29,6 +31,20 @@ class BranchStatusChoices(ChoiceSet):
         (PENDING_MIGRATIONS, _('Pending Migrations'), 'red'),
         (FAILED, _('Failed'), 'red'),
     )
+
+    DESCRIPTIONS: ClassVar = {
+        NEW: _('Branch has been created but not yet provisioned.'),
+        PROVISIONING: _('Branch database schema is being set up.'),
+        READY: _('Branch is provisioned and ready for use.'),
+        SYNCING: _('Branch is syncing changes from the main database.'),
+        MIGRATING: _('Database migrations are being applied to the branch.'),
+        MERGING: _('Branch changes are being merged into the main database.'),
+        REVERTING: _('Branch merge is being reverted.'),
+        MERGED: _('Branch has been successfully merged.'),
+        ARCHIVED: _('Branch has been archived and is no longer active.'),
+        PENDING_MIGRATIONS: _('Branch requires database migrations before it can be used.'),
+        FAILED: _('A branch operation has failed.'),
+    }
 
     TRANSITIONAL = (
         PROVISIONING,

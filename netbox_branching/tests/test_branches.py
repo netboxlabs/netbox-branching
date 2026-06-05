@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from django.core.exceptions import ValidationError
 from django.db import connection
-from django.test import TransactionTestCase, override_settings
+from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from extras.validators import CustomValidator
 from netbox.plugins import get_plugin_config
@@ -449,3 +449,23 @@ class BranchTestCase(TransactionTestCase):
 
         with self.assertRaisesRegex(ValueError, 'Invalid branch action'):
             Branch.register_preaction_check(noop, 'not_a_real_action')
+
+
+class BranchStatusDescriptionTestCase(SimpleTestCase):
+
+    def test_descriptions_cover_all_statuses(self):
+        # Every status choice must have a description, and vice versa.
+        choice_values = {value for value, _ in BranchStatusChoices()}
+        description_keys = set(BranchStatusChoices.DESCRIPTIONS)
+        self.assertEqual(choice_values, description_keys)
+
+    def test_get_status_description(self):
+        branch = Branch(name='Branch 1', status=BranchStatusChoices.READY)
+        self.assertEqual(
+            branch.get_status_description(),
+            BranchStatusChoices.DESCRIPTIONS[BranchStatusChoices.READY]
+        )
+
+    def test_get_status_description_unknown_status(self):
+        branch = Branch(name='Branch 1', status='not-a-real-status')
+        self.assertEqual(branch.get_status_description(), '')

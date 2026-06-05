@@ -51,7 +51,7 @@ from netbox_branching.utilities import (
     supports_branching,
 )
 
-from .changes import ObjectChange
+from .changes import ChangeDiff, ObjectChange
 
 __all__ = (
     'Branch',
@@ -62,6 +62,19 @@ __all__ = (
 # pg_catalog.set_config(name, value, is_local=true) is the function-call form
 # of SET LOCAL — value is passed as a query parameter rather than interpolated.
 _SET_SEARCH_PATH = "SELECT pg_catalog.set_config('search_path', %s, true)"
+
+
+def _serialize_for_sync(obj):
+    """
+    Serialize an object for sync-time pre/post snapshots, matching the format
+    record_change_diff expects on ObjectChange.postchange_data_clean.
+
+    Defensive: every branchable model inherits ChangeLoggingMixin.serialize_object,
+    so the utility-function fallback should not be reached in practice.
+    """
+    if hasattr(obj, 'serialize_object'):
+        return obj.serialize_object(exclude=['created', 'last_updated'])
+    return serialize_object(obj, exclude=['created', 'last_updated'])
 
 
 @contextmanager
@@ -241,6 +254,9 @@ class Branch(JobsMixin, PrimaryModel):
 
     def get_status_color(self):
         return BranchStatusChoices.colors.get(self.status)
+
+    def get_status_description(self):
+        return BranchStatusChoices.DESCRIPTIONS.get(self.status, '')
 
     @cached_property
     def is_active(self):
@@ -549,6 +565,120 @@ class Branch(JobsMixin, PrimaryModel):
     # Branch actions
     #
 
+    def _apply_sync_update(self, change, logger, touched_object_keys, sync_buffer):
+        """
+        Apply a non-DELETE change from main and, when the branch has also touched the
+        same object, buffer the pre/post state so a single synthetic ObjectChange can
+        be written per object after the sync loop completes (#28).
+
+        ``touched_object_keys`` is a set of ``(content_type_id, object_id)`` tuples
+        for which the branch has at least one ChangeDiff. It is pre-fetched once by
+        the caller to avoid an N+1 query inside the sync loop.
+
+        ``sync_buffer`` is a dict keyed by ``(content_type_id, object_id)``. Sequential
+        main changes to the same object collapse into a single buffered entry: the
+        first prechange is preserved and postchange is overwritten on each hit. Both
+        merge strategies replay to the same end state with or without this
+        consolidation, so dropping the intermediate synthetic rows is a no-op for
+        correctness while reducing ChangeDiff write traffic at flush time.
+        """
+        content_type_id = change.changed_object_type_id
+        object_id = change.changed_object_id
+
+        # If the branch has not touched this object, no merge-time conflict is possible
+        if (content_type_id, object_id) not in touched_object_keys:
+            change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+            return
+
+        model_class = change.changed_object_type.model_class()
+        key = (content_type_id, object_id)
+
+        # Capture the branch's state before applying main's change
+        try:
+            before = model_class.objects.using(self.connection_name).get(pk=object_id)
+            prechange_data = _serialize_for_sync(before)
+        except model_class.DoesNotExist:
+            # Branch already removed the object; let apply() handle it via skip_missing
+            change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+            return
+
+        # Apply the change from main onto the branch
+        change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+
+        # Capture the branch's state after applying main's change
+        try:
+            after = model_class.objects.using(self.connection_name).get(pk=object_id)
+        except model_class.DoesNotExist:
+            # Apply turned this into a delete (shouldn't happen for non-DELETE actions,
+            # but be defensive). Drop any prior buffered entry for this object.
+            sync_buffer.pop(key, None)
+            return
+        postchange_data = _serialize_for_sync(after)
+
+        if key in sync_buffer:
+            # Consolidate: preserve the original prechange, overwrite postchange.
+            entry = sync_buffer[key]
+            entry['postchange_data'] = postchange_data
+            entry['object_repr'] = str(after)
+            if change.user_name and change.user_name not in entry['user_names']:
+                entry['user_names'].append(change.user_name)
+        else:
+            sync_buffer[key] = {
+                'content_type_id': content_type_id,
+                'object_id': object_id,
+                'model_class': model_class,
+                'object_repr': str(after),
+                'prechange_data': prechange_data,
+                'postchange_data': postchange_data,
+                'user_names': [change.user_name] if change.user_name else [],
+            }
+
+    def _flush_sync_buffer(self, sync_buffer, user, request_id, logger):
+        """
+        Write the consolidated synthetic ObjectChanges from the sync loop to the
+        branch schema. Each save fires record_change_diff, which updates ChangeDiff
+        on the default DB — keeping these writes batched at the end of sync
+        confines the ChangeDiff row locks to a brief flush window instead of
+        holding them across the entire sync loop.
+
+        ``record_change_diff`` is registered on the core ObjectChange model, so
+        rows must be created via ``ObjectChange_`` rather than the branch-aware
+        proxy (Django dispatches proxy post_save with the proxy as sender).
+        """
+        if not sync_buffer:
+            return
+
+        user_name = user.username if user else ''
+        message_max_length = ObjectChange_._meta.get_field('message').max_length
+
+        for entry in sync_buffer.values():
+            # Drop entries whose consolidated net change is a no-op (e.g. main
+            # toggled a value and then toggled it back during this sync window).
+            if entry['prechange_data'] == entry['postchange_data']:
+                continue
+
+            originals = ', '.join(entry['user_names']) or 'system'
+            sync_message = (
+                f'Synced from main (originally by {originals})'
+            )[:message_max_length]
+
+            ObjectChange_.objects.using(self.connection_name).create(
+                action=ObjectChangeActionChoices.ACTION_UPDATE,
+                changed_object_type_id=entry['content_type_id'],
+                changed_object_id=entry['object_id'],
+                object_repr=entry['object_repr'],
+                prechange_data=entry['prechange_data'],
+                postchange_data=entry['postchange_data'],
+                user=user,
+                user_name=user_name,
+                request_id=request_id,
+                message=sync_message,
+            )
+            logger.debug(
+                f'Recorded sync-applied change to {entry["model_class"]._meta.verbose_name} '
+                f'{entry["object_repr"]} (supersedes prior branch change on conflicting fields)'
+            )
+
     def _handle_sync_delete(self, change, branchable_models, user, logger, request_id=None):
         """
         Apply a DELETE change to the branch schema and record ObjectChange entries for any
@@ -648,9 +778,32 @@ class Branch(JobsMixin, PrimaryModel):
         request_id = uuid.uuid4()
 
         try:
-            with activate_branch(self), transaction.atomic(using=self.connection_name):
+            # The outer DEFAULT_DB_ALIAS atomic exists so that ChangeDiff updates
+            # (written via record_change_diff when synthetic ObjectChanges are saved
+            # during _flush_sync_buffer) roll back together with the branch-schema
+            # writes if AbortTransaction is raised (e.g. commit=False). It costs
+            # essentially nothing during the loop itself: no main-DB writes happen
+            # until the flush, so no row locks are held on the default DB until then.
+            with (
+                activate_branch(self),
+                transaction.atomic(using=DEFAULT_DB_ALIAS),
+                transaction.atomic(using=self.connection_name),
+            ):
                 models = set()
                 branchable_models = {ct.model_class() for ct in get_branchable_object_types()}
+
+                # Pre-fetch the set of objects the branch has touched so _apply_sync_update
+                # can do an in-memory check instead of a per-change ChangeDiff.exists() query.
+                # _apply_sync_update never creates a new ChangeDiff (it only updates
+                # existing ones via record_change_diff), so the set is stable for the loop.
+                touched_object_keys = set(
+                    ChangeDiff.objects.filter(branch=self).values_list('object_type_id', 'object_id')
+                )
+
+                # Buffer synthetic ObjectChange writes during the loop and flush in
+                # one batch at the end. Keyed by (content_type_id, object_id) so
+                # multiple main updates to the same object collapse to one entry.
+                sync_buffer = {}
 
                 # Apply each change from the main schema
                 for change in changes:
@@ -661,8 +814,16 @@ class Branch(JobsMixin, PrimaryModel):
                             change, branchable_models, user, logger, request_id=request_id
                         )
                         models.update(cascade_models)
+                        # A buffered synthetic UPDATE is invalidated by a later DELETE.
+                        sync_buffer.pop(
+                            (change.changed_object_type_id, change.changed_object_id), None
+                        )
                     else:
-                        change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+                        self._apply_sync_update(change, logger, touched_object_keys, sync_buffer)
+
+                # Flush buffered synthetic ObjectChanges. This is where
+                # record_change_diff actually fires and writes to the default DB.
+                self._flush_sync_buffer(sync_buffer, user, request_id, logger)
 
                 if not commit:
                     raise AbortTransaction()
