@@ -87,6 +87,32 @@ The maximum total number of branches that can exist simultaneously, including me
 
 ---
 
+## `provision_workers`
+
+Default: `4`
+
+The number of parallel workers used during branch provisioning to copy tables and build indexes. Each worker holds its own database connection for the duration of the provision and shares an MVCC snapshot of the main schema, ensuring every worker sees an identical view of the source data.
+
+Increasing this value reduces wall-clock provisioning time on multi-GB databases by overlapping table copies and index builds. The practical upper bound is set by your storage subsystem; on modern NVMe-backed deployments, scaling tapers off above 4-8 workers. Set to `1` to disable parallelism entirely (e.g. for debugging).
+
+Each provisioning operation holds up to `provision_workers + 1` PostgreSQL connections concurrently (the workers plus the coordinator). When estimating against the database's `max_connections`, multiply by the number of provisioning operations that may run simultaneously.
+
+For best results, also tune PostgreSQL's index-build settings:
+
+* `maintenance_work_mem` — raise to 256MB or higher during provisioning to give each index build a larger sort buffer.
+* `max_parallel_maintenance_workers` — set to 4 or higher to enable per-index parallel build workers.
+* `wal_compression` — leave on to reduce WAL volume during the bulk copy.
+
+```python
+PLUGINS_CONFIG = {
+    'netbox_branching': {
+        'provision_workers': 8,
+    }
+}
+```
+
+---
+
 ## `max_working_branches`
 
 Default: `None`

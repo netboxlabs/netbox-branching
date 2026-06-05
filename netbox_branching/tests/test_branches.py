@@ -469,3 +469,114 @@ class BranchStatusDescriptionTestCase(SimpleTestCase):
     def test_get_status_description_unknown_status(self):
         branch = Branch(name='Branch 1', status='not-a-real-status')
         self.assertEqual(branch.get_status_description(), '')
+
+
+class BranchProvisionPipelineTestCase(TransactionTestCase):
+    """
+    Targeted coverage of the parallel provisioning pipeline. The end-to-end
+    happy path is exercised by BranchTestCase.test_create_branch; these tests
+    pin down the specific guarantees Phase 1+2 changes make:
+      * indexes on every replicated table are reproduced under their main-schema names
+      * snapshot import is actually performed (not silently skipped)
+      * worker failures cause schema cleanup and a FAILED branch
+    """
+    serialized_rollback = True
+
+    def test_provision_preserves_every_main_schema_index(self):
+        branch = Branch(name='IndexParity')
+        branch.save(provision=False)
+        branch.provision(user=None)
+
+        main_schema = get_plugin_config('netbox_branching', 'main_schema')
+        relevant_tables = {*get_tables_to_replicate(), 'core_objectchange', 'django_migrations'}
+
+        with connection.cursor() as cursor:
+            # Pull all main indexes for the relevant tables, modulo SKIP_INDEXES.
+            cursor.execute(
+                "SELECT tablename, indexname FROM pg_indexes WHERE schemaname=%s",
+                [main_schema],
+            )
+            expected = {
+                (tbl, idx) for tbl, idx in cursor.fetchall()
+                if tbl in relevant_tables and idx not in SKIP_INDEXES
+            }
+
+            cursor.execute(
+                "SELECT tablename, indexname FROM pg_indexes WHERE schemaname=%s",
+                [branch.schema_name],
+            )
+            found = set(cursor.fetchall())
+
+        missing = expected - found
+        self.assertFalse(
+            missing,
+            msg=f"Branch schema is missing {len(missing)} indexes that exist on main: {sorted(missing)[:5]}",
+        )
+
+    def test_provision_imports_exported_snapshot(self):
+        """
+        Phase 2 must call parallel_copy_tables with a non-empty snapshot token
+        of the format pg_export_snapshot() returns.
+        """
+        from netbox_branching.models import branches as branches_module
+
+        captured = {}
+        original = branches_module.parallel_copy_tables
+
+        def spy(*, tables, snapshot_token, schema, main_schema, workers):
+            captured['token'] = snapshot_token
+            captured['tables'] = list(tables)
+            captured['workers'] = workers
+            return original(
+                tables=tables,
+                snapshot_token=snapshot_token,
+                schema=schema,
+                main_schema=main_schema,
+                workers=workers,
+            )
+
+        branches_module.parallel_copy_tables = spy
+        try:
+            branch = Branch(name='SnapshotImport')
+            branch.save(provision=False)
+            branch.provision(user=None)
+        finally:
+            branches_module.parallel_copy_tables = original
+
+        self.assertIn('token', captured, msg="parallel_copy_tables was never invoked")
+        # pg_export_snapshot() returns digits and dashes (occasionally hex).
+        self.assertRegex(captured['token'], r'\A[A-Fa-f0-9\-]+\Z')
+        self.assertGreater(len(captured['tables']), 0)
+
+    def test_provision_failure_drops_schema_and_marks_branch_failed(self):
+        """
+        Any exception out of the parallel pipeline must trigger DROP SCHEMA
+        CASCADE and a FAILED branch status — matching the rollback semantics
+        of the previous single-transaction implementation.
+        """
+        from netbox_branching.models import branches as branches_module
+
+        original = branches_module.parallel_copy_tables
+
+        def boom(*, tables, snapshot_token, schema, main_schema, workers):
+            raise RuntimeError("simulated worker failure")
+
+        branches_module.parallel_copy_tables = boom
+        try:
+            branch = Branch(name='FailureCleanup')
+            branch.save(provision=False)
+            with self.assertRaisesRegex(RuntimeError, 'simulated worker failure'):
+                branch.provision(user=None)
+        finally:
+            branches_module.parallel_copy_tables = original
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.FAILED)
+
+        # The (partial) schema must have been dropped.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
+                [branch.schema_name],
+            )
+            self.assertIsNone(cursor.fetchone(), msg="Partial schema was not cleaned up")

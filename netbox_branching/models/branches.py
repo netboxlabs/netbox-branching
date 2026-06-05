@@ -39,13 +39,17 @@ from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategy
 from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
 from netbox_branching.merge_strategies import get_merge_strategy
+from netbox_branching.provisioning import (
+    build_main_index_map,
+    parallel_build_indexes,
+    parallel_copy_tables,
+)
 from netbox_branching.signals import *
 from netbox_branching.utilities import (
     BranchActionIndicator,
     ChangeSummary,
     activate_branch,
     get_branchable_object_types,
-    get_sql_results,
     get_tables_to_replicate,
     record_applied_change,
     supports_branching,
@@ -1087,10 +1091,22 @@ class Branch(JobsMixin, PrimaryModel):
     def provision(self, user):
         """
         Create the schema & replicate main tables.
+
+        Three phases:
+          1. Metadata setup — create the schema, the ObjectChange skeleton, the
+             django_migrations copy, and the empty (indexless) destination tables.
+          2. Parallel data copy — export an MVCC snapshot from main and let a worker
+             pool run INSERT INTO branch.t SELECT * FROM main.t across tables.
+          3. Parallel index build — replay each main-schema indexdef against the
+             populated branch tables, preserving main's index names.
+
+        On any failure the (possibly partial) schema is dropped and the branch
+        is marked FAILED.
         """
         logger = logging.getLogger('netbox_branching.branch.provision')
         logger.info(f'Provisioning branch {self} ({self.schema_name})')
         main_schema = get_plugin_config('netbox_branching', 'main_schema')
+        workers = get_plugin_config('netbox_branching', 'provision_workers') or 1
 
         # Emit pre-provision signal
         pre_provision.send(sender=self.__class__, branch=self, user=user)
@@ -1098,15 +1114,17 @@ class Branch(JobsMixin, PrimaryModel):
         # Update Branch status
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.PROVISIONING)
 
-        with connection.cursor() as cursor:
-            try:
-                schema = self.schema_name
+        schema = self.schema_name
+        tables_to_replicate = get_tables_to_replicate()
 
-                # Start a transaction
+        try:
+            # Phase 1: metadata setup. Done in a single committed transaction so
+            # the workers in Phase 2 (which run on separate connections) can see
+            # the newly-created schema and tables.
+            with connection.cursor() as cursor:
                 cursor.execute("BEGIN")
-                cursor.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
 
-                # Create the new schema
                 logger.debug(f'Creating schema {schema}')
                 try:
                     cursor.execute(f"CREATE SCHEMA {schema}")
@@ -1120,114 +1138,102 @@ class Branch(JobsMixin, PrimaryModel):
                         )
                     raise
 
-                # Create an empty copy of the global change log. Share the ID sequence from the main table to avoid
-                # reusing change record IDs.
-                table = ObjectChange_._meta.db_table
-                main_table = f'{main_schema}.{table}'
-                schema_table = f'{schema}.{table}'
-                logger.debug(f'Creating table {schema_table}')
+                # Prefetch every index definition on main in one query — the per-table
+                # entries drive the post-data-load index build.
+                main_indexes_by_table = build_main_index_map(cursor, main_schema)
+
+                # Empty copy of the global change log. Share the ID sequence from main
+                # so change record IDs stay globally unique.
+                objectchange_table = ObjectChange_._meta.db_table
+                logger.debug(f'Creating table {schema}.{objectchange_table}')
                 cursor.execute(
-                    f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
+                    f"CREATE TABLE {schema}.{objectchange_table} "
+                    f"( LIKE {main_schema}.{objectchange_table} )"
                 )
-                # Set the default value for the ID column to the sequence associated with the source table
-                sequence_name = f'{main_schema}.{table}_id_seq'
                 cursor.execute(
-                    f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
+                    f"ALTER TABLE {schema}.{objectchange_table} ALTER COLUMN id SET DEFAULT nextval(%s)",
+                    [f'{main_schema}.{objectchange_table}_id_seq'],
                 )
 
-                # Copy the migrations table
-                main_table = f'{main_schema}.django_migrations'
-                schema_table = f'{schema}.django_migrations'
-                logger.debug(f'Creating table {schema_table}')
+                # Copy the django_migrations table
+                logger.debug(f'Creating table {schema}.django_migrations')
                 cursor.execute(
-                    f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
+                    f"CREATE TABLE {schema}.django_migrations "
+                    f"( LIKE {main_schema}.django_migrations )"
                 )
                 cursor.execute(
-                    f"INSERT INTO {schema_table} SELECT * FROM {main_table}"
+                    f"INSERT INTO {schema}.django_migrations "
+                    f"SELECT * FROM {main_schema}.django_migrations"
                 )
-                # Designate id as an identity column
                 cursor.execute(
-                    f"ALTER TABLE {schema_table} ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY"
+                    f"ALTER TABLE {schema}.django_migrations "
+                    f"ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY"
                 )
-                # Set the next value for the ID sequence
-                cursor.execute(
-                    f"SELECT MAX(id) from {schema_table}"
-                )
+                cursor.execute(f"SELECT MAX(id) FROM {schema}.django_migrations")
                 starting_id = cursor.fetchone()[0] + 1
                 cursor.execute(
                     f"ALTER SEQUENCE {schema}.django_migrations_id_seq RESTART WITH {starting_id}"
                 )
 
-                # Replicate relevant tables from the main schema
-                for table in get_tables_to_replicate():
-                    main_table = f'{main_schema}.{table}'
-                    schema_table = f'{schema}.{table}'
-                    logger.debug(f'Creating table {schema_table}')
-
-                    # Create the table in the new schema
+                # Create empty destination tables (no indexes) for the parallel copy.
+                # Indexes are built in Phase 3 after the data is loaded — far cheaper
+                # than maintaining them row-by-row during INSERT.
+                for table in tables_to_replicate:
+                    logger.debug(f'Creating table {schema}.{table}')
                     cursor.execute(
-                        f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
+                        f"CREATE TABLE {schema}.{table} ( LIKE {main_schema}.{table} )"
                     )
 
-                    # Copy data from the source table
-                    cursor.execute(
-                        f"INSERT INTO {schema_table} SELECT * FROM {main_table}"
-                    )
-
-                    # Get the name of the sequence used for object ID allocations (if one exists)
-                    cursor.execute(
-                        "SELECT pg_get_serial_sequence(%s, 'id')", [table]
-                    )
-                    # Set the default value for the ID column to the sequence associated with the source table
-                    if sequence_name := cursor.fetchone()[0]:
-                        cursor.execute(
-                            f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
-                        )
-
-                # Rename indexes to ensure consistency with the main schema for migration compatibility
-                cursor.execute(
-                    f"SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = '{schema}'"
-                )
-                for index in get_sql_results(cursor):
-                    # Skip duplicate indexes
-                    # TODO: Remove in v0.6.0
-                    if index.indexname in SKIP_INDEXES:
-                        continue
-
-                    # Find the matching index in main based on its table & definition
-                    definition = index.indexdef.split(' USING ', maxsplit=1)[1]
-                    cursor.execute(
-                        "SELECT indexname FROM pg_indexes WHERE schemaname=%s AND tablename=%s AND indexdef LIKE %s",
-                        [main_schema, index.tablename, f'% {definition}']
-                    )
-                    if result := cursor.fetchone():
-                        # Rename the branch schema index (if needed)
-                        new_name = result[0]
-                        if new_name != index.indexname:
-                            sql = f"ALTER INDEX {schema}.{index.indexname} RENAME TO {new_name}"
-                            try:
-                                cursor.execute(sql)
-                                logger.debug(sql)
-                            except Exception:
-                                logger.error(sql)
-                                raise
-                    else:
-                        logger.warning(
-                            f"Found no matching index in main for branch index {index.indexname}."
-                        )
-
-                # Commit the transaction
                 cursor.execute("COMMIT")
 
-            except Exception as e:
-                # Abort the transaction
-                cursor.execute("ROLLBACK")
+            # Phase 2: parallel data copy under a single MVCC snapshot.
+            # The coordinator transaction holds the exported snapshot alive while
+            # workers import it; do not commit until every worker has finished.
+            with connection.cursor() as cursor:
+                cursor.execute("BEGIN")
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                cursor.execute("SELECT pg_export_snapshot()")
+                snapshot_token = cursor.fetchone()[0]
+                logger.debug(f'Exported snapshot {snapshot_token} for {len(tables_to_replicate)} tables')
 
-                # Mark the Branch as failed
-                logger.error(e)
-                Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
+                try:
+                    parallel_copy_tables(
+                        tables=tables_to_replicate,
+                        snapshot_token=snapshot_token,
+                        schema=schema,
+                        main_schema=main_schema,
+                        workers=workers,
+                    )
+                finally:
+                    cursor.execute("COMMIT")
 
-                raise
+            # Phase 3: rebuild indexes against the populated branch tables.
+            # Indexes for django_migrations, the ObjectChange skeleton, and every
+            # branchable table all come from the prefetched main map.
+            index_tasks = []
+            relevant_tables = {*tables_to_replicate, objectchange_table, 'django_migrations'}
+            for table_name in relevant_tables:
+                for indexname, indexdef in main_indexes_by_table.get(table_name, ()):
+                    index_tasks.append((table_name, indexname, indexdef))
+
+            parallel_build_indexes(
+                index_tasks=index_tasks,
+                schema=schema,
+                main_schema=main_schema,
+                workers=workers,
+                skip_indexes=SKIP_INDEXES,
+            )
+
+        except Exception as e:
+            logger.error(e)
+            # Clean up any partial state from the failed provision.
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+            except Exception:
+                logger.exception(f"Failed to drop schema {schema} during provision cleanup")
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
+            raise
 
         # Emit post-provision signal
         post_provision.send(sender=self.__class__, branch=self, user=user)

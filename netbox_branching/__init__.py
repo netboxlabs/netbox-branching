@@ -39,6 +39,11 @@ class AppConfig(PluginConfig):
         # Job timeout in seconds for long-running operations (sync, merge, revert)
         'job_timeout': 3600,
 
+        # Number of parallel workers used during branch provisioning to copy tables and build
+        # indexes. Set to 1 to disable parallelism. Each worker holds its own database
+        # connection for the duration of the provision.
+        'provision_workers': 4,
+
         # Branch action validators
         'sync_validators': [],
         'merge_validators': [],
