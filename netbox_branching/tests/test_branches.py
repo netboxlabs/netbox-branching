@@ -482,8 +482,26 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
     """
     serialized_rollback = True
 
+    def setUp(self):
+        # Phase 1 of provision() commits the CREATE SCHEMA outside the test's
+        # transaction, so TransactionTestCase rollback can't undo it. Track
+        # any schemas these tests create and drop them in tearDown so --keepdb
+        # runs don't accumulate orphans.
+        super().setUp()
+        self._provisioned_schemas = []
+
+    def tearDown(self):
+        for schema_name in self._provisioned_schemas:
+            with connection.cursor() as cursor:
+                cursor.execute(f'DROP SCHEMA IF EXISTS {schema_name} CASCADE')
+        super().tearDown()
+
+    def _track(self, branch):
+        self._provisioned_schemas.append(branch.schema_name)
+        return branch
+
     def test_provision_preserves_every_main_schema_index(self):
-        branch = Branch(name='IndexParity')
+        branch = self._track(Branch(name='IndexParity'))
         branch.save(provision=False)
         branch.provision(user=None)
 
@@ -537,7 +555,7 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
 
         branches_module.parallel_copy_tables = spy
         try:
-            branch = Branch(name='SnapshotImport')
+            branch = self._track(Branch(name='SnapshotImport'))
             branch.save(provision=False)
             branch.provision(user=None)
         finally:
@@ -563,7 +581,7 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
 
         branches_module.parallel_copy_tables = boom
         try:
-            branch = Branch(name='FailureCleanup')
+            branch = self._track(Branch(name='FailureCleanup'))
             branch.save(provision=False)
             with self.assertRaisesRegex(RuntimeError, 'simulated worker failure'):
                 branch.provision(user=None)
@@ -580,3 +598,50 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
                 [branch.schema_name],
             )
             self.assertIsNone(cursor.fetchone(), msg="Partial schema was not cleaned up")
+
+    def test_provision_preserves_pk_and_unique_constraints(self):
+        """
+        Branch tables must end up with real PRIMARY KEY / UNIQUE / EXCLUDE
+        constraints in pg_constraint, not just the underlying unique indexes.
+        Future migrations that DROP CONSTRAINT by name depend on this.
+        """
+        branch = self._track(Branch(name='ConstraintParity'))
+        branch.save(provision=False)
+        branch.provision(user=None)
+
+        main_schema = get_plugin_config('netbox_branching', 'main_schema')
+        relevant_tables = {*get_tables_to_replicate(), 'core_objectchange', 'django_migrations'}
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT cls.relname, con.conname, con.contype
+                FROM pg_constraint con
+                JOIN pg_class cls ON cls.oid = con.conrelid
+                JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+                WHERE ns.nspname = %s AND con.contype IN ('p', 'u', 'x')
+                """,
+                [main_schema],
+            )
+            expected = {
+                (tbl, name, ctype) for tbl, name, ctype in cursor.fetchall()
+                if tbl in relevant_tables
+            }
+
+            cursor.execute(
+                """
+                SELECT cls.relname, con.conname, con.contype
+                FROM pg_constraint con
+                JOIN pg_class cls ON cls.oid = con.conrelid
+                JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+                WHERE ns.nspname = %s AND con.contype IN ('p', 'u', 'x')
+                """,
+                [branch.schema_name],
+            )
+            found = set(cursor.fetchall())
+
+        missing = expected - found
+        self.assertFalse(
+            missing,
+            msg=f"Branch schema is missing {len(missing)} PK/UNIQUE/EXCLUDE constraints: {sorted(missing)[:5]}",
+        )

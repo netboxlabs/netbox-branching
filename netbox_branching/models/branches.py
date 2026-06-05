@@ -40,7 +40,9 @@ from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
 from netbox_branching.merge_strategies import get_merge_strategy
 from netbox_branching.provisioning import (
+    build_main_constraint_map,
     build_main_index_map,
+    parallel_add_constraints,
     parallel_build_indexes,
     parallel_copy_tables,
 )
@@ -1094,11 +1096,15 @@ class Branch(JobsMixin, PrimaryModel):
 
         Three phases:
           1. Metadata setup — create the schema, the ObjectChange skeleton, the
-             django_migrations copy, and the empty (indexless) destination tables.
+             django_migrations copy, and the empty (no constraints, no indexes)
+             destination tables. The constraint and index maps for main are
+             also captured here for use in Phase 3.
           2. Parallel data copy — export an MVCC snapshot from main and let a worker
              pool run INSERT INTO branch.t SELECT * FROM main.t across tables.
-          3. Parallel index build — replay each main-schema indexdef against the
-             populated branch tables, preserving main's index names.
+          3. Parallel constraint + index build — add PK/UNIQUE/EXCLUDE constraints
+             (each one builds its backing index implicitly under the original
+             name) and then replay every remaining indexdef against the populated
+             branch tables.
 
         On any failure the (possibly partial) schema is dropped and the branch
         is marked FAILED.
@@ -1141,6 +1147,11 @@ class Branch(JobsMixin, PrimaryModel):
                 # Prefetch every index definition on main in one query — the per-table
                 # entries drive the post-data-load index build.
                 main_indexes_by_table = build_main_index_map(cursor, main_schema)
+                # Same for PRIMARY KEY / UNIQUE / EXCLUDE constraints. We replay
+                # these via ALTER TABLE ADD CONSTRAINT so the branch schema's
+                # pg_constraint mirrors main's — necessary for later migrations
+                # that drop or alter constraints by name.
+                main_constraints_by_table = build_main_constraint_map(cursor, main_schema)
 
                 # Empty copy of the global change log. Share the ID sequence from main
                 # so change record IDs stay globally unique.
@@ -1205,13 +1216,38 @@ class Branch(JobsMixin, PrimaryModel):
                         workers=workers,
                     )
                 finally:
-                    cursor.execute("COMMIT")
+                    # Close the snapshot-exporting transaction. Swallow any error
+                    # here so it can't mask a worker exception that's already in
+                    # flight — the original traceback is what the operator needs.
+                    try:
+                        cursor.execute("COMMIT")
+                    except Exception:
+                        logger.exception(
+                            "Failed to COMMIT Phase 2 coordinator transaction"
+                        )
 
-            # Phase 3: rebuild indexes against the populated branch tables.
-            # Indexes for django_migrations, the ObjectChange skeleton, and every
-            # branchable table all come from the prefetched main map.
-            index_tasks = []
+            # Phase 3: rebuild constraints and indexes against the populated
+            # branch tables. PK/UNIQUE/EXCLUDE constraints are added via
+            # ALTER TABLE ADD CONSTRAINT — each one builds its backing index
+            # implicitly under the constraint's name, so we exclude those
+            # index names from the plain CREATE INDEX pass to avoid duplicates.
             relevant_tables = {*tables_to_replicate, objectchange_table, 'django_migrations'}
+
+            constraint_tasks = []
+            constraint_backed_indexes = set()
+            for table_name in relevant_tables:
+                for conname, condef, backing_indexname in main_constraints_by_table.get(table_name, ()):
+                    constraint_tasks.append((table_name, conname, condef))
+                    if backing_indexname:
+                        constraint_backed_indexes.add(backing_indexname)
+
+            parallel_add_constraints(
+                constraint_tasks=constraint_tasks,
+                schema=schema,
+                workers=workers,
+            )
+
+            index_tasks = []
             for table_name in relevant_tables:
                 for indexname, indexdef in main_indexes_by_table.get(table_name, ()):
                     index_tasks.append((table_name, indexname, indexdef))
@@ -1221,7 +1257,7 @@ class Branch(JobsMixin, PrimaryModel):
                 schema=schema,
                 main_schema=main_schema,
                 workers=workers,
-                skip_indexes=SKIP_INDEXES,
+                skip_indexes={*SKIP_INDEXES, *constraint_backed_indexes},
             )
 
         except Exception as e:
