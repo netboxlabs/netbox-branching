@@ -645,3 +645,31 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
             missing,
             msg=f"Branch schema is missing {len(missing)} PK/UNIQUE/EXCLUDE constraints: {sorted(missing)[:5]}",
         )
+
+    def test_cancel_backends_does_not_disturb_caller_connection(self):
+        """
+        _cancel_backends must operate on its own connection. The Phase 2
+        coordinator's snapshot-exporting transaction lives on the main
+        thread's connection while parallel_copy_tables runs; if cancellation
+        closed that connection it would invalidate the snapshot before in-
+        flight workers had a chance to observe their own failures, masking
+        the original error.
+        """
+        from netbox_branching.provisioning import _cancel_backends
+
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_backend_pid()")
+            before_pid = cursor.fetchone()[0]
+
+        # PID 0 is never a real backend; pg_cancel_backend returns false
+        # without raising, exercising the cancellation path end-to-end.
+        _cancel_backends([0])
+
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_backend_pid()")
+            after_pid = cursor.fetchone()[0]
+
+        self.assertEqual(
+            before_pid, after_pid,
+            msg="_cancel_backends closed the caller's connection (PID changed)",
+        )

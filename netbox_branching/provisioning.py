@@ -36,12 +36,16 @@ def _cancel_backends(pids):
     """Best-effort `pg_cancel_backend` for a list of worker PIDs. Used after the
     first worker failure so that any still-running workers' queries terminate
     before the cleanup DROP SCHEMA tries to take ACCESS EXCLUSIVE on their tables.
+
+    Uses a brand-new connection rather than the caller's thread-local one — the
+    Phase 2 coordinator holds an open snapshot-exporting transaction on the main
+    thread's connection, and closing that connection here would invalidate the
+    exported snapshot before workers have observed their failures.
     """
     if not pids:
         return
+    conn = connections.create_connection(DEFAULT_DB_ALIAS)
     try:
-        conn = connections[DEFAULT_DB_ALIAS]
-        conn.close()
         with conn.cursor() as cursor:
             for pid in pids:
                 try:
@@ -50,6 +54,11 @@ def _cancel_backends(pids):
                     logger.exception(f"Failed to cancel worker backend {pid}")
     except Exception:
         logger.exception("Failed to issue worker cancellation")
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            logger.debug("Ignoring error while closing cancellation connection", exc_info=True)
 
 
 def _run_pool(items, worker_fn, label, workers):
@@ -249,10 +258,15 @@ def parallel_build_indexes(
             return
         _tablename, indexname, indexdef = item
         if main_target not in indexdef:
-            logger.warning(
-                f"indexdef for {indexname} does not reference {main_target!r}; skipping"
+            # pg_get_indexdef normally emits " ON <schema>.<table>"; if the
+            # substring is absent the format has shifted in a way we can't
+            # safely rewrite. Fail loudly rather than silently dropping the
+            # index — a missing PK/UNIQUE backing index on a branch would be
+            # extremely hard to diagnose downstream.
+            raise RuntimeError(
+                f"Cannot rewrite indexdef for {indexname} to branch schema: "
+                f"definition does not contain {main_target!r}: {indexdef!r}"
             )
-            return
         new_def = indexdef.replace(main_target, schema_replacement, 1)
 
         conn = connections[DEFAULT_DB_ALIAS]
