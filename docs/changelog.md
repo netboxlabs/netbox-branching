@@ -1,5 +1,29 @@
 # Change Log
 
+## v1.0.4
+
+### Enhancements
+
+* [#6](https://github.com/netboxlabs/netbox-branching/issues/6) - Group change records by request in the branch view
+* [#28](https://github.com/netboxlabs/netbox-branching/issues/28) - Preserve sync conflict resolution when merging a branch
+* [#545](https://github.com/netboxlabs/netbox-branching/issues/545) - Allow plugins to register a resolver for branching support on non-`ChangeLoggingMixin` models
+* [#554](https://github.com/netboxlabs/netbox-branching/issues/554) - Improve help text for branch merge
+* [#564](https://github.com/netboxlabs/netbox-branching/issues/564) - Clarify "no conflicts found" UI to note that constraint violations are detected at merge time
+* [#572](https://github.com/netboxlabs/netbox-branching/issues/572) - Expose signal to extend `SquashMergeStrategy` dependency graph
+* [#585](https://github.com/netboxlabs/netbox-branching/issues/585) - Add help text descriptions to `BranchStatusChoices`
+
+### Bug Fixes
+
+* [#445](https://github.com/netboxlabs/netbox-branching/issues/445) - Fix branch edit/save race condition for merge status
+* [#483](https://github.com/netboxlabs/netbox-branching/issues/483) - Set `auto_now=True` on the `ChangeDiff` `last_updated` field
+* [#498](https://github.com/netboxlabs/netbox-branching/issues/498) - Fix 500 error from Changes API when a branch with a cable deletion is active
+* [#530](https://github.com/netboxlabs/netbox-branching/issues/530) - Call `super().clean()` in `Branch.clean()` so custom validators run
+* [#531](https://github.com/netboxlabs/netbox-branching/issues/531) - Fix branch sync failure when no conflicting changes are present
+* [#561](https://github.com/netboxlabs/netbox-branching/issues/561) - Enforce permissions on the branching sidebar menu
+* [#568](https://github.com/netboxlabs/netbox-branching/issues/568) - Fix object modified warning for objects in a merged branch
+
+---
+
 ## v1.0.3
 
 ### Enhancements
