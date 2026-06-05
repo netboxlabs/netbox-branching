@@ -255,6 +255,9 @@ class Branch(JobsMixin, PrimaryModel):
     def get_status_color(self):
         return BranchStatusChoices.colors.get(self.status)
 
+    def get_status_description(self):
+        return BranchStatusChoices.DESCRIPTIONS.get(self.status, '')
+
     @cached_property
     def is_active(self):
         return self == active_branch.get()
