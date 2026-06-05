@@ -1226,6 +1226,15 @@ class Branch(JobsMixin, PrimaryModel):
 
         except Exception as e:
             logger.error(e)
+            # If Phase 1 raised mid-transaction the connection is in an aborted
+            # state; clear it before running cleanup or the DROP SCHEMA and the
+            # status update below would both fail with "current transaction is
+            # aborted".
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("ROLLBACK")
+            except Exception:
+                logger.exception(f"Failed to roll back aborted transaction for {schema}")
             # Clean up any partial state from the failed provision.
             try:
                 with connection.cursor() as cursor:
