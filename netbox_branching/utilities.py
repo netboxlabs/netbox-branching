@@ -350,6 +350,19 @@ def clear_mptt_fields(instance):
         setattr(instance, attr, None)
 
 
+def _deep_merge_dict(target, source):
+    """
+    Recursively merge ``source`` into ``target`` in place. Nested dicts are
+    merged key-by-key; all other values are replaced.
+    """
+    for key, value in source.items():
+        if isinstance(value, dict) and isinstance(target.get(key), dict):
+            _deep_merge_dict(target[key], value)
+        else:
+            target[key] = value
+    return target
+
+
 def update_object(instance, data, using):
     """
     Set an attribute on an object depending on the type of model field.
@@ -388,6 +401,12 @@ def update_object(instance, data, using):
             # Use M2M manager for ManyToMany assignments
             m2m_manager = getattr(instance, attr)
             m2m_assignments[m2m_manager] = value
+        elif isinstance(value, dict) and isinstance(getattr(instance, attr, None), dict):
+            # ObjectChange.diff() (NetBox 4.6+, PR #21691) uses deep_compare_dict, so JSON
+            # fields like custom_field_data and local_context_data arrive as partial dicts
+            # containing only the keys the change touched. Merge into the existing dict so
+            # keys the branch never modified are preserved on the target schema. (#588)
+            _deep_merge_dict(getattr(instance, attr), value)
         else:
             setattr(instance, attr, value)
 

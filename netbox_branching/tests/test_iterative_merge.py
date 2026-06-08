@@ -21,7 +21,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
-from extras.models import Tag
+from extras.models import CustomField, Tag
 from netbox.context_managers import event_tracking
 from utilities.exceptions import AbortTransaction
 
@@ -187,6 +187,57 @@ class BaseMergeTests:
         # Verify site is restored to original state after revert
         site = Site.objects.get(id=site_id)
         self.assertEqual(site.description, original_description)
+
+    def test_merge_preserves_unmodified_custom_fields(self):
+        """
+        Regression test for #588: a branch that modifies one custom field must not
+        wipe out other custom fields that were set in main before the branch.
+
+        NetBox 4.6 (PR #21691) switched ObjectChange.diff() to use deep_compare_dict,
+        which returns only the changed keys within nested dicts. Without a merge in
+        update_object(), applying that partial dict via setattr replaces the entire
+        custom_field_data on the main schema and unrelated custom fields disappear.
+        """
+        site_ct = ContentType.objects.get_for_model(Site)
+        cf1 = CustomField.objects.create(name='cf1', required=False)
+        cf1.object_types.set([site_ct])
+        cf2 = CustomField.objects.create(name='cf2', required=False)
+        cf2.object_types.set([site_ct])
+
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In main: create site and set cf1
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            site.snapshot()
+            site.custom_field_data['cf1'] = 'main-value'
+            site.save()
+        site_id = site.id
+
+        # Create branch (snapshots main state including cf1='main-value')
+        branch = self._create_and_provision_branch()
+
+        # In branch: set cf2 only — should leave cf1 untouched on merge
+        with activate_branch(branch), event_tracking(request):
+            site = Site.objects.get(id=site_id)
+            site.snapshot()
+            site.custom_field_data['cf2'] = 'branch-value'
+            site.save()
+
+        branch.merge(user=self.user, commit=True)
+
+        site = Site.objects.get(id=site_id)
+        self.assertEqual(site.custom_field_data.get('cf1'), 'main-value')
+        self.assertEqual(site.custom_field_data.get('cf2'), 'branch-value')
+
+        # Revert should drop cf2 but keep cf1
+        branch.revert(user=self.user, commit=True)
+
+        site = Site.objects.get(id=site_id)
+        self.assertEqual(site.custom_field_data.get('cf1'), 'main-value')
+        self.assertIsNone(site.custom_field_data.get('cf2'))
 
     def test_merge_basic_delete(self):
         """
