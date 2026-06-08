@@ -32,6 +32,15 @@ logger = logging.getLogger('netbox_branching.branch.provision')
 _SNAPSHOT_TOKEN_RE = re.compile(r'\A[A-Fa-f0-9\-]+\Z')
 
 
+def _quote_ident(identifier):
+    """Client-side equivalent of PostgreSQL's quote_ident — always wraps in double
+    quotes and escapes any embedded ones. Used when constructing DDL by string
+    interpolation so reserved words, mixed-case names, or odd characters can't
+    break the statement.
+    """
+    return '"' + identifier.replace('"', '""') + '"'
+
+
 def _cancel_backends(pids):
     """Best-effort `pg_cancel_backend` for a list of worker PIDs. Used after the
     first worker failure so that any still-running workers' queries terminate
@@ -203,7 +212,9 @@ def parallel_copy_tables(tables, snapshot_token, schema, main_schema, workers):
 
                 # Point the branch table's id default at main's sequence so all branches
                 # continue to share a global id namespace (matches the previous behavior).
-                cursor.execute("SELECT pg_get_serial_sequence(%s, 'id')", [table])
+                # Schema-qualify the name: pg_get_serial_sequence resolves via search_path
+                # and would silently return NULL for any non-search_path main_schema.
+                cursor.execute("SELECT pg_get_serial_sequence(%s, 'id')", [f'{main_schema}.{table}'])
                 row = cursor.fetchone()
                 if row and row[0]:
                     cursor.execute(
@@ -312,9 +323,12 @@ def parallel_add_constraints(constraint_tasks, schema, workers):
                 register_pid(cursor.fetchone()[0])
                 if cancel_event.is_set():
                     return
+                # Always-quote identifiers here — condef comes from pg_get_constraintdef
+                # which already quotes column references where needed, so we only need
+                # to handle the bare schema/table/constraint names we inject ourselves.
                 sql = (
-                    f'ALTER TABLE {schema}.{tablename} '
-                    f'ADD CONSTRAINT {conname} {condef}'
+                    f'ALTER TABLE {_quote_ident(schema)}.{_quote_ident(tablename)} '
+                    f'ADD CONSTRAINT {_quote_ident(conname)} {condef}'
                 )
                 logger.debug(f'Adding constraint {conname} on {schema}.{tablename}')
                 cursor.execute(sql)

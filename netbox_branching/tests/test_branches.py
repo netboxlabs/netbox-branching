@@ -673,3 +673,50 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
             before_pid, after_pid,
             msg="_cancel_backends closed the caller's connection (PID changed)",
         )
+
+
+class SnapshotTokenValidationTestCase(SimpleTestCase):
+    """
+    The Phase 2 snapshot token is interpolated directly into SET TRANSACTION
+    SNAPSHOT because that utility statement does not accept bind parameters.
+    The regex gate in parallel_copy_tables() is what keeps that interpolation
+    safe; these tests pin the accepted character set so a future tweak can't
+    accidentally widen it without someone noticing.
+    """
+
+    def test_regex_accepts_real_snapshot_tokens(self):
+        from netbox_branching.provisioning import _SNAPSHOT_TOKEN_RE
+
+        # Tokens of the shape pg_export_snapshot() actually returns.
+        self.assertIsNotNone(_SNAPSHOT_TOKEN_RE.match('00000003-000000DC-1'))
+        self.assertIsNotNone(_SNAPSHOT_TOKEN_RE.match('abc-def-123'))
+        self.assertIsNotNone(_SNAPSHOT_TOKEN_RE.match('0'))
+
+    def test_regex_rejects_injection_attempts(self):
+        from netbox_branching.provisioning import _SNAPSHOT_TOKEN_RE
+
+        for hostile in (
+            "",
+            "abc def",                    # whitespace
+            "abc'; DROP TABLE foo; --",   # SQL injection
+            "' OR 1=1 --",
+            "abc\ndef",                   # newline
+            "abç-def",                    # non-ASCII
+            "abc/def",                    # path separator
+        ):
+            self.assertIsNone(
+                _SNAPSHOT_TOKEN_RE.match(hostile),
+                msg=f"Regex unexpectedly accepted {hostile!r}",
+            )
+
+    def test_parallel_copy_tables_refuses_bad_token(self):
+        from netbox_branching.provisioning import parallel_copy_tables
+
+        with self.assertRaisesRegex(ValueError, 'unexpected snapshot token format'):
+            parallel_copy_tables(
+                tables=['some_table'],
+                snapshot_token="'; DROP TABLE foo; --",
+                schema='branch_xxx',
+                main_schema='public',
+                workers=1,
+            )
