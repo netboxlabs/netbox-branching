@@ -229,15 +229,15 @@ class BaseMergeTests:
         branch.merge(user=self.user, commit=True)
 
         site = Site.objects.get(id=site_id)
-        self.assertEqual(site.custom_field_data.get('cf1'), 'main-value')
-        self.assertEqual(site.custom_field_data.get('cf2'), 'branch-value')
+        self.assertEqual(site.custom_field_data, {'cf1': 'main-value', 'cf2': 'branch-value'})
 
-        # Revert should drop cf2 but keep cf1
+        # Revert restores cf1 untouched and clears cf2 back to None. (The key remains in
+        # the dict rather than being popped — deep_compare_dict collapses "key absent" and
+        # "key=None" in its output, and for custom_field_data the two are equivalent.)
         branch.revert(user=self.user, commit=True)
 
         site = Site.objects.get(id=site_id)
-        self.assertEqual(site.custom_field_data.get('cf1'), 'main-value')
-        self.assertIsNone(site.custom_field_data.get('cf2'))
+        self.assertEqual(site.custom_field_data, {'cf1': 'main-value', 'cf2': None})
 
     def test_merge_basic_delete(self):
         """
