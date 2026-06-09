@@ -429,6 +429,33 @@ class ObjectValidationTestCase(TransactionTestCase):
         with activate_branch(branch):
             self.assertFalse(Site.objects.filter(id=site_id).exists())
 
+    def test_edit_object_created_in_branch_no_error(self):
+        """
+        Test that editing an object created within the branch does not raise an error, even before its
+        CREATE ChangeDiff has been committed (i.e. it was created earlier in the same request).
+        Ref: Issue #496
+        """
+        # Create and activate branch
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            # Create an object directly in the branch. No ObjectChange/ChangeDiff is recorded here, mirroring an
+            # object created earlier in the same request whose CREATE ChangeDiff has not yet been committed.
+            site = Site.objects.create(name='Branch Site', slug='branch-site')
+
+            # Sanity check: there is no CREATE ChangeDiff for the object.
+            self.assertFalse(
+                ChangeDiff.objects.filter(
+                    branch=branch,
+                    object_id=site.pk,
+                    action=ObjectChangeActionChoices.ACTION_CREATE,
+                ).exists()
+            )
+
+            # Editing the branch-created object must not raise a ValidationError.
+            site.description = 'Updated description'
+            site.full_clean()
+
 
 class BranchMiddlewareTestCase(TransactionTestCase):
     serialized_rollback = True

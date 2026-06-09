@@ -39,8 +39,9 @@ def check_object_accessible_in_branch(branch, model, object_id):
     """
     Check if an object is accessible for operations in a branch.
 
-    An object is accessible if it either exists in main or was created in the branch.
-    This prevents operations on objects that were deleted in main.
+    An object is accessible if it exists in main, was created in the branch, or has not been deleted in main since
+    the branch diverged. This prevents operations on objects that were deleted in main while still permitting edits
+    to objects the branch created in the current request (whose CREATE ChangeDiff has not yet been committed).
 
     Args:
         branch: The Branch instance
@@ -60,14 +61,34 @@ def check_object_accessible_in_branch(branch, model, object_id):
         if model.objects.filter(pk=object_id).exists():
             return True
 
-    # Object doesn't exist in main - check if it was created in the branch
+    # Object doesn't exist in main - check if it was created in the branch. The CREATE ChangeDiff is the
+    # authoritative signal once it exists, but it isn't written until the request's change logging is committed.
     content_type = ContentType.objects.get_for_model(model)
-    return ChangeDiff.objects.filter(
+    if ChangeDiff.objects.filter(
         branch=branch,
         object_type=content_type,
         object_id=object_id,
         action=ObjectChangeActionChoices.ACTION_CREATE
-    ).exists()
+    ).exists():
+        return True
+
+    # The object isn't in main and has no committed CREATE ChangeDiff yet. It was either created in the branch
+    # (possibly earlier in this same request, before its ChangeDiff was written) or it existed in main and was
+    # deleted there after the branch diverged. Distinguish the two by when the object was created: an object
+    # created in the branch postdates the branch's provisioning, whereas one copied from main predates it. This
+    # holds even before any ObjectChange is committed, so same-request creates are permitted. See issue #496.
+    obj = model.objects.filter(pk=object_id).first()
+    created = getattr(obj, 'created', None)
+    if created is not None:
+        return created > branch.created
+
+    # The model has no creation timestamp to compare; fall back to checking main's change log for a deletion.
+    with deactivate_branch():
+        return not ObjectChange.objects.filter(
+            changed_object_type=content_type,
+            changed_object_id=object_id,
+            action=ObjectChangeActionChoices.ACTION_DELETE,
+        ).exists()
 
 
 @receiver(post_clean)
