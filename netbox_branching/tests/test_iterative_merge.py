@@ -21,6 +21,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
+from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomField, Tag
 from netbox.context_managers import event_tracking
 from utilities.exceptions import AbortTransaction
@@ -231,13 +232,64 @@ class BaseMergeTests:
         site = Site.objects.get(id=site_id)
         self.assertEqual(site.custom_field_data, {'cf1': 'main-value', 'cf2': 'branch-value'})
 
-        # Revert restores cf1 untouched and clears cf2 back to None. (The key remains in
-        # the dict rather than being popped — deep_compare_dict collapses "key absent" and
-        # "key=None" in its output, and for custom_field_data the two are equivalent.)
+        # Revert restores cf1 untouched and removes cf2 entirely. cf2 was never present in
+        # main's pre-branch state, so diff_for_merge() reverses the branch's addition by
+        # dropping the key rather than leaving a stale cf2=None behind. (#592)
         branch.revert(user=self.user, commit=True)
 
         site = Site.objects.get(id=site_id)
-        self.assertEqual(site.custom_field_data, {'cf1': 'main-value', 'cf2': None})
+        self.assertEqual(site.custom_field_data, {'cf1': 'main-value'})
+
+    def test_merge_removes_deleted_nested_json_key(self):
+        """
+        Regression test for #592: deleting a key from inside a JSON field's value (here a
+        JSON-type custom field, but the same applies to local_context_data) must remove the
+        key on the main schema when the branch is merged — not leave it behind as None.
+
+        NetBox's deep_compare_dict reads nested values with dict.get(), so it cannot tell a
+        removed key apart from a key set to None and silently drops the removal from
+        ObjectChange.diff(). diff_for_merge() recovers the removal via key membership and the
+        deep merge drops it, so main matches the branch's intended JSON exactly.
+        """
+        site_ct = ContentType.objects.get_for_model(Site)
+        jsoncf = CustomField.objects.create(
+            name='jsoncf', type=CustomFieldTypeChoices.TYPE_JSON, required=False
+        )
+        jsoncf.object_types.set([site_ct])
+
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In main: create site and set the JSON custom field to a three-key object
+        original = {'f1': '1', 'f2': '2', 'f3': None}
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            site.snapshot()
+            site.custom_field_data['jsoncf'] = dict(original)
+            site.save()
+        site_id = site.id
+
+        branch = self._create_and_provision_branch()
+
+        # In branch: remove the 'f2' key from inside the JSON value
+        with activate_branch(branch), event_tracking(request):
+            site = Site.objects.get(id=site_id)
+            site.snapshot()
+            site.custom_field_data['jsoncf'] = {'f1': '1', 'f3': None}
+            site.save()
+
+        branch.merge(user=self.user, commit=True)
+
+        # f2 must be gone — not present as {'f2': None}
+        site = Site.objects.get(id=site_id)
+        self.assertEqual(site.custom_field_data['jsoncf'], {'f1': '1', 'f3': None})
+
+        # Revert restores the original JSON value, re-adding the deleted key
+        branch.revert(user=self.user, commit=True)
+
+        site = Site.objects.get(id=site_id)
+        self.assertEqual(site.custom_field_data['jsoncf'], original)
 
     def test_merge_basic_delete(self):
         """

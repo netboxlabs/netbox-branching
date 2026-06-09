@@ -14,6 +14,7 @@ from utilities.serialization import deserialize_object
 
 from netbox_branching.utilities import (
     clear_mptt_fields,
+    diff_for_merge,
     full_clean_with_file_check,
     resolve_objectchange_field_migration,
     update_object,
@@ -80,7 +81,10 @@ class ObjectChange(ObjectChange_):
             try:
                 instance = model.objects.using(using).get(pk=self.changed_object_id)
                 logger.debug(f'Updating {model._meta.verbose_name} {instance}')
-                update_object(instance, self.diff()['post'], using=using)
+                # Build a deletion-aware partial-update payload (pre -> post) rather than
+                # using diff()['post'], which cannot represent removed nested JSON keys. (#592)
+                data = diff_for_merge(self.prechange_data_clean, self.postchange_data_clean)
+                update_object(instance, data, using=using)
             except model.DoesNotExist:
                 if skip_missing:
                     logger.debug(f'{model._meta.verbose_name} ID {self.changed_object_id} already deleted; skipping')
@@ -121,7 +125,9 @@ class ObjectChange(ObjectChange_):
         # Reverting a modification to an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             instance = model.objects.using(using).get(pk=self.changed_object_id)
-            update_object(instance, self.diff()['pre'], using=using)
+            # Reverse direction (post -> pre); keys the branch added are removed. (#592)
+            data = diff_for_merge(self.postchange_data_clean, self.prechange_data_clean)
+            update_object(instance, data, using=using)
 
         # Restoring a deleted object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
