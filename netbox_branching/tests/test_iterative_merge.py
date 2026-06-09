@@ -19,7 +19,7 @@ from dcim.models import (
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections
-from django.test import RequestFactory, TransactionTestCase
+from django.test import RequestFactory, SimpleTestCase, TransactionTestCase
 from django.urls import reverse
 from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomField, Tag
@@ -29,7 +29,7 @@ from utilities.exceptions import AbortTransaction
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import provision_branch
-from netbox_branching.utilities import activate_branch
+from netbox_branching.utilities import DELETED, _deep_merge_dict, _strip_deleted, activate_branch, diff_for_merge
 
 User = get_user_model()
 
@@ -290,6 +290,49 @@ class BaseMergeTests:
 
         site = Site.objects.get(id=site_id)
         self.assertEqual(site.custom_field_data['jsoncf'], original)
+
+    def test_merge_removes_deleted_local_context_key(self):
+        """
+        Regression test for #592 covering local_context_data (the "or local context" half of
+        issue #588). Deleting a key from a Device's local_context_data in a branch must remove
+        the key on main when merged, and merging an unrelated key must leave siblings intact.
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In main: create a device with a three-key local context
+        original = {'a': '1', 'b': '2', 'c': None}
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            device = Device.objects.create(
+                name='Device 1',
+                device_type=self.device_type,
+                role=self.device_role,
+                site=site,
+                local_context_data=dict(original),
+            )
+        device_id = device.id
+
+        branch = self._create_and_provision_branch()
+
+        # In branch: remove the 'b' key and add a new 'd' key
+        with activate_branch(branch), event_tracking(request):
+            device = Device.objects.get(id=device_id)
+            device.snapshot()
+            device.local_context_data = {'a': '1', 'c': None, 'd': '4'}
+            device.save()
+
+        branch.merge(user=self.user, commit=True)
+
+        device = Device.objects.get(id=device_id)
+        self.assertEqual(device.local_context_data, {'a': '1', 'c': None, 'd': '4'})
+
+        # Revert restores the original context exactly: 'b' returns and 'd' is dropped
+        branch.revert(user=self.user, commit=True)
+
+        device = Device.objects.get(id=device_id)
+        self.assertEqual(device.local_context_data, original)
 
     def test_merge_basic_delete(self):
         """
@@ -1199,3 +1242,66 @@ class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
     """Test cases for Branch merge using iterative merge strategy."""
 
     MERGE_STRATEGY = BranchMergeStrategyChoices.ITERATIVE
+
+
+class DiffForMergeTests(SimpleTestCase):
+    """
+    Unit tests for the deletion-aware diff/merge helpers underpinning JSON-field merges
+    (#588, #592). These exercise the pure functions directly, documenting the contract
+    without the cost of a full branch round-trip.
+    """
+
+    def test_diff_nested_deletion_uses_sentinel(self):
+        # A key removed from inside a nested dict is reported with the DELETED sentinel.
+        source = {'custom_field_data': {'cf1': {'f1': '1', 'f2': '2', 'f3': None}}}
+        dest = {'custom_field_data': {'cf1': {'f1': '1', 'f3': None}}}
+        self.assertEqual(diff_for_merge(source, dest), {'custom_field_data': {'cf1': {'f2': DELETED}}})
+
+    def test_diff_reports_additions_and_edits(self):
+        # Added/changed nested keys carry their new value; untouched keys are omitted.
+        source = {'cfd': {'a': 1, 'b': 2}}
+        dest = {'cfd': {'a': 9, 'b': 2, 'c': 3}}
+        self.assertEqual(diff_for_merge(source, dest), {'cfd': {'a': 9, 'c': 3}})
+
+    def test_diff_top_level_removal_is_none_not_sentinel(self):
+        # Top-level removals flow through setattr, so they stay None rather than a sentinel.
+        delta = diff_for_merge({'a': 1, 'b': 2}, {'a': 1})
+        self.assertEqual(delta, {'b': None})
+        self.assertNotIn(DELETED, delta.values())
+
+    def test_diff_equal_dicts_yield_empty(self):
+        self.assertEqual(diff_for_merge({'cfd': {'a': 1}}, {'cfd': {'a': 1}}), {})
+
+    def test_deep_merge_applies_deletion(self):
+        target = {'cf1': 'main', 'cf2': 'x'}
+        _deep_merge_dict(target, {'cf2': DELETED})
+        self.assertEqual(target, {'cf1': 'main'})
+
+    def test_deep_merge_preserves_untouched_siblings(self):
+        target = {'cf1': 'main-value', 'cf2': 'old'}
+        _deep_merge_dict(target, {'cf2': 'branch-value'})
+        self.assertEqual(target, {'cf1': 'main-value', 'cf2': 'branch-value'})
+
+    def test_deep_merge_deletion_of_absent_key_is_noop(self):
+        target = {'cf1': 'main'}
+        _deep_merge_dict(target, {'cf2': DELETED})
+        self.assertEqual(target, {'cf1': 'main'})
+
+    def test_strip_deleted_removes_sentinels_recursively(self):
+        value = {'a': 1, 'b': DELETED, 'c': {'d': DELETED, 'e': 2}}
+        self.assertEqual(_strip_deleted(value), {'a': 1, 'c': {'e': 2}})
+
+    def test_strip_deleted_passes_through_non_dict(self):
+        self.assertEqual(_strip_deleted('scalar'), 'scalar')
+
+    def test_apply_then_revert_round_trips_nested_dict(self):
+        # apply (pre -> post) deletes a key; revert (post -> pre) restores it exactly.
+        pre = {'cfd': {'cf1': {'f1': '1', 'f2': '2', 'f3': None}}}
+        post = {'cfd': {'cf1': {'f1': '1', 'f3': None}}}
+
+        merged = {'cf1': {'f1': '1', 'f2': '2', 'f3': None}}
+        _deep_merge_dict(merged, diff_for_merge(pre, post)['cfd'])
+        self.assertEqual(merged, {'cf1': {'f1': '1', 'f3': None}})
+
+        _deep_merge_dict(merged, diff_for_merge(post, pre)['cfd'])
+        self.assertEqual(merged, {'cf1': {'f1': '1', 'f2': '2', 'f3': None}})

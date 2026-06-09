@@ -44,7 +44,6 @@ __all__ = (
     'clear_mptt_fields',
     'close_old_branch_connections',
     'deactivate_branch',
-    'diff_for_merge',
     'full_clean_with_file_check',
     'get_active_branch',
     'get_branchable_object_types',
