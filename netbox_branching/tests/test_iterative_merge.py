@@ -272,18 +272,19 @@ class BaseMergeTests:
 
         branch = self._create_and_provision_branch()
 
-        # In branch: remove the 'f2' key from inside the JSON value
+        # In branch: remove both 'f2' (value '2') and 'f3' (value None). The None-valued
+        # deletion guards the membership check in _diff_for_merge.
         with activate_branch(branch), event_tracking(request):
             site = Site.objects.get(id=site_id)
             site.snapshot()
-            site.custom_field_data['jsoncf'] = {'f1': '1', 'f3': None}
+            site.custom_field_data['jsoncf'] = {'f1': '1'}
             site.save()
 
         branch.merge(user=self.user, commit=True)
 
-        # f2 must be gone — not present as {'f2': None}
+        # f2 and f3 must be gone — not present as {'f2': None, 'f3': None}
         site = Site.objects.get(id=site_id)
-        self.assertEqual(site.custom_field_data['jsoncf'], {'f1': '1', 'f3': None})
+        self.assertEqual(site.custom_field_data['jsoncf'], {'f1': '1'})
 
         # Revert restores the original JSON value, re-adding the deleted key
         branch.revert(user=self.user, commit=True)
@@ -1256,6 +1257,13 @@ class DiffForMergeTests(SimpleTestCase):
         source = {'custom_field_data': {'cf1': {'f1': '1', 'f2': '2', 'f3': None}}}
         dest = {'custom_field_data': {'cf1': {'f1': '1', 'f3': None}}}
         self.assertEqual(diff_for_merge(source, dest), {'custom_field_data': {'cf1': {'f2': DELETED}}})
+
+    def test_diff_nested_deletion_of_none_valued_key(self):
+        # A deleted key is detected by membership even when its value was None, so it
+        # isn't mistaken for "unchanged" by the value-equality check.
+        source = {'cfd': {'f1': '1', 'f3': None}}
+        dest = {'cfd': {'f1': '1'}}
+        self.assertEqual(diff_for_merge(source, dest), {'cfd': {'f3': DELETED}})
 
     def test_diff_reports_additions_and_edits(self):
         # Added/changed nested keys carry their new value; untouched keys are omitted.

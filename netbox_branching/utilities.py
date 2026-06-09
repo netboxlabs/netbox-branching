@@ -391,14 +391,20 @@ def diff_for_merge(source, destination):
 def _diff_for_merge(source, destination, top_level=False):
     delta = {}
     for key in sorted(source.keys() | destination.keys()):
+        in_source = key in source
+        in_destination = key in destination
         src_val = source.get(key)
         dst_val = destination.get(key)
-        if src_val == dst_val:
+        if in_source and in_destination and src_val == dst_val:
+            # Key present on both sides with an identical value — unchanged.
             continue
         if isinstance(src_val, dict) and isinstance(dst_val, dict):
             # Recurse; unequal dicts always yield at least one nested change.
             delta[key] = _diff_for_merge(src_val, dst_val)
-        elif key not in destination and not top_level:
+        elif not in_destination and not top_level:
+            # Removed from a nested dict. Detected via key membership, not value
+            # equality, so a key whose value was None is still recognised as a
+            # deletion rather than treated as unchanged.
             delta[key] = DELETED
         else:
             delta[key] = dst_val
