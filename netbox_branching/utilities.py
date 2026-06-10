@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 _branch_connections_tracker = Local(thread_critical=False)
 
 __all__ = (
+    'DELETED',
     'ActiveBranchContextManager',
     'BranchActionIndicator',
     'ChangeSummary',
@@ -44,6 +45,7 @@ __all__ = (
     'clear_mptt_fields',
     'close_old_branch_connections',
     'deactivate_branch',
+    'diff_for_merge',
     'full_clean_with_file_check',
     'get_active_branch',
     'get_branchable_object_types',
@@ -365,7 +367,7 @@ class _DeletedKey:
 DELETED = _DeletedKey()
 
 
-def diff_for_merge(source, destination):
+def diff_for_merge(source, destination, top_level=True):
     """
     Compute the partial-update payload that transforms ``source`` into ``destination``
     when deep-merged onto a target via ``update_object`` / ``_deep_merge_dict``.
@@ -383,12 +385,10 @@ def diff_for_merge(source, destination):
     after a merge or revert. Tracking removals explicitly lets the merge drop them. (#592)
 
     Top-level removals are represented with the value ``None`` (matching prior behaviour),
-    since those flow through ``setattr`` rather than a deep merge.
+    since those flow through ``setattr`` rather than a deep merge; nested removals use the
+    ``DELETED`` sentinel. ``top_level`` distinguishes the two and is set to ``False`` on
+    the recursive calls — callers should not pass it.
     """
-    return _diff_for_merge(source, destination, top_level=True)
-
-
-def _diff_for_merge(source, destination, top_level=False):
     delta = {}
     for key in sorted(source.keys() | destination.keys()):
         in_source = key in source
@@ -400,7 +400,7 @@ def _diff_for_merge(source, destination, top_level=False):
             continue
         if isinstance(src_val, dict) and isinstance(dst_val, dict):
             # Recurse; unequal dicts always yield at least one nested change.
-            delta[key] = _diff_for_merge(src_val, dst_val)
+            delta[key] = diff_for_merge(src_val, dst_val, top_level=False)
         elif not in_destination and not top_level:
             # Removed from a nested dict. Detected via key membership, not value
             # equality, so a key whose value was None is still recognised as a

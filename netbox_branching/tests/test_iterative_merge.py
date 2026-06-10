@@ -273,7 +273,7 @@ class BaseMergeTests:
         branch = self._create_and_provision_branch()
 
         # In branch: remove both 'f2' (value '2') and 'f3' (value None). The None-valued
-        # deletion guards the membership check in _diff_for_merge.
+        # deletion guards the membership check in diff_for_merge.
         with activate_branch(branch), event_tracking(request):
             site = Site.objects.get(id=site_id)
             site.snapshot()
