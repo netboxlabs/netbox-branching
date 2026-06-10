@@ -599,6 +599,41 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
             )
             self.assertIsNone(cursor.fetchone(), msg="Partial schema was not cleaned up")
 
+    def test_provision_phase3_failure_drops_schema_and_marks_branch_failed(self):
+        """
+        A failure in Phase 3 (constraint/index build) must hit the same cleanup
+        path as a Phase 2 failure: DROP SCHEMA CASCADE + FAILED status. Phase 3
+        runs after the schema and table data have already been committed, so this
+        pins down that the outer except block cleans up a fully-populated schema —
+        not just the empty-schema state a Phase 2 failure leaves behind.
+        """
+        from netbox_branching.models import branches as branches_module
+
+        original = branches_module.parallel_build_indexes
+
+        def boom(**kwargs):
+            raise RuntimeError("simulated index build failure")
+
+        branches_module.parallel_build_indexes = boom
+        try:
+            branch = self._track(Branch(name='Phase3FailureCleanup'))
+            branch.save(provision=False)
+            with self.assertRaisesRegex(RuntimeError, 'simulated index build failure'):
+                branch.provision(user=None)
+        finally:
+            branches_module.parallel_build_indexes = original
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.FAILED)
+
+        # The committed-then-populated schema must have been dropped.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
+                [branch.schema_name],
+            )
+            self.assertIsNone(cursor.fetchone(), msg="Populated schema was not cleaned up")
+
     def test_provision_preserves_pk_and_unique_constraints(self):
         """
         Branch tables must end up with real PRIMARY KEY / UNIQUE / EXCLUDE

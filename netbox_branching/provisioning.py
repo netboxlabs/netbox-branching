@@ -130,6 +130,13 @@ def _run_pool(tasks, label, workers):
     def worker():
         conn = None
         try:
+            # create_connection() builds a connection that is NOT registered in the
+            # thread-local cache, so each worker owns a private backend it can safely
+            # close without disturbing the main thread's connection (which, during the
+            # copy phase, holds the open snapshot-exporting transaction). connections[alias]
+            # would hand back a shared, thread-local wrapper instead. This is a semi-public
+            # Django API (it lives outside the documented surface but is long-stable); do
+            # not "simplify" it to connections[alias].
             conn = connections.create_connection(DEFAULT_DB_ALIAS)
             with conn.cursor() as cursor:
                 cursor.execute("SELECT pg_backend_pid()")

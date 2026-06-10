@@ -1148,9 +1148,9 @@ class Branch(JobsMixin, PrimaryModel):
                 # provision() only ever runs for a branch being (re)provisioned, so the
                 # schema name is never that of a live, ready branch.
                 logger.debug(f'Creating schema {schema}')
-                cursor.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+                cursor.execute(f"DROP SCHEMA IF EXISTS {quote_ident(schema)} CASCADE")
                 try:
-                    cursor.execute(f"CREATE SCHEMA {schema}")
+                    cursor.execute(f"CREATE SCHEMA {quote_ident(schema)}")
                 except ProgrammingError as e:
                     if str(e).startswith('permission denied '):
                         logger.critical(
@@ -1303,7 +1303,7 @@ class Branch(JobsMixin, PrimaryModel):
             # Clean up any partial state from the failed provision.
             try:
                 with connection.cursor() as cursor:
-                    cursor.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+                    cursor.execute(f"DROP SCHEMA IF EXISTS {quote_ident(schema)} CASCADE")
             except Exception:
                 logger.exception(f"Failed to drop schema {schema} during provision cleanup")
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
@@ -1352,7 +1352,7 @@ class Branch(JobsMixin, PrimaryModel):
             # Delete the schema and all its tables
             logger.debug(f'Deleting schema {self.schema_name}')
             cursor.execute(
-                f"DROP SCHEMA IF EXISTS {self.schema_name} CASCADE"
+                f"DROP SCHEMA IF EXISTS {quote_ident(self.schema_name)} CASCADE"
             )
 
         # Emit post-deprovision signal
