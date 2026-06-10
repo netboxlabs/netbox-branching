@@ -434,7 +434,11 @@ def _deep_merge_dict(target, source):
         elif isinstance(value, dict) and isinstance(target.get(key), dict):
             _deep_merge_dict(target[key], value)
         else:
-            target[key] = value
+            # No dict to merge into (target slot is None/scalar/missing). Strip any
+            # nested DELETED sentinels so they never reach the field — a _DeletedKey
+            # is not JSON-serializable and would crash on save(). _strip_deleted is a
+            # no-op on non-dicts, so this is safe for all values.
+            target[key] = _strip_deleted(value)
     return target
 
 

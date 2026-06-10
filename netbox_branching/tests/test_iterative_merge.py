@@ -1295,6 +1295,21 @@ class DiffForMergeTests(SimpleTestCase):
         _deep_merge_dict(target, {'cf2': DELETED})
         self.assertEqual(target, {'cf1': 'main'})
 
+    def test_deep_merge_strips_sentinel_when_target_slot_not_dict(self):
+        # When the incoming value is a sentinel-bearing dict but the target slot is not a
+        # dict (None here — common for local_context_data), the merge can't recurse. The
+        # DELETED marker must be stripped rather than written verbatim, since a _DeletedKey
+        # is not JSON-serializable and would crash on save().
+        target = {'jsoncf': None}
+        _deep_merge_dict(target, {'jsoncf': {'f1': '1', 'f2': DELETED}})
+        self.assertEqual(target, {'jsoncf': {'f1': '1'}})
+
+    def test_deep_merge_strips_sentinel_when_target_key_missing(self):
+        # Same as above, but the target slot is entirely absent.
+        target = {}
+        _deep_merge_dict(target, {'jsoncf': {'f1': '1', 'f2': DELETED}})
+        self.assertEqual(target, {'jsoncf': {'f1': '1'}})
+
     def test_strip_deleted_removes_sentinels_recursively(self):
         value = {'a': 1, 'b': DELETED, 'c': {'d': DELETED, 'e': 2}}
         self.assertEqual(_strip_deleted(value), {'a': 1, 'c': {'e': 2}})
