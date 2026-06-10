@@ -22,6 +22,7 @@ __all__ = (
     'parallel_add_constraints',
     'parallel_build_indexes',
     'parallel_copy_tables',
+    'quote_ident',
 )
 
 logger = logging.getLogger('netbox_branching.branch.provision')
@@ -32,7 +33,7 @@ logger = logging.getLogger('netbox_branching.branch.provision')
 _SNAPSHOT_TOKEN_RE = re.compile(r'\A[A-Fa-f0-9\-]+\Z')
 
 
-def _quote_ident(identifier):
+def quote_ident(identifier):
     """Client-side equivalent of PostgreSQL's quote_ident — always wraps in double
     quotes and escapes any embedded ones. Used when constructing DDL by string
     interpolation so reserved words, mixed-case names, or odd characters can't
@@ -205,8 +206,8 @@ def parallel_copy_tables(tables, snapshot_token, schema, main_schema, workers):
                 cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
                 cursor.execute(f"SET TRANSACTION SNAPSHOT '{snapshot_token}'")
 
-                main_table = f'{main_schema}.{table}'
-                schema_table = f'{schema}.{table}'
+                main_table = f'{quote_ident(main_schema)}.{quote_ident(table)}'
+                schema_table = f'{quote_ident(schema)}.{quote_ident(table)}'
                 logger.debug(f'Copying {main_table} -> {schema_table}')
                 cursor.execute(f"INSERT INTO {schema_table} SELECT * FROM {main_table}")
 
@@ -214,7 +215,7 @@ def parallel_copy_tables(tables, snapshot_token, schema, main_schema, workers):
                 # continue to share a global id namespace (matches the previous behavior).
                 # Schema-qualify the name: pg_get_serial_sequence resolves via search_path
                 # and would silently return NULL for any non-search_path main_schema.
-                cursor.execute("SELECT pg_get_serial_sequence(%s, 'id')", [f'{main_schema}.{table}'])
+                cursor.execute("SELECT pg_get_serial_sequence(%s, 'id')", [main_table])
                 row = cursor.fetchone()
                 if row and row[0]:
                     cursor.execute(
@@ -278,6 +279,11 @@ def parallel_build_indexes(
                 f"Cannot rewrite indexdef for {indexname} to branch schema: "
                 f"definition does not contain {main_target!r}: {indexdef!r}"
             )
+        # Only the table reference carries the ` ON <schema>.` prefix, so this
+        # rewrites exactly that and nothing else. A schema-qualified function in an
+        # expression index (e.g. `... (public.func(col))`) is intentionally left
+        # pointing at main_schema: branch schemas hold only tables, never functions,
+        # so the function lives in main and must continue to be referenced there.
         new_def = indexdef.replace(main_target, schema_replacement, 1)
 
         conn = connections[DEFAULT_DB_ALIAS]
@@ -327,8 +333,8 @@ def parallel_add_constraints(constraint_tasks, schema, workers):
                 # which already quotes column references where needed, so we only need
                 # to handle the bare schema/table/constraint names we inject ourselves.
                 sql = (
-                    f'ALTER TABLE {_quote_ident(schema)}.{_quote_ident(tablename)} '
-                    f'ADD CONSTRAINT {_quote_ident(conname)} {condef}'
+                    f'ALTER TABLE {quote_ident(schema)}.{quote_ident(tablename)} '
+                    f'ADD CONSTRAINT {quote_ident(conname)} {condef}'
                 )
                 logger.debug(f'Adding constraint {conname} on {schema}.{tablename}')
                 cursor.execute(sql)
