@@ -15,6 +15,7 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from django.db import DEFAULT_DB_ALIAS, connections
+from psycopg import sql
 
 __all__ = (
     'build_main_constraint_map',
@@ -34,12 +35,21 @@ _SNAPSHOT_TOKEN_RE = re.compile(r'\A[A-Fa-f0-9\-]+\Z')
 
 
 def quote_ident(identifier):
-    """Client-side equivalent of PostgreSQL's quote_ident — always wraps in double
-    quotes and escapes any embedded ones. Used when constructing DDL by string
-    interpolation so reserved words, mixed-case names, or odd characters can't
-    break the statement.
+    """Quote a single SQL identifier for safe interpolation into a DDL string.
+
+    Always wraps the name in double quotes and escapes any embedded ones, so reserved
+    words, mixed-case names, or odd characters can't break (or inject into) the
+    statement. We delegate the escaping to psycopg's own ``sql.Identifier`` rather than
+    hand-rolling it — the driver is the authority on its dialect, and Django's
+    ``connection.ops.quote_name`` is unsuitable here because it does not escape embedded
+    quotes.
+
+    Note this always-quote form is intentionally distinct from the server-side
+    ``quote_ident()`` used in ``parallel_build_indexes`` to rewrite index definitions:
+    that one must emit PostgreSQL's canonical (bare-when-possible) form to match what
+    ``pg_get_indexdef`` produces.
     """
-    return '"' + identifier.replace('"', '""') + '"'
+    return sql.Identifier(identifier).as_string()
 
 
 def _cancel_backends(pids):
