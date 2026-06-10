@@ -71,48 +71,83 @@ def _cancel_backends(pids):
             logger.debug("Ignoring error while closing cancellation connection", exc_info=True)
 
 
-def _run_pool(items, worker_fn, label, workers):
-    """Run ``worker_fn(item, register_pid, cancel_event)`` across a thread pool.
+def _run_pool(tasks, label, workers):
+    """Run each task — a callable taking a single cursor argument — across a pool
+    of ``workers`` threads.
 
-    On the first worker exception: signal cancel_event, cancel pending futures,
-    pg_cancel_backend any in-flight workers' queries, drain the remaining
-    futures, then re-raise the original exception. ``register_pid`` is a callback
-    workers invoke once they have a connection so the cancellation pass knows
-    which backends to terminate.
+    Each worker thread opens ONE dedicated backend (via ``create_connection`` so it
+    is independent of the thread-local connection cache) and pulls tasks from a
+    shared queue until it is drained, reusing that one connection for every task it
+    runs. This keeps the number of backends established per provision proportional
+    to ``workers`` rather than to the number of tasks — establishing a fresh
+    PostgreSQL backend per table/index/constraint is expensive and, during the copy
+    phase, needlessly lengthens the window the coordinator must hold its MVCC
+    snapshot open.
+
+    On the first task failure: record it, signal cancel_event so idle workers stop
+    pulling new tasks, and pg_cancel_backend the in-flight workers' queries so the
+    downstream DROP SCHEMA cleanup isn't blocked on their locks. The original
+    exception is re-raised once the pool drains.
     """
+    tasks = list(tasks)
+    if not tasks:
+        return
     workers = max(1, int(workers))
+    task_iter = iter(tasks)
+    task_lock = threading.Lock()
     pids = []
     pids_lock = threading.Lock()
     cancel_event = threading.Event()
+    errors = []
+    errors_lock = threading.Lock()
 
-    def register_pid(pid):
-        with pids_lock:
-            pids.append(pid)
+    def next_task():
+        with task_lock:
+            return next(task_iter, None)
 
-    def wrapped(item):
-        return worker_fn(item, register_pid, cancel_event)
+    def record_failure(exc):
+        with errors_lock:
+            first = not errors
+            errors.append(exc)
+        if first:
+            logger.error(f"{label} worker failed", exc_info=exc)
+            cancel_event.set()
+            with pids_lock:
+                to_cancel = list(pids)
+            _cancel_backends(to_cancel)
+
+    def worker():
+        conn = None
+        try:
+            conn = connections.create_connection(DEFAULT_DB_ALIAS)
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT pg_backend_pid()")
+                with pids_lock:
+                    pids.append(cursor.fetchone()[0])
+            while not cancel_event.is_set():
+                task = next_task()
+                if task is None:
+                    break
+                with conn.cursor() as cursor:
+                    task(cursor)
+        except Exception as e:  # noqa: BLE001 — any task failure must abort the whole pool
+            record_failure(e)
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    logger.debug("Ignoring error while closing worker connection", exc_info=True)
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=label) as pool:
-        futures = {pool.submit(wrapped, item): item for item in items}
-        first_error = None
+        futures = [pool.submit(worker) for _ in range(workers)]
         for future in as_completed(futures):
-            item = futures[future]
-            try:
-                future.result()
-            except Exception as e:
-                if first_error is None:
-                    first_error = e
-                    logger.exception(f"{label} worker failed on {item!r}")
-                    cancel_event.set()
-                    for f in futures:
-                        f.cancel()
-                    with pids_lock:
-                        to_cancel = list(pids)
-                    _cancel_backends(to_cancel)
-                # Continue draining so the pool exits cleanly; subsequent errors
-                # are from cancellations and don't override the first cause.
-        if first_error is not None:
-            raise first_error
+            # worker() funnels task failures into `errors`; this only surfaces an
+            # unexpected error escaping worker() itself.
+            future.result()
+
+    if errors:
+        raise errors[0]
 
 
 def build_main_index_map(cursor, main_schema):
@@ -144,6 +179,13 @@ def build_main_constraint_map(cursor, main_schema):
     real constraints; we replay them as ALTER TABLE ADD CONSTRAINT so future
     migrations against the branch (DROP CONSTRAINT, AlterUniqueTogether, etc.)
     find them.
+
+    FOREIGN KEY ('f') and CHECK ('c') constraints are intentionally excluded, matching
+    the prior `LIKE INCLUDING INDEXES` behaviour (which replicated neither). Branch
+    schemas are not subjected to FK enforcement against main, and CHECK constraints are
+    re-derived by any migration that needs them. A migration that drops a CHECK
+    constraint by name on a branch would therefore not find it — the same limitation
+    that existed before this change.
     """
     cursor.execute(
         """
@@ -188,46 +230,33 @@ def parallel_copy_tables(tables, snapshot_token, schema, main_schema, workers):
     if not _SNAPSHOT_TOKEN_RE.match(snapshot_token):
         raise ValueError(f"Refusing unexpected snapshot token format: {snapshot_token!r}")
 
-    def _copy_one(table, register_pid, cancel_event):
-        if cancel_event.is_set():
-            return
-        conn = connections[DEFAULT_DB_ALIAS]
-        # ThreadPoolExecutor reuses threads across tasks; force a fresh backend
-        # so each task starts with a clean transaction state.
-        conn.close()
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT pg_backend_pid()")
-                register_pid(cursor.fetchone()[0])
-                if cancel_event.is_set():
-                    return
+    def make_copy_task(table):
+        def copy(cursor):
+            cursor.execute("BEGIN")
+            cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            cursor.execute(f"SET TRANSACTION SNAPSHOT '{snapshot_token}'")
 
-                cursor.execute("BEGIN")
-                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-                cursor.execute(f"SET TRANSACTION SNAPSHOT '{snapshot_token}'")
+            main_table = f'{quote_ident(main_schema)}.{quote_ident(table)}'
+            schema_table = f'{quote_ident(schema)}.{quote_ident(table)}'
+            logger.debug(f'Copying {main_table} -> {schema_table}')
+            cursor.execute(f"INSERT INTO {schema_table} SELECT * FROM {main_table}")
 
-                main_table = f'{quote_ident(main_schema)}.{quote_ident(table)}'
-                schema_table = f'{quote_ident(schema)}.{quote_ident(table)}'
-                logger.debug(f'Copying {main_table} -> {schema_table}')
-                cursor.execute(f"INSERT INTO {schema_table} SELECT * FROM {main_table}")
+            # Point the branch table's id default at main's sequence so all branches
+            # continue to share a global id namespace (matches the previous behavior).
+            # Schema-qualify the name: pg_get_serial_sequence resolves via search_path
+            # and would silently return NULL for any non-search_path main_schema.
+            cursor.execute("SELECT pg_get_serial_sequence(%s, 'id')", [main_table])
+            row = cursor.fetchone()
+            if row and row[0]:
+                cursor.execute(
+                    f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)",
+                    [row[0]],
+                )
 
-                # Point the branch table's id default at main's sequence so all branches
-                # continue to share a global id namespace (matches the previous behavior).
-                # Schema-qualify the name: pg_get_serial_sequence resolves via search_path
-                # and would silently return NULL for any non-search_path main_schema.
-                cursor.execute("SELECT pg_get_serial_sequence(%s, 'id')", [main_table])
-                row = cursor.fetchone()
-                if row and row[0]:
-                    cursor.execute(
-                        f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)",
-                        [row[0]],
-                    )
+            cursor.execute("COMMIT")
+        return copy
 
-                cursor.execute("COMMIT")
-        finally:
-            conn.close()
-
-    _run_pool(list(tables), _copy_one, 'branch-copy', workers)
+    _run_pool([make_copy_task(t) for t in tables], 'branch-copy', workers)
 
 
 def parallel_build_indexes(
@@ -265,9 +294,7 @@ def parallel_build_indexes(
     main_target = f' ON {main_qident}.'
     schema_replacement = f' ON {schema_qident}.'
 
-    def _build_one(item, register_pid, cancel_event):
-        if cancel_event.is_set():
-            return
+    def make_build_task(item):
         _tablename, indexname, indexdef = item
         if main_target not in indexdef:
             # pg_get_indexdef normally emits " ON <schema>.<table>"; if the
@@ -286,20 +313,12 @@ def parallel_build_indexes(
         # so the function lives in main and must continue to be referenced there.
         new_def = indexdef.replace(main_target, schema_replacement, 1)
 
-        conn = connections[DEFAULT_DB_ALIAS]
-        conn.close()
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT pg_backend_pid()")
-                register_pid(cursor.fetchone()[0])
-                if cancel_event.is_set():
-                    return
-                logger.debug(f'Creating index {schema}.{indexname}')
-                cursor.execute(new_def)
-        finally:
-            conn.close()
+        def build(cursor):
+            logger.debug(f'Creating index {schema}.{indexname}')
+            cursor.execute(new_def)
+        return build
 
-    _run_pool(tasks, _build_one, 'branch-index', workers)
+    _run_pool([make_build_task(t) for t in tasks], 'branch-index', workers)
 
 
 def parallel_add_constraints(constraint_tasks, schema, workers):
@@ -313,32 +332,19 @@ def parallel_add_constraints(constraint_tasks, schema, workers):
     ``constraint_tasks`` is an iterable of ``(tablename, conname, condef)``
     tuples, typically derived from ``build_main_constraint_map()``.
     """
-    tasks = list(constraint_tasks)
-    if not tasks:
-        return
-
-    def _add_one(item, register_pid, cancel_event):
-        if cancel_event.is_set():
-            return
+    def make_add_task(item):
         tablename, conname, condef = item
-        conn = connections[DEFAULT_DB_ALIAS]
-        conn.close()
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT pg_backend_pid()")
-                register_pid(cursor.fetchone()[0])
-                if cancel_event.is_set():
-                    return
-                # Always-quote identifiers here — condef comes from pg_get_constraintdef
-                # which already quotes column references where needed, so we only need
-                # to handle the bare schema/table/constraint names we inject ourselves.
-                sql = (
-                    f'ALTER TABLE {quote_ident(schema)}.{quote_ident(tablename)} '
-                    f'ADD CONSTRAINT {quote_ident(conname)} {condef}'
-                )
-                logger.debug(f'Adding constraint {conname} on {schema}.{tablename}')
-                cursor.execute(sql)
-        finally:
-            conn.close()
+        # Always-quote identifiers here — condef comes from pg_get_constraintdef
+        # which already quotes column references where needed, so we only need
+        # to handle the bare schema/table/constraint names we inject ourselves.
+        sql = (
+            f'ALTER TABLE {quote_ident(schema)}.{quote_ident(tablename)} '
+            f'ADD CONSTRAINT {quote_ident(conname)} {condef}'
+        )
 
-    _run_pool(tasks, _add_one, 'branch-constraint', workers)
+        def add(cursor):
+            logger.debug(f'Adding constraint {conname} on {schema}.{tablename}')
+            cursor.execute(sql)
+        return add
+
+    _run_pool([make_add_task(t) for t in constraint_tasks], 'branch-constraint', workers)

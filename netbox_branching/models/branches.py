@@ -1140,7 +1140,14 @@ class Branch(JobsMixin, PrimaryModel):
                 cursor.execute("BEGIN")
                 cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
 
+                # Drop any schema left behind by a previous provision that was hard-killed
+                # (OOM, SIGKILL, lost connection) between Phase 1's commit and the cleanup
+                # path below. Without this, re-provisioning the same branch would fail on
+                # CREATE SCHEMA with "schema already exists" and require manual intervention.
+                # provision() only ever runs for a branch being (re)provisioned, so the
+                # schema name is never that of a live, ready branch.
                 logger.debug(f'Creating schema {schema}')
+                cursor.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
                 try:
                     cursor.execute(f"CREATE SCHEMA {schema}")
                 except ProgrammingError as e:
@@ -1246,22 +1253,20 @@ class Branch(JobsMixin, PrimaryModel):
 
             constraint_tasks = []
             constraint_backed_indexes = set()
+            index_tasks = []
             for table_name in relevant_tables:
                 for conname, condef, backing_indexname in main_constraints_by_table.get(table_name, ()):
                     constraint_tasks.append((table_name, conname, condef))
                     if backing_indexname:
                         constraint_backed_indexes.add(backing_indexname)
+                for indexname, indexdef in main_indexes_by_table.get(table_name, ()):
+                    index_tasks.append((table_name, indexname, indexdef))
 
             parallel_add_constraints(
                 constraint_tasks=constraint_tasks,
                 schema=schema,
                 workers=workers,
             )
-
-            index_tasks = []
-            for table_name in relevant_tables:
-                for indexname, indexdef in main_indexes_by_table.get(table_name, ()):
-                    index_tasks.append((table_name, indexname, indexdef))
 
             parallel_build_indexes(
                 index_tasks=index_tasks,

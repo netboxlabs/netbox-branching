@@ -70,7 +70,12 @@ class BranchJobRunner(JobRunner):
     """
     @classmethod
     def enqueue(cls, *args, **kwargs):
-        kwargs.setdefault('job_timeout', get_plugin_config('netbox_branching', 'job_timeout'))
+        # Use `.get() is None` rather than setdefault so an explicit job_timeout=None
+        # (a caller meaning "use the default") still gets the configured value instead
+        # of falling through to RQ's 300s default — the exact timeout this class exists
+        # to prevent. A caller passing a real value still overrides.
+        if kwargs.get('job_timeout') is None:
+            kwargs['job_timeout'] = get_plugin_config('netbox_branching', 'job_timeout')
         return super().enqueue(*args, **kwargs)
 
 
