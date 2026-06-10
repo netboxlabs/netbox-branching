@@ -42,6 +42,7 @@ from netbox_branching.merge_strategies import get_merge_strategy
 from netbox_branching.provisioning import (
     build_main_constraint_map,
     build_main_index_map,
+    build_main_table_sizes,
     parallel_add_constraints,
     parallel_build_indexes,
     parallel_copy_tables,
@@ -1168,6 +1169,10 @@ class Branch(JobsMixin, PrimaryModel):
                 # pg_constraint mirrors main's — necessary for later migrations
                 # that drop or alter constraints by name.
                 main_constraints_by_table = build_main_constraint_map(cursor, main_schema)
+                # On-disk size per table, used to dispatch the heaviest tables first in
+                # each parallel phase so a single large table can't be picked up last and
+                # left running alone while every other worker sits idle.
+                main_table_sizes = build_main_table_sizes(cursor, main_schema)
 
                 # Empty copy of the global change log. Share the ID sequence from main
                 # so change record IDs stay globally unique.
@@ -1227,7 +1232,13 @@ class Branch(JobsMixin, PrimaryModel):
 
                 try:
                     parallel_copy_tables(
-                        tables=tables_to_replicate,
+                        # Heaviest tables first (longest-processing-time scheduling) so the
+                        # makespan isn't dominated by a large table dispatched last.
+                        tables=sorted(
+                            tables_to_replicate,
+                            key=lambda t: main_table_sizes.get(t, 0),
+                            reverse=True,
+                        ),
                         snapshot_token=snapshot_token,
                         schema=schema,
                         main_schema=main_schema,
@@ -1254,7 +1265,9 @@ class Branch(JobsMixin, PrimaryModel):
             constraint_tasks = []
             constraint_backed_indexes = set()
             index_tasks = []
-            for table_name in relevant_tables:
+            # Build both task lists heaviest-table-first so the constraint and index
+            # phases drain their largest work early rather than tailing on it.
+            for table_name in sorted(relevant_tables, key=lambda t: main_table_sizes.get(t, 0), reverse=True):
                 for conname, condef, backing_indexname in main_constraints_by_table.get(table_name, ()):
                     constraint_tasks.append((table_name, conname, condef))
                     if backing_indexname:

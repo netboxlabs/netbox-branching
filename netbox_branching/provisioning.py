@@ -20,6 +20,7 @@ from psycopg import sql
 __all__ = (
     'build_main_constraint_map',
     'build_main_index_map',
+    'build_main_table_sizes',
     'parallel_add_constraints',
     'parallel_build_indexes',
     'parallel_copy_tables',
@@ -174,6 +175,29 @@ def build_main_index_map(cursor, main_schema):
     for tablename, indexname, indexdef in cursor.fetchall():
         result[tablename].append((indexname, indexdef))
     return result
+
+
+def build_main_table_sizes(cursor, main_schema):
+    """
+    Return ``{tablename: size_in_bytes}`` for every ordinary table in the main schema.
+
+    ``pg_table_size`` (heap + TOAST, excluding indexes) is an always-accurate proxy for
+    how much work copying and indexing a table will take — unlike ``pg_class.reltuples``
+    it does not depend on a recent ANALYZE. Callers use it only to order parallel work
+    heaviest-first, so an approximate ranking is sufficient; tables absent from the map
+    simply sort last.
+    """
+    cursor.execute(
+        """
+        SELECT cls.relname, pg_table_size(cls.oid)
+        FROM pg_class cls
+        JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+        WHERE ns.nspname = %s
+          AND cls.relkind = 'r'
+        """,
+        [main_schema],
+    )
+    return {tablename: size for tablename, size in cursor.fetchall()}
 
 
 def build_main_constraint_map(cursor, main_schema):
