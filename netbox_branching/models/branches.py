@@ -1108,6 +1108,14 @@ class Branch(JobsMixin, PrimaryModel):
 
         On any failure the (possibly partial) schema is dropped and the branch
         is marked FAILED.
+
+        This assumes main's schema is stable for the duration of the provision.
+        Unlike the previous single-transaction implementation, Phase 1's catalog
+        read and Phase 2's data snapshot are separate transactions, so a concurrent
+        schema migration on main could yield a branch missing a just-added index
+        (harmless) or, if a column is added, fail the Phase 2 copy outright (which
+        falls into the cleanup path below). Do not run migrations against main
+        while provisioning a branch.
         """
         logger = logging.getLogger('netbox_branching.branch.provision')
         logger.info(f'Provisioning branch {self} ({self.schema_name})')
