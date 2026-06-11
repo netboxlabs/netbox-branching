@@ -12,6 +12,7 @@ from django.db import connections
 from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django_rq import get_queue
+from netbox.context import current_request
 from utilities.testing import ViewTestCases, create_tags
 
 from netbox_branching.choices import BranchStatusChoices
@@ -388,18 +389,29 @@ class ObjectValidationTestCase(TransactionTestCase):
         # Verify site is deleted in main
         self.assertFalse(Site.objects.filter(id=site_id).exists())
 
+        # The deleted-in-main guard is part of change logging, which only runs when a
+        # request is in context (see #496). Set one to mirror the web UI / a committing
+        # script, where this validation is meant to fire.
+        request = RequestFactory().get('/')
+        request.id = uuid.uuid4()
+        request.user = self.user
+        token = current_request.set(request)
+
         # In branch: try to edit the site (should raise ValidationError)
-        with activate_branch(branch):
-            site_in_branch = Site.objects.get(id=site_id)
-            site_in_branch.description = 'Updated description'
+        try:
+            with activate_branch(branch):
+                site_in_branch = Site.objects.get(id=site_id)
+                site_in_branch.description = 'Updated description'
 
-            with self.assertRaises(ValidationError) as cm:
-                site_in_branch.full_clean()
+                with self.assertRaises(ValidationError) as cm:
+                    site_in_branch.full_clean()
 
-            # Verify the error message
-            error_message = str(cm.exception)
-            self.assertIn('deleted in the main branch', error_message)
-            self.assertIn('Cannot modify', error_message)
+                # Verify the error message
+                error_message = str(cm.exception)
+                self.assertIn('deleted in the main branch', error_message)
+                self.assertIn('Cannot modify', error_message)
+        finally:
+            current_request.reset(token)
 
     def test_delete_object_deleted_in_main_no_error(self):
         """
