@@ -13,6 +13,7 @@ from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.forms import BranchForm
 from netbox_branching.models import Branch
+from netbox_branching.provisioning import quote_ident
 from netbox_branching.signals import post_deprovision, pre_deprovision
 from netbox_branching.utilities import BranchActionIndicator, get_tables_to_replicate
 
@@ -493,7 +494,7 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
     def tearDown(self):
         for schema_name in self._provisioned_schemas:
             with connection.cursor() as cursor:
-                cursor.execute(f'DROP SCHEMA IF EXISTS {schema_name} CASCADE')
+                cursor.execute(f'DROP SCHEMA IF EXISTS {quote_ident(schema_name)} CASCADE')
         super().tearDown()
 
     def _track(self, branch):

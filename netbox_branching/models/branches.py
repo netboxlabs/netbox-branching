@@ -31,6 +31,7 @@ from netbox.context import current_request
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
+from psycopg.pq import TransactionStatus
 from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import serialize_object
@@ -44,6 +45,7 @@ from netbox_branching.provisioning import (
     build_main_index_map,
     build_main_table_sizes,
     parallel_add_constraints,
+    parallel_analyze_tables,
     parallel_build_indexes,
     parallel_copy_tables,
     quote_ident,
@@ -1289,17 +1291,46 @@ class Branch(JobsMixin, PrimaryModel):
                 skip_indexes={*SKIP_INDEXES, *constraint_backed_indexes},
             )
 
+            # Phase 4: refresh planner statistics. After the bulk copy the branch
+            # tables have no statistics, so the first queries against the branch
+            # (sync, change-diff computation, etc.) would plan against empty-table
+            # estimates until autovacuum eventually catches up. ANALYZE is
+            # statistics-only and never affects correctness, so a failure here must
+            # not fail the provision — log it and leave the stats to autovacuum.
+            try:
+                parallel_analyze_tables(
+                    tables=sorted(
+                        relevant_tables,
+                        key=lambda t: main_table_sizes.get(t, 0),
+                        reverse=True,
+                    ),
+                    schema=schema,
+                    workers=workers,
+                )
+            except Exception:
+                logger.warning(
+                    f"ANALYZE of branch schema {schema} failed; planner statistics will be "
+                    f"populated by autovacuum instead.",
+                    exc_info=True,
+                )
+
         except Exception as e:
             logger.error(e)
             # If Phase 1 raised mid-transaction the connection is in an aborted
             # state; clear it before running cleanup or the DROP SCHEMA and the
             # status update below would both fail with "current transaction is
-            # aborted".
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute("ROLLBACK")
-            except Exception:
-                logger.exception(f"Failed to roll back aborted transaction for {schema}")
+            # aborted". A Phase 2/3 failure leaves the connection idle (the
+            # coordinator already committed and the workers use their own
+            # connections), so only issue the ROLLBACK when the server actually
+            # has an open transaction — an out-of-transaction ROLLBACK would emit
+            # a spurious "no transaction in progress" warning.
+            if connection.connection is not None and \
+                    connection.connection.info.transaction_status != TransactionStatus.IDLE:
+                try:
+                    with connection.cursor() as cursor:
+                        cursor.execute("ROLLBACK")
+                except Exception:
+                    logger.exception(f"Failed to roll back aborted transaction for {schema}")
             # Clean up any partial state from the failed provision.
             try:
                 with connection.cursor() as cursor:

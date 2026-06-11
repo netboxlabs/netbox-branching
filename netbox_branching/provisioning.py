@@ -22,6 +22,7 @@ __all__ = (
     'build_main_index_map',
     'build_main_table_sizes',
     'parallel_add_constraints',
+    'parallel_analyze_tables',
     'parallel_build_indexes',
     'parallel_copy_tables',
     'quote_ident',
@@ -65,8 +66,13 @@ def _cancel_backends(pids):
     """
     if not pids:
         return
-    conn = connections.create_connection(DEFAULT_DB_ALIAS)
+    conn = None
     try:
+        # Opening this connection can itself fail under the very condition that tends
+        # to trigger a worker failure (e.g. the server at max_connections). Keep it
+        # inside the try so the failure is caught rather than propagated through the
+        # worker's error handler.
+        conn = connections.create_connection(DEFAULT_DB_ALIAS)
         with conn.cursor() as cursor:
             for pid in pids:
                 try:
@@ -74,12 +80,21 @@ def _cancel_backends(pids):
                 except Exception:
                     logger.exception(f"Failed to cancel worker backend {pid}")
     except Exception:
-        logger.exception("Failed to issue worker cancellation")
+        # If we couldn't cancel the in-flight workers, the downstream DROP SCHEMA
+        # cleanup will block on their table locks until they finish naturally —
+        # potentially minutes on a loaded system. Warn loudly so the apparent hang
+        # is diagnosable.
+        logger.warning(
+            "Failed to cancel in-flight provisioning workers; schema cleanup may block "
+            "until they finish on their own.",
+            exc_info=True,
+        )
     finally:
-        try:
-            conn.close()
-        except Exception:
-            logger.debug("Ignoring error while closing cancellation connection", exc_info=True)
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                logger.debug("Ignoring error while closing cancellation connection", exc_info=True)
 
 
 def _run_pool(tasks, label, workers):
@@ -393,3 +408,29 @@ def parallel_add_constraints(constraint_tasks, schema, workers):
         return add
 
     _run_pool([make_add_task(t) for t in constraint_tasks], 'branch-constraint', workers)
+
+
+def parallel_analyze_tables(tables, schema, workers):
+    """
+    Run ANALYZE on the freshly-populated branch tables across a worker pool.
+
+    After the Phase 2 bulk ``INSERT INTO branch.t SELECT * FROM main.t`` the branch
+    tables carry no planner statistics until autovacuum eventually reaches them, so
+    the planner falls back to default (essentially empty-table) estimates. The first
+    queries against a new branch — sync, change-diff computation, and so on — can then
+    pick sequential scans over index scans and run far slower than expected. An explicit
+    ANALYZE is much cheaper than the provision itself and removes that cold-start
+    penalty. It must run after Phase 3 so expression-index statistics are collected too.
+
+    ANALYZE is statistics-only and never affects correctness, so callers should treat a
+    failure here as non-fatal.
+    """
+    def make_analyze_task(table):
+        sql_text = f'ANALYZE {quote_ident(schema)}.{quote_ident(table)}'
+
+        def analyze(cursor):
+            logger.debug(f'Analyzing {schema}.{table}')
+            cursor.execute(sql_text)
+        return analyze
+
+    _run_pool([make_analyze_task(t) for t in tables], 'branch-analyze', workers)
