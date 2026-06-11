@@ -1099,7 +1099,7 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Create the schema & replicate main tables.
 
-        Three phases:
+        Four phases:
           1. Metadata setup — create the schema, the ObjectChange skeleton, the
              django_migrations copy, and the empty (no constraints, no indexes)
              destination tables. The constraint and index maps for main are
@@ -1110,17 +1110,11 @@ class Branch(JobsMixin, PrimaryModel):
              (each one builds its backing index implicitly under the original
              name) and then replay every remaining indexdef against the populated
              branch tables.
+          4. ANALYZE the populated tables so the planner has real statistics
+             immediately rather than waiting for autovacuum.
 
         On any failure the (possibly partial) schema is dropped and the branch
         is marked FAILED.
-
-        This assumes main's schema is stable for the duration of the provision.
-        Unlike the previous single-transaction implementation, Phase 1's catalog
-        read and Phase 2's data snapshot are separate transactions, so a concurrent
-        schema migration on main could yield a branch missing a just-added index
-        (harmless) or, if a column is added, fail the Phase 2 copy outright (which
-        falls into the cleanup path below). Do not run migrations against main
-        while provisioning a branch.
         """
         logger = logging.getLogger('netbox_branching.branch.provision')
         logger.info(f'Provisioning branch {self} ({self.schema_name})')

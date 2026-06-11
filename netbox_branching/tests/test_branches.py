@@ -635,6 +635,45 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
             )
             self.assertIsNone(cursor.fetchone(), msg="Populated schema was not cleaned up")
 
+    def test_provision_analyze_failure_is_non_fatal(self):
+        """
+        Phase 4 (ANALYZE) is statistics-only and best-effort: a failure analyzing
+        one table must not abort the others or fail the provision. The branch must
+        still end up READY with its schema intact — a missing-statistics cold start
+        is preferable to discarding an otherwise-complete provision.
+        """
+        from netbox_branching.models import branches as branches_module
+
+        original = branches_module.parallel_analyze_tables
+
+        def analyze_with_a_bad_table(*, tables, schema, workers):
+            # Append a table that does not exist in the branch schema so its ANALYZE
+            # raises inside a worker; make_analyze_task's per-table handler must
+            # swallow it rather than letting _run_pool re-raise and fail the branch.
+            return original(
+                tables=[*tables, 'this_table_does_not_exist'], schema=schema, workers=workers
+            )
+
+        branches_module.parallel_analyze_tables = analyze_with_a_bad_table
+        try:
+            branch = self._track(Branch(name='AnalyzeFailure'))
+            branch.save(provision=False)
+            # Must NOT raise despite the failing ANALYZE.
+            branch.provision(user=None)
+        finally:
+            branches_module.parallel_analyze_tables = original
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+        # The schema must still be present (provision was not rolled back).
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
+                [branch.schema_name],
+            )
+            self.assertIsNotNone(cursor.fetchone(), msg="Schema was wrongly dropped")
+
     def test_provision_preserves_pk_and_unique_constraints(self):
         """
         Branch tables must end up with real PRIMARY KEY / UNIQUE / EXCLUDE

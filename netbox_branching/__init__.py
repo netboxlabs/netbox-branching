@@ -73,6 +73,17 @@ class AppConfig(PluginConfig):
                 "netbox_branching: DATABASE_ROUTERS must contain 'netbox_branching.database.BranchAwareRouter'."
             )
 
+        # Validate provision_workers up front rather than letting a bad value surface as an
+        # unhandled error only when a branch is first provisioned.
+        workers = get_plugin_config('netbox_branching', 'provision_workers')
+        if workers is not None:
+            try:
+                int(workers)
+            except (TypeError, ValueError):
+                raise ImproperlyConfigured(
+                    "netbox_branching: 'provision_workers' must be an integer."
+                )
+
         # Register cleanup handler for branch connections (#358)
         # This ensures branch connections are closed when they exceed CONN_MAX_AGE,
         # preventing connection leaks. Django's built-in close_old_connections()
