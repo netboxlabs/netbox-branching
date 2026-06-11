@@ -32,6 +32,7 @@ from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
 from psycopg.pq import TransactionStatus
+from rq.timeouts import JobTimeoutException
 from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import serialize_object
@@ -1225,6 +1226,7 @@ class Branch(JobsMixin, PrimaryModel):
             # Phase 2: parallel data copy under a single MVCC snapshot.
             # The coordinator transaction holds the exported snapshot alive while
             # workers import it; do not commit until every worker has finished.
+            coordinator_commit_failed = False
             with connection.cursor() as cursor:
                 cursor.execute("BEGIN")
                 cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
@@ -1253,9 +1255,19 @@ class Branch(JobsMixin, PrimaryModel):
                     try:
                         cursor.execute("COMMIT")
                     except Exception:
+                        coordinator_commit_failed = True
                         logger.exception(
                             "Failed to COMMIT Phase 2 coordinator transaction"
                         )
+
+            # The copied data is already durable (each worker committed its own
+            # transaction) and this coordinator transaction was read-only, so a failed
+            # COMMIT is not fatal. But it can leave the main connection in an aborted
+            # transaction, which would then break the success-path status=READY write
+            # (and the cleanup path) with "current transaction is aborted". Drop the
+            # connection so Django reconnects clean for the remaining ORM work.
+            if coordinator_commit_failed:
+                connection.close()
 
             # Phase 3: rebuild constraints and indexes against the populated
             # branch tables. PK/UNIQUE/EXCLUDE constraints are added via
@@ -1307,6 +1319,12 @@ class Branch(JobsMixin, PrimaryModel):
                     schema=schema,
                     workers=workers,
                 )
+            except JobTimeoutException:
+                # RQ is killing the job via its timeout (raised in this, the main,
+                # thread). It is an Exception subclass, so it would otherwise be
+                # swallowed by the best-effort handler below — let it propagate to
+                # the cleanup path instead of marking a half-provisioned branch READY.
+                raise
             except Exception:
                 logger.warning(
                     f"ANALYZE of branch schema {schema} failed; planner statistics will be "

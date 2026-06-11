@@ -422,15 +422,28 @@ def parallel_analyze_tables(tables, schema, workers):
     ANALYZE is much cheaper than the provision itself and removes that cold-start
     penalty. It must run after Phase 3 so expression-index statistics are collected too.
 
-    ANALYZE is statistics-only and never affects correctness, so callers should treat a
-    failure here as non-fatal.
+    ANALYZE is statistics-only and never affects correctness, so each table's ANALYZE
+    swallows its own error rather than propagating: a single table's failure must not
+    trip ``_run_pool``'s fail-fast cancellation and leave every *other* table without
+    statistics (the exact cold-start regression this pass exists to prevent). Callers
+    should likewise treat any error that still escapes (e.g. worker connection setup)
+    as non-fatal.
     """
     def make_analyze_task(table):
         sql_text = f'ANALYZE {quote_ident(schema)}.{quote_ident(table)}'
 
         def analyze(cursor):
-            logger.debug(f'Analyzing {schema}.{table}')
-            cursor.execute(sql_text)
+            try:
+                logger.debug(f'Analyzing {schema}.{table}')
+                cursor.execute(sql_text)
+            except Exception:
+                # Per-table best-effort: don't let one table abort the pool. (RQ's
+                # job timeout is raised in the main thread, not here, so this cannot
+                # mask a job cancellation.)
+                logger.warning(
+                    f'ANALYZE of {schema}.{table} failed; leaving its statistics to autovacuum.',
+                    exc_info=True,
+                )
         return analyze
 
     _run_pool([make_analyze_task(t) for t in tables], 'branch-analyze', workers)
