@@ -1144,14 +1144,25 @@ class Branch(JobsMixin, PrimaryModel):
                 cursor.execute("BEGIN")
                 cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
 
-                # Drop any schema left behind by a previous provision that was hard-killed
-                # (OOM, SIGKILL, lost connection) between Phase 1's commit and the cleanup
-                # path below. Without this, re-provisioning the same branch would fail on
-                # CREATE SCHEMA with "schema already exists" and require manual intervention.
-                # provision() only ever runs for a branch being (re)provisioned, so the
-                # schema name is never that of a live, ready branch.
+                # A fresh branch's schema (a unique, randomly-named schema_id) should not
+                # already exist. If it does, it's an orphan left by a previous provision of
+                # THIS branch that was hard-killed (OOM, SIGKILL, lost connection) between
+                # Phase 1's commit and the cleanup path below; drop it so the CREATE doesn't
+                # fail with "schema already exists". Only drop when it actually exists, and
+                # log loudly when we do — this DROP ... CASCADE is the one place provisioning
+                # destroys data, so its (rare, expected-only-after-an-interrupted-provision)
+                # firing must be visible rather than silent and unconditional.
                 logger.debug(f'Creating schema {schema}')
-                cursor.execute(f"DROP SCHEMA IF EXISTS {quote_ident(schema)} CASCADE")
+                cursor.execute(
+                    "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s", [schema]
+                )
+                if cursor.fetchone():
+                    logger.warning(
+                        f"Schema {schema} already exists at provision time; dropping it before "
+                        f"recreating. This is expected only after a previously interrupted "
+                        f"provision of this branch."
+                    )
+                    cursor.execute(f"DROP SCHEMA IF EXISTS {quote_ident(schema)} CASCADE")
                 try:
                     cursor.execute(f"CREATE SCHEMA {quote_ident(schema)}")
                 except ProgrammingError as e:
@@ -1223,6 +1234,12 @@ class Branch(JobsMixin, PrimaryModel):
 
                 cursor.execute("COMMIT")
 
+            # Order parallel work heaviest-table-first (longest-processing-time
+            # scheduling) so a single large table can't be dispatched last and left
+            # running alone while the other workers idle. Used by every phase below.
+            def by_size_desc(table_names):
+                return sorted(table_names, key=lambda t: main_table_sizes.get(t, 0), reverse=True)
+
             # Phase 2: parallel data copy under a single MVCC snapshot.
             # The coordinator transaction holds the exported snapshot alive while
             # workers import it; do not commit until every worker has finished.
@@ -1236,13 +1253,7 @@ class Branch(JobsMixin, PrimaryModel):
 
                 try:
                     parallel_copy_tables(
-                        # Heaviest tables first (longest-processing-time scheduling) so the
-                        # makespan isn't dominated by a large table dispatched last.
-                        tables=sorted(
-                            tables_to_replicate,
-                            key=lambda t: main_table_sizes.get(t, 0),
-                            reverse=True,
-                        ),
+                        tables=by_size_desc(tables_to_replicate),
                         snapshot_token=snapshot_token,
                         schema=schema,
                         main_schema=main_schema,
@@ -1276,12 +1287,14 @@ class Branch(JobsMixin, PrimaryModel):
             # index names from the plain CREATE INDEX pass to avoid duplicates.
             relevant_tables = {*tables_to_replicate, objectchange_table, 'django_migrations'}
 
+            sorted_relevant = by_size_desc(relevant_tables)
+
             constraint_tasks = []
             constraint_backed_indexes = set()
             index_tasks = []
             # Build both task lists heaviest-table-first so the constraint and index
             # phases drain their largest work early rather than tailing on it.
-            for table_name in sorted(relevant_tables, key=lambda t: main_table_sizes.get(t, 0), reverse=True):
+            for table_name in sorted_relevant:
                 for conname, condef, backing_indexname in main_constraints_by_table.get(table_name, ()):
                     constraint_tasks.append((table_name, conname, condef))
                     if backing_indexname:
@@ -1309,13 +1322,15 @@ class Branch(JobsMixin, PrimaryModel):
             # estimates until autovacuum eventually catches up. ANALYZE is
             # statistics-only and never affects correctness, so a failure here must
             # not fail the provision — log it and leave the stats to autovacuum.
+            #
+            # Skip empty tables: a zero-size table's planner estimate is already
+            # correct (there is nothing to mis-estimate), and a typical install has
+            # hundreds of empty branchable tables — ANALYZE-ing every one of them adds
+            # a fixed hundreds-of-statements tax that can dominate a small provision.
+            analyze_tables = [t for t in sorted_relevant if main_table_sizes.get(t, 0) > 0]
             try:
                 parallel_analyze_tables(
-                    tables=sorted(
-                        relevant_tables,
-                        key=lambda t: main_table_sizes.get(t, 0),
-                        reverse=True,
-                    ),
+                    tables=analyze_tables,
                     schema=schema,
                     workers=workers,
                 )

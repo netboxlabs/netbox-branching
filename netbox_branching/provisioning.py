@@ -397,14 +397,16 @@ def parallel_add_constraints(constraint_tasks, schema, workers):
         # Always-quote identifiers here — condef comes from pg_get_constraintdef
         # which already quotes column references where needed, so we only need
         # to handle the bare schema/table/constraint names we inject ourselves.
-        sql = (
+        # (Named sql_text, not sql, to avoid shadowing the module-level
+        # `from psycopg import sql` import this module uses for quoting.)
+        sql_text = (
             f'ALTER TABLE {quote_ident(schema)}.{quote_ident(tablename)} '
             f'ADD CONSTRAINT {quote_ident(conname)} {condef}'
         )
 
         def add(cursor):
             logger.debug(f'Adding constraint {conname} on {schema}.{tablename}')
-            cursor.execute(sql)
+            cursor.execute(sql_text)
         return add
 
     _run_pool([make_add_task(t) for t in constraint_tasks], 'branch-constraint', workers)
