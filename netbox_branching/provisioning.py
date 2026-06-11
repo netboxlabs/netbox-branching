@@ -103,7 +103,11 @@ def _run_pool(tasks, label, workers):
     tasks = list(tasks)
     if not tasks:
         return
-    workers = max(1, int(workers))
+    # Never spin up more workers than there is work — each worker eagerly opens its
+    # own backend, so excess workers would establish and immediately close idle
+    # connections. In practice the provisioning call sites always pass far more tasks
+    # than workers; this only matters for short task lists.
+    workers = max(1, min(int(workers), len(tasks)))
     task_iter = iter(tasks)
     task_lock = threading.Lock()
     pids = []
