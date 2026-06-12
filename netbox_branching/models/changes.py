@@ -14,6 +14,7 @@ from utilities.serialization import deserialize_object
 
 from netbox_branching.utilities import (
     clear_mptt_fields,
+    diff_for_merge,
     full_clean_with_file_check,
     resolve_objectchange_field_migration,
     update_object,
@@ -41,6 +42,23 @@ class ObjectChange(ObjectChange_):
         object_type = '.'.join(self.changed_object_type.natural_key())
         for migrator in branch.migrators.get(object_type, []):
             migrator(self, revert)
+
+    def get_merge_data(self, reverse=False):
+        """
+        Build a deletion-aware partial-update payload for replaying this change's UPDATE
+        onto another schema. By default the payload transforms the pre-change state into
+        the post-change state (used by ``apply()``); with ``reverse=True`` it goes the
+        other way (post -> pre), used by ``undo()``.
+
+        This is intentionally separate from ``diff()``: ``diff()`` is display-oriented
+        (rendered in the change-log tables) and represents a removed key as ``None``,
+        whereas merging needs to drop removed nested JSON keys entirely. ``diff_for_merge``
+        tracks those removals with the ``DELETED`` sentinel so ``update_object`` can apply
+        them rather than leave stale ``None`` values behind. (#588, #592)
+        """
+        if reverse:
+            return diff_for_merge(self.postchange_data_clean, self.prechange_data_clean)
+        return diff_for_merge(self.prechange_data_clean, self.postchange_data_clean)
 
     def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None, skip_missing=False):
         """
@@ -80,7 +98,9 @@ class ObjectChange(ObjectChange_):
             try:
                 instance = model.objects.using(using).get(pk=self.changed_object_id)
                 logger.debug(f'Updating {model._meta.verbose_name} {instance}')
-                update_object(instance, self.diff()['post'], using=using)
+                # Use a deletion-aware payload (pre -> post) rather than diff()['post'],
+                # which cannot represent removed nested JSON keys. (#592)
+                update_object(instance, self.get_merge_data(), using=using)
             except model.DoesNotExist:
                 if skip_missing:
                     logger.debug(f'{model._meta.verbose_name} ID {self.changed_object_id} already deleted; skipping')
@@ -121,7 +141,8 @@ class ObjectChange(ObjectChange_):
         # Reverting a modification to an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             instance = model.objects.using(using).get(pk=self.changed_object_id)
-            update_object(instance, self.diff()['pre'], using=using)
+            # Reverse direction (post -> pre); keys the branch added are removed. (#592)
+            update_object(instance, self.get_merge_data(reverse=True), using=using)
 
         # Restoring a deleted object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
