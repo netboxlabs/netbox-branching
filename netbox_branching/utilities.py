@@ -35,6 +35,7 @@ logger = logging.getLogger(__name__)
 _branch_connections_tracker = Local(thread_critical=False)
 
 __all__ = (
+    'DELETED',
     'ActiveBranchContextManager',
     'BranchActionIndicator',
     'ChangeSummary',
@@ -44,6 +45,7 @@ __all__ = (
     'clear_mptt_fields',
     'close_old_branch_connections',
     'deactivate_branch',
+    'diff_for_merge',
     'full_clean_with_file_check',
     'get_active_branch',
     'get_branchable_object_types',
@@ -350,6 +352,96 @@ def clear_mptt_fields(instance):
         setattr(instance, attr, None)
 
 
+class _DeletedKey:
+    """
+    Sentinel marking a dict key that should be removed (rather than set to None)
+    during a deep merge. See ``diff_for_merge``.
+    """
+    __slots__ = ()
+
+    def __repr__(self):
+        return '<DELETED>'
+
+
+# Singleton sentinel instance, compared by identity.
+DELETED = _DeletedKey()
+
+
+def diff_for_merge(source, destination, top_level=True):
+    """
+    Compute the partial-update payload that transforms ``source`` into ``destination``
+    when deep-merged onto a target via ``update_object`` / ``_deep_merge_dict``.
+
+    This mirrors the "added" side of NetBox's ``deep_compare_dict`` — only differing
+    keys are returned, and nested dicts yield only their changed keys so that keys the
+    branch never touched are preserved on the target schema (#588) — with one critical
+    difference: a key present in ``source`` but absent from ``destination`` *within a
+    nested dict* is represented with the ``DELETED`` sentinel instead of being dropped.
+
+    ``deep_compare_dict`` reads nested values with ``dict.get()``, so it cannot tell
+    "key removed" apart from "key set to None" and silently omits removals. Replaying
+    that diff would leave stale keys behind inside JSON fields (e.g. a key deleted from
+    a JSON custom field's value, or from ``local_context_data``) on the main schema
+    after a merge or revert. Tracking removals explicitly lets the merge drop them. (#592)
+
+    Top-level removals are represented with the value ``None`` (matching prior behaviour),
+    since those flow through ``setattr`` rather than a deep merge; nested removals use the
+    ``DELETED`` sentinel. ``top_level`` distinguishes the two and is set to ``False`` on
+    the recursive calls — callers should not pass it.
+    """
+    delta = {}
+    for key in sorted(source.keys() | destination.keys()):
+        in_source = key in source
+        in_destination = key in destination
+        src_val = source.get(key)
+        dst_val = destination.get(key)
+        if in_source and in_destination and src_val == dst_val:
+            # Key present on both sides with an identical value — unchanged.
+            continue
+        if isinstance(src_val, dict) and isinstance(dst_val, dict):
+            # Recurse; unequal dicts always yield at least one nested change.
+            delta[key] = diff_for_merge(src_val, dst_val, top_level=False)
+        elif not in_destination and not top_level:
+            # Removed from a nested dict. Detected via key membership, not value
+            # equality, so a key whose value was None is still recognised as a
+            # deletion rather than treated as unchanged.
+            delta[key] = DELETED
+        else:
+            delta[key] = dst_val
+    return delta
+
+
+def _strip_deleted(value):
+    """
+    Return a copy of ``value`` with any ``DELETED``-sentinel keys removed (recursively).
+    Used when a partial JSON update has no existing dict to merge into, so deletion
+    markers must simply be dropped rather than written to the field.
+    """
+    if not isinstance(value, dict):
+        return value
+    return {k: _strip_deleted(v) for k, v in value.items() if v is not DELETED}
+
+
+def _deep_merge_dict(target, source):
+    """
+    Recursively merge ``source`` into ``target`` in place. Nested dicts are
+    merged key-by-key; the ``DELETED`` sentinel removes the key from ``target``;
+    all other values are replaced.
+    """
+    for key, value in source.items():
+        if value is DELETED:
+            target.pop(key, None)
+        elif isinstance(value, dict) and isinstance(target.get(key), dict):
+            _deep_merge_dict(target[key], value)
+        else:
+            # No dict to merge into (target slot is None/scalar/missing). Strip any
+            # nested DELETED sentinels so they never reach the field — a _DeletedKey
+            # is not JSON-serializable and would crash on save(). _strip_deleted is a
+            # no-op on non-dicts, so this is safe for all values.
+            target[key] = _strip_deleted(value)
+    return target
+
+
 def update_object(instance, data, using):
     """
     Set an attribute on an object depending on the type of model field.
@@ -388,6 +480,19 @@ def update_object(instance, data, using):
             # Use M2M manager for ManyToMany assignments
             m2m_manager = getattr(instance, attr)
             m2m_assignments[m2m_manager] = value
+        elif isinstance(value, dict):
+            # JSON fields like custom_field_data and local_context_data arrive as partial
+            # dicts (via diff_for_merge) containing only the keys the change touched, with
+            # removed keys carrying the DELETED sentinel. Merge into the existing dict so
+            # keys the branch never modified are preserved on the target schema (#588) and
+            # removed keys are dropped (#592). If there's no dict to merge into, materialize
+            # the partial dict, discarding deletion markers so the sentinel never reaches
+            # the field.
+            current = getattr(instance, attr, None)
+            if isinstance(current, dict):
+                _deep_merge_dict(current, value)
+            else:
+                setattr(instance, attr, _strip_deleted(value))
         else:
             setattr(instance, attr, value)
 

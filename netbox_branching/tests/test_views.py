@@ -12,6 +12,7 @@ from django.db import connections
 from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django_rq import get_queue
+from netbox.context import current_request
 from utilities.testing import ViewTestCases, create_tags
 
 from netbox_branching.choices import BranchStatusChoices
@@ -388,18 +389,29 @@ class ObjectValidationTestCase(TransactionTestCase):
         # Verify site is deleted in main
         self.assertFalse(Site.objects.filter(id=site_id).exists())
 
+        # The deleted-in-main guard is part of change logging, which only runs when a
+        # request is in context (see #496). Set one to mirror the web UI / a committing
+        # script, where this validation is meant to fire.
+        request = RequestFactory().get('/')
+        request.id = uuid.uuid4()
+        request.user = self.user
+        token = current_request.set(request)
+
         # In branch: try to edit the site (should raise ValidationError)
-        with activate_branch(branch):
-            site_in_branch = Site.objects.get(id=site_id)
-            site_in_branch.description = 'Updated description'
+        try:
+            with activate_branch(branch):
+                site_in_branch = Site.objects.get(id=site_id)
+                site_in_branch.description = 'Updated description'
 
-            with self.assertRaises(ValidationError) as cm:
-                site_in_branch.full_clean()
+                with self.assertRaises(ValidationError) as cm:
+                    site_in_branch.full_clean()
 
-            # Verify the error message
-            error_message = str(cm.exception)
-            self.assertIn('deleted in the main branch', error_message)
-            self.assertIn('Cannot modify', error_message)
+                # Verify the error message
+                error_message = str(cm.exception)
+                self.assertIn('deleted in the main branch', error_message)
+                self.assertIn('Cannot modify', error_message)
+        finally:
+            current_request.reset(token)
 
     def test_delete_object_deleted_in_main_no_error(self):
         """
@@ -428,6 +440,33 @@ class ObjectValidationTestCase(TransactionTestCase):
         # Verify the delete succeeded
         with activate_branch(branch):
             self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+    def test_edit_object_created_in_branch_no_error(self):
+        """
+        Test that editing an object created within the branch does not raise an error, even before its
+        CREATE ChangeDiff has been committed (i.e. it was created earlier in the same request).
+        Ref: Issue #496
+        """
+        # Create and activate branch
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            # Create an object directly in the branch. No ObjectChange/ChangeDiff is recorded here, mirroring an
+            # object created earlier in the same request whose CREATE ChangeDiff has not yet been committed.
+            site = Site.objects.create(name='Branch Site', slug='branch-site')
+
+            # Sanity check: there is no CREATE ChangeDiff for the object.
+            self.assertFalse(
+                ChangeDiff.objects.filter(
+                    branch=branch,
+                    object_id=site.pk,
+                    action=ObjectChangeActionChoices.ACTION_CREATE,
+                ).exists()
+            )
+
+            # Editing the branch-created object must not raise a ValidationError.
+            site.description = 'Updated description'
+            site.full_clean()
 
 
 class BranchMiddlewareTestCase(TransactionTestCase):
