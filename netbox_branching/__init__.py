@@ -77,11 +77,13 @@ class AppConfig(PluginConfig):
         # unhandled error only when a branch is first provisioned.
         workers = get_plugin_config('netbox_branching', 'provision_workers')
         if workers is not None:
-            try:
-                int(workers)
-            except (TypeError, ValueError):
+            if type(workers) is not int:
                 raise ImproperlyConfigured(
                     "netbox_branching: 'provision_workers' must be an integer."
+                )
+            if workers < 1:
+                raise ImproperlyConfigured(
+                    "netbox_branching: 'provision_workers' must be greater than or equal to 1."
                 )
 
         # Register cleanup handler for branch connections (#358)
