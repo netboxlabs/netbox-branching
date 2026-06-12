@@ -13,6 +13,7 @@ from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from extras.events import process_event_rules
 from extras.models import EventRule
+from netbox.context import current_request
 from netbox.signals import post_clean
 from utilities.exceptions import AbortRequest
 from utilities.serialization import serialize_object
@@ -79,6 +80,12 @@ def validate_branching_operations(sender, instance, **kwargs):
 
     # Only validate if we're in a branch and this model supports branching
     if branch is None:
+        return
+
+    # Without a request, NetBox writes no ObjectChange (and so no ChangeDiff), so the
+    # ChangeDiff-based accessibility check below has nothing to read and would
+    # false-positive on objects the branch just created. See issue #496.
+    if current_request.get() is None:
         return
 
     # Check if this model supports branching
