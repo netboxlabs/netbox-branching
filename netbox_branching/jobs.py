@@ -58,7 +58,28 @@ def disconnect_object_change_signal_handlers():
         post_clean.connect(validate_branching_operations)
 
 
-class ProvisionBranchJob(JobRunner):
+class BranchJobRunner(JobRunner):
+    """
+    Base class for branch operation jobs.
+
+    Branch operations (provisioning, sync, merge, revert, migrate) routinely run longer than RQ's
+    default job timeout (NetBox's RQ_DEFAULT_TIMEOUT, 300s), at which point RQ kills the worker with
+    a JobTimeoutException. NetBox's JobRunner.enqueue() does not consult any per-class timeout, so the
+    configured `job_timeout` must be passed through to RQ at enqueue time. Injecting it here ensures
+    every branch job honours the setting regardless of which call site enqueues it.
+    """
+    @classmethod
+    def enqueue(cls, *args, **kwargs):
+        # Use `.get() is None` rather than setdefault so an explicit job_timeout=None
+        # (a caller meaning "use the default") still gets the configured value instead
+        # of falling through to RQ's 300s default — the exact timeout this class exists
+        # to prevent. A caller passing a real value still overrides.
+        if kwargs.get('job_timeout') is None:
+            kwargs['job_timeout'] = get_plugin_config('netbox_branching', 'job_timeout')
+        return super().enqueue(*args, **kwargs)
+
+
+class ProvisionBranchJob(BranchJobRunner):
     """
     Provision a Branch in the database.
     """
@@ -76,17 +97,12 @@ class ProvisionBranchJob(JobRunner):
         branch.provision(user=self.job.user)
 
 
-class SyncBranchJob(JobRunner):
+class SyncBranchJob(BranchJobRunner):
     """
     Sync changes from main into a Branch.
     """
     class Meta:
         name = 'Sync branch'
-
-    @property
-    def job_timeout(self):
-        """Return the job timeout from plugin configuration."""
-        return get_plugin_config('netbox_branching', 'job_timeout')
 
     def run(self, commit=True, *args, **kwargs):
         # Initialize logging
@@ -104,17 +120,12 @@ class SyncBranchJob(JobRunner):
                 logger.info("Dry run completed; rolling back changes")
 
 
-class MergeBranchJob(JobRunner):
+class MergeBranchJob(BranchJobRunner):
     """
     Merge changes from a Branch into main.
     """
     class Meta:
         name = 'Merge branch'
-
-    @property
-    def job_timeout(self):
-        """Return the job timeout from plugin configuration."""
-        return get_plugin_config('netbox_branching', 'job_timeout')
 
     @staticmethod
     def _snapshot_changes_summary(changes_qs):
@@ -195,17 +206,12 @@ class MergeBranchJob(JobRunner):
             raise
 
 
-class RevertBranchJob(JobRunner):
+class RevertBranchJob(BranchJobRunner):
     """
     Revert changes from a merged Branch.
     """
     class Meta:
         name = 'Revert branch'
-
-    @property
-    def job_timeout(self):
-        """Return the job timeout from plugin configuration."""
-        return get_plugin_config('netbox_branching', 'job_timeout')
 
     def run(self, commit=True, *args, **kwargs):
         # Initialize logging
@@ -221,7 +227,7 @@ class RevertBranchJob(JobRunner):
             logger.info("Dry run completed; rolling back changes")
 
 
-class MigrateBranchJob(JobRunner):
+class MigrateBranchJob(BranchJobRunner):
     """
     Apply any outstanding database migrations from the main schema to the Branch.
     """

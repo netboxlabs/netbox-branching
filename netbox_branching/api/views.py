@@ -6,7 +6,6 @@ from django.http import HttpResponseBadRequest
 from drf_spectacular.utils import extend_schema
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired
 from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
-from netbox.plugins import get_plugin_config
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
@@ -111,8 +110,7 @@ class BranchViewSet(ModelViewSet):
         job = MergeBranchJob.enqueue(
             instance=branch,
             user=request.user,
-            commit=commit,
-            job_timeout=get_plugin_config('netbox_branching', 'job_timeout')
+            commit=commit
         )
 
         return Response(JobSerializer(job, context={'request': request}).data)

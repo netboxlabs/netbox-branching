@@ -13,6 +13,7 @@ from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.forms import BranchForm
 from netbox_branching.models import Branch
+from netbox_branching.provisioning import quote_ident
 from netbox_branching.signals import post_deprovision, pre_deprovision
 from netbox_branching.utilities import BranchActionIndicator, get_tables_to_replicate
 
@@ -469,3 +470,328 @@ class BranchStatusDescriptionTestCase(SimpleTestCase):
     def test_get_status_description_unknown_status(self):
         branch = Branch(name='Branch 1', status='not-a-real-status')
         self.assertEqual(branch.get_status_description(), '')
+
+
+class BranchProvisionPipelineTestCase(TransactionTestCase):
+    """
+    Targeted coverage of the parallel provisioning pipeline. The end-to-end
+    happy path is exercised by BranchTestCase.test_create_branch; these tests
+    pin down the specific guarantees Phase 1+2 changes make:
+      * indexes on every replicated table are reproduced under their main-schema names
+      * snapshot import is actually performed (not silently skipped)
+      * worker failures cause schema cleanup and a FAILED branch
+    """
+    serialized_rollback = True
+
+    def setUp(self):
+        # Phase 1 of provision() commits the CREATE SCHEMA outside the test's
+        # transaction, so TransactionTestCase rollback can't undo it. Track
+        # any schemas these tests create and drop them in tearDown so --keepdb
+        # runs don't accumulate orphans.
+        super().setUp()
+        self._provisioned_schemas = []
+
+    def tearDown(self):
+        for schema_name in self._provisioned_schemas:
+            with connection.cursor() as cursor:
+                cursor.execute(f'DROP SCHEMA IF EXISTS {quote_ident(schema_name)} CASCADE')
+        super().tearDown()
+
+    def _track(self, branch):
+        self._provisioned_schemas.append(branch.schema_name)
+        return branch
+
+    def test_provision_preserves_every_main_schema_index(self):
+        branch = self._track(Branch(name='IndexParity'))
+        branch.save(provision=False)
+        branch.provision(user=None)
+
+        main_schema = get_plugin_config('netbox_branching', 'main_schema')
+        relevant_tables = {*get_tables_to_replicate(), 'core_objectchange', 'django_migrations'}
+
+        with connection.cursor() as cursor:
+            # Pull all main indexes for the relevant tables, modulo SKIP_INDEXES.
+            cursor.execute(
+                "SELECT tablename, indexname FROM pg_indexes WHERE schemaname=%s",
+                [main_schema],
+            )
+            expected = {
+                (tbl, idx) for tbl, idx in cursor.fetchall()
+                if tbl in relevant_tables and idx not in SKIP_INDEXES
+            }
+
+            cursor.execute(
+                "SELECT tablename, indexname FROM pg_indexes WHERE schemaname=%s",
+                [branch.schema_name],
+            )
+            found = set(cursor.fetchall())
+
+        missing = expected - found
+        self.assertFalse(
+            missing,
+            msg=f"Branch schema is missing {len(missing)} indexes that exist on main: {sorted(missing)[:5]}",
+        )
+
+    def test_provision_imports_exported_snapshot(self):
+        """
+        Phase 2 must call parallel_copy_tables with a non-empty snapshot token
+        of the format pg_export_snapshot() returns.
+        """
+        from netbox_branching.models import branches as branches_module
+
+        captured = {}
+        original = branches_module.parallel_copy_tables
+
+        def spy(*, tables, snapshot_token, schema, main_schema, workers):
+            captured['token'] = snapshot_token
+            captured['tables'] = list(tables)
+            captured['workers'] = workers
+            return original(
+                tables=tables,
+                snapshot_token=snapshot_token,
+                schema=schema,
+                main_schema=main_schema,
+                workers=workers,
+            )
+
+        branches_module.parallel_copy_tables = spy
+        try:
+            branch = self._track(Branch(name='SnapshotImport'))
+            branch.save(provision=False)
+            branch.provision(user=None)
+        finally:
+            branches_module.parallel_copy_tables = original
+
+        self.assertIn('token', captured, msg="parallel_copy_tables was never invoked")
+        # pg_export_snapshot() returns digits and dashes (occasionally hex).
+        self.assertRegex(captured['token'], r'\A[A-Fa-f0-9\-]+\Z')
+        self.assertGreater(len(captured['tables']), 0)
+
+    def test_provision_failure_drops_schema_and_marks_branch_failed(self):
+        """
+        Any exception out of the parallel pipeline must trigger DROP SCHEMA
+        CASCADE and a FAILED branch status — matching the rollback semantics
+        of the previous single-transaction implementation.
+        """
+        from netbox_branching.models import branches as branches_module
+
+        original = branches_module.parallel_copy_tables
+
+        def boom(*, tables, snapshot_token, schema, main_schema, workers):
+            raise RuntimeError("simulated worker failure")
+
+        branches_module.parallel_copy_tables = boom
+        try:
+            branch = self._track(Branch(name='FailureCleanup'))
+            branch.save(provision=False)
+            with self.assertRaisesRegex(RuntimeError, 'simulated worker failure'):
+                branch.provision(user=None)
+        finally:
+            branches_module.parallel_copy_tables = original
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.FAILED)
+
+        # The (partial) schema must have been dropped.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
+                [branch.schema_name],
+            )
+            self.assertIsNone(cursor.fetchone(), msg="Partial schema was not cleaned up")
+
+    def test_provision_phase3_failure_drops_schema_and_marks_branch_failed(self):
+        """
+        A failure in Phase 3 (constraint/index build) must hit the same cleanup
+        path as a Phase 2 failure: DROP SCHEMA CASCADE + FAILED status. Phase 3
+        runs after the schema and table data have already been committed, so this
+        pins down that the outer except block cleans up a fully-populated schema —
+        not just the empty-schema state a Phase 2 failure leaves behind.
+        """
+        from netbox_branching.models import branches as branches_module
+
+        original = branches_module.parallel_build_indexes
+
+        def boom(**kwargs):
+            raise RuntimeError("simulated index build failure")
+
+        branches_module.parallel_build_indexes = boom
+        try:
+            branch = self._track(Branch(name='Phase3FailureCleanup'))
+            branch.save(provision=False)
+            with self.assertRaisesRegex(RuntimeError, 'simulated index build failure'):
+                branch.provision(user=None)
+        finally:
+            branches_module.parallel_build_indexes = original
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.FAILED)
+
+        # The committed-then-populated schema must have been dropped.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
+                [branch.schema_name],
+            )
+            self.assertIsNone(cursor.fetchone(), msg="Populated schema was not cleaned up")
+
+    def test_provision_analyze_failure_is_non_fatal(self):
+        """
+        Phase 4 (ANALYZE) is statistics-only and best-effort: a failure analyzing
+        one table must not abort the others or fail the provision. The branch must
+        still end up READY with its schema intact — a missing-statistics cold start
+        is preferable to discarding an otherwise-complete provision.
+        """
+        from netbox_branching.models import branches as branches_module
+
+        original = branches_module.parallel_analyze_tables
+
+        def analyze_with_a_bad_table(*, tables, schema, workers):
+            # Append a table that does not exist in the branch schema so its ANALYZE
+            # raises inside a worker; make_analyze_task's per-table handler must
+            # swallow it rather than letting _run_pool re-raise and fail the branch.
+            return original(
+                tables=[*tables, 'this_table_does_not_exist'], schema=schema, workers=workers
+            )
+
+        branches_module.parallel_analyze_tables = analyze_with_a_bad_table
+        try:
+            branch = self._track(Branch(name='AnalyzeFailure'))
+            branch.save(provision=False)
+            # Must NOT raise despite the failing ANALYZE.
+            branch.provision(user=None)
+        finally:
+            branches_module.parallel_analyze_tables = original
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+        # The schema must still be present (provision was not rolled back).
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
+                [branch.schema_name],
+            )
+            self.assertIsNotNone(cursor.fetchone(), msg="Schema was wrongly dropped")
+
+    def test_provision_preserves_pk_and_unique_constraints(self):
+        """
+        Branch tables must end up with real PRIMARY KEY / UNIQUE / EXCLUDE
+        constraints in pg_constraint, not just the underlying unique indexes.
+        Future migrations that DROP CONSTRAINT by name depend on this.
+        """
+        branch = self._track(Branch(name='ConstraintParity'))
+        branch.save(provision=False)
+        branch.provision(user=None)
+
+        main_schema = get_plugin_config('netbox_branching', 'main_schema')
+        relevant_tables = {*get_tables_to_replicate(), 'core_objectchange', 'django_migrations'}
+
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT cls.relname, con.conname, con.contype
+                FROM pg_constraint con
+                JOIN pg_class cls ON cls.oid = con.conrelid
+                JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+                WHERE ns.nspname = %s AND con.contype IN ('p', 'u', 'x')
+                """,
+                [main_schema],
+            )
+            expected = {
+                (tbl, name, ctype) for tbl, name, ctype in cursor.fetchall()
+                if tbl in relevant_tables
+            }
+
+            cursor.execute(
+                """
+                SELECT cls.relname, con.conname, con.contype
+                FROM pg_constraint con
+                JOIN pg_class cls ON cls.oid = con.conrelid
+                JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+                WHERE ns.nspname = %s AND con.contype IN ('p', 'u', 'x')
+                """,
+                [branch.schema_name],
+            )
+            found = set(cursor.fetchall())
+
+        missing = expected - found
+        self.assertFalse(
+            missing,
+            msg=f"Branch schema is missing {len(missing)} PK/UNIQUE/EXCLUDE constraints: {sorted(missing)[:5]}",
+        )
+
+    def test_cancel_backends_does_not_disturb_caller_connection(self):
+        """
+        _cancel_backends must operate on its own connection. The Phase 2
+        coordinator's snapshot-exporting transaction lives on the main
+        thread's connection while parallel_copy_tables runs; if cancellation
+        closed that connection it would invalidate the snapshot before in-
+        flight workers had a chance to observe their own failures, masking
+        the original error.
+        """
+        from netbox_branching.provisioning import _cancel_backends
+
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_backend_pid()")
+            before_pid = cursor.fetchone()[0]
+
+        # PID 0 is never a real backend; pg_cancel_backend returns false
+        # without raising, exercising the cancellation path end-to-end.
+        _cancel_backends([0])
+
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT pg_backend_pid()")
+            after_pid = cursor.fetchone()[0]
+
+        self.assertEqual(
+            before_pid, after_pid,
+            msg="_cancel_backends closed the caller's connection (PID changed)",
+        )
+
+
+class SnapshotTokenValidationTestCase(SimpleTestCase):
+    """
+    The Phase 2 snapshot token is interpolated directly into SET TRANSACTION
+    SNAPSHOT because that utility statement does not accept bind parameters.
+    The regex gate in parallel_copy_tables() is what keeps that interpolation
+    safe; these tests pin the accepted character set so a future tweak can't
+    accidentally widen it without someone noticing.
+    """
+
+    def test_regex_accepts_real_snapshot_tokens(self):
+        from netbox_branching.provisioning import _SNAPSHOT_TOKEN_RE
+
+        # Tokens of the shape pg_export_snapshot() actually returns.
+        self.assertIsNotNone(_SNAPSHOT_TOKEN_RE.match('00000003-000000DC-1'))
+        self.assertIsNotNone(_SNAPSHOT_TOKEN_RE.match('abc-def-123'))
+        self.assertIsNotNone(_SNAPSHOT_TOKEN_RE.match('0'))
+
+    def test_regex_rejects_injection_attempts(self):
+        from netbox_branching.provisioning import _SNAPSHOT_TOKEN_RE
+
+        for hostile in (
+            "",
+            "abc def",                    # whitespace
+            "abc'; DROP TABLE foo; --",   # SQL injection
+            "' OR 1=1 --",
+            "abc\ndef",                   # newline
+            "abç-def",                    # non-ASCII
+            "abc/def",                    # path separator
+        ):
+            self.assertIsNone(
+                _SNAPSHOT_TOKEN_RE.match(hostile),
+                msg=f"Regex unexpectedly accepted {hostile!r}",
+            )
+
+    def test_parallel_copy_tables_refuses_bad_token(self):
+        from netbox_branching.provisioning import parallel_copy_tables
+
+        with self.assertRaisesRegex(ValueError, 'unexpected snapshot token format'):
+            parallel_copy_tables(
+                tables=['some_table'],
+                snapshot_token="'; DROP TABLE foo; --",
+                schema='branch_xxx',
+                main_schema='public',
+                workers=1,
+            )

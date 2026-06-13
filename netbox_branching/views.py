@@ -9,7 +9,6 @@ from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Count, Min, Q
 from django.shortcuts import redirect, render
 from django.utils.translation import gettext_lazy as _
-from netbox.plugins import get_plugin_config
 from netbox.views import generic
 from netbox.views.generic.base import BaseMultiObjectView
 from utilities.views import GetReturnURLMixin, ViewTab, register_model_view
@@ -419,8 +418,7 @@ class BranchMergeView(BaseBranchActionView):
         MergeBranchJob.enqueue(
             instance=branch,
             user=request.user,
-            commit=form.cleaned_data['commit'],
-            job_timeout=get_plugin_config('netbox_branching', 'job_timeout')
+            commit=form.cleaned_data['commit']
         )
         messages.success(request, _("Merging of branch {branch} in progress").format(branch=branch))
 

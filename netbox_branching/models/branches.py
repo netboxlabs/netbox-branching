@@ -31,6 +31,8 @@ from netbox.context import current_request
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
+from psycopg.pq import TransactionStatus
+from rq.timeouts import JobTimeoutException
 from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import serialize_object
@@ -39,13 +41,22 @@ from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategy
 from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
 from netbox_branching.merge_strategies import get_merge_strategy
+from netbox_branching.provisioning import (
+    build_main_constraint_map,
+    build_main_index_map,
+    build_main_table_sizes,
+    parallel_add_constraints,
+    parallel_analyze_tables,
+    parallel_build_indexes,
+    parallel_copy_tables,
+    quote_ident,
+)
 from netbox_branching.signals import *
 from netbox_branching.utilities import (
     BranchActionIndicator,
     ChangeSummary,
     activate_branch,
     get_branchable_object_types,
-    get_sql_results,
     get_tables_to_replicate,
     record_applied_change,
     supports_branching,
@@ -1087,10 +1098,28 @@ class Branch(JobsMixin, PrimaryModel):
     def provision(self, user):
         """
         Create the schema & replicate main tables.
+
+        Four phases:
+          1. Metadata setup — create the schema, the ObjectChange skeleton, the
+             django_migrations copy, and the empty (no constraints, no indexes)
+             destination tables. The constraint and index maps for main are
+             also captured here for use in Phase 3.
+          2. Parallel data copy — export an MVCC snapshot from main and let a worker
+             pool run INSERT INTO branch.t SELECT * FROM main.t across tables.
+          3. Parallel constraint + index build — add PK/UNIQUE/EXCLUDE constraints
+             (each one builds its backing index implicitly under the original
+             name) and then replay every remaining indexdef against the populated
+             branch tables.
+          4. ANALYZE the populated tables so the planner has real statistics
+             immediately rather than waiting for autovacuum.
+
+        On any failure the (possibly partial) schema is dropped and the branch
+        is marked FAILED.
         """
         logger = logging.getLogger('netbox_branching.branch.provision')
         logger.info(f'Provisioning branch {self} ({self.schema_name})')
         main_schema = get_plugin_config('netbox_branching', 'main_schema')
+        workers = get_plugin_config('netbox_branching', 'provision_workers') or 1
 
         # Emit pre-provision signal
         pre_provision.send(sender=self.__class__, branch=self, user=user)
@@ -1098,18 +1127,38 @@ class Branch(JobsMixin, PrimaryModel):
         # Update Branch status
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.PROVISIONING)
 
-        with connection.cursor() as cursor:
-            try:
-                schema = self.schema_name
+        schema = self.schema_name
+        tables_to_replicate = get_tables_to_replicate()
 
-                # Start a transaction
+        try:
+            # Phase 1: metadata setup. Done in a single committed transaction so
+            # the workers in Phase 2 (which run on separate connections) can see
+            # the newly-created schema and tables.
+            with connection.cursor() as cursor:
                 cursor.execute("BEGIN")
-                cursor.execute("SET TRANSACTION ISOLATION LEVEL SERIALIZABLE")
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
 
-                # Create the new schema
+                # A fresh branch's schema (a unique, randomly-named schema_id) should not
+                # already exist. If it does, it's an orphan left by a previous provision of
+                # THIS branch that was hard-killed (OOM, SIGKILL, lost connection) between
+                # Phase 1's commit and the cleanup path below; drop it so the CREATE doesn't
+                # fail with "schema already exists". Only drop when it actually exists, and
+                # log loudly when we do — this DROP ... CASCADE is the one place provisioning
+                # destroys data, so its (rare, expected-only-after-an-interrupted-provision)
+                # firing must be visible rather than silent and unconditional.
                 logger.debug(f'Creating schema {schema}')
+                cursor.execute(
+                    "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s", [schema]
+                )
+                if cursor.fetchone():
+                    logger.warning(
+                        f"Schema {schema} already exists at provision time; dropping it before "
+                        f"recreating. This is expected only after a previously interrupted "
+                        f"provision of this branch."
+                    )
+                    cursor.execute(f"DROP SCHEMA IF EXISTS {quote_ident(schema)} CASCADE")
                 try:
-                    cursor.execute(f"CREATE SCHEMA {schema}")
+                    cursor.execute(f"CREATE SCHEMA {quote_ident(schema)}")
                 except ProgrammingError as e:
                     if str(e).startswith('permission denied '):
                         logger.critical(
@@ -1120,114 +1169,203 @@ class Branch(JobsMixin, PrimaryModel):
                         )
                     raise
 
-                # Create an empty copy of the global change log. Share the ID sequence from the main table to avoid
-                # reusing change record IDs.
-                table = ObjectChange_._meta.db_table
-                main_table = f'{main_schema}.{table}'
-                schema_table = f'{schema}.{table}'
-                logger.debug(f'Creating table {schema_table}')
-                cursor.execute(
-                    f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
-                )
-                # Set the default value for the ID column to the sequence associated with the source table
-                sequence_name = f'{main_schema}.{table}_id_seq'
-                cursor.execute(
-                    f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
-                )
+                # Prefetch every index definition on main in one query — the per-table
+                # entries drive the post-data-load index build.
+                main_indexes_by_table = build_main_index_map(cursor, main_schema)
+                # Same for PRIMARY KEY / UNIQUE / EXCLUDE constraints. We replay
+                # these via ALTER TABLE ADD CONSTRAINT so the branch schema's
+                # pg_constraint mirrors main's — necessary for later migrations
+                # that drop or alter constraints by name.
+                main_constraints_by_table = build_main_constraint_map(cursor, main_schema)
+                # On-disk size per table, used to dispatch the heaviest tables first in
+                # each parallel phase so a single large table can't be picked up last and
+                # left running alone while every other worker sits idle.
+                main_table_sizes = build_main_table_sizes(cursor, main_schema)
 
-                # Copy the migrations table
-                main_table = f'{main_schema}.django_migrations'
-                schema_table = f'{schema}.django_migrations'
-                logger.debug(f'Creating table {schema_table}')
-                cursor.execute(
-                    f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
-                )
-                cursor.execute(
-                    f"INSERT INTO {schema_table} SELECT * FROM {main_table}"
-                )
-                # Designate id as an identity column
-                cursor.execute(
-                    f"ALTER TABLE {schema_table} ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY"
-                )
-                # Set the next value for the ID sequence
-                cursor.execute(
-                    f"SELECT MAX(id) from {schema_table}"
-                )
-                starting_id = cursor.fetchone()[0] + 1
-                cursor.execute(
-                    f"ALTER SEQUENCE {schema}.django_migrations_id_seq RESTART WITH {starting_id}"
-                )
-
-                # Replicate relevant tables from the main schema
-                for table in get_tables_to_replicate():
-                    main_table = f'{main_schema}.{table}'
-                    schema_table = f'{schema}.{table}'
-                    logger.debug(f'Creating table {schema_table}')
-
-                    # Create the table in the new schema
+                # Empty copy of the global change log. Share the ID sequence from main
+                # so change record IDs stay globally unique.
+                objectchange_table = ObjectChange_._meta.db_table
+                main_objectchange = f'{quote_ident(main_schema)}.{quote_ident(objectchange_table)}'
+                branch_objectchange = f'{quote_ident(schema)}.{quote_ident(objectchange_table)}'
+                logger.debug(f'Creating table {schema}.{objectchange_table}')
+                cursor.execute(f"CREATE TABLE {branch_objectchange} ( LIKE {main_objectchange} )")
+                # Look the sequence up dynamically rather than assuming the
+                # <table>_id_seq naming convention (matches the Phase 2 copy).
+                cursor.execute("SELECT pg_get_serial_sequence(%s, 'id')", [main_objectchange])
+                row = cursor.fetchone()
+                if row and row[0]:
                     cursor.execute(
-                        f"CREATE TABLE {schema_table} ( LIKE {main_table} INCLUDING INDEXES )"
+                        f"ALTER TABLE {branch_objectchange} ALTER COLUMN id SET DEFAULT nextval(%s)",
+                        [row[0]],
                     )
 
-                    # Copy data from the source table
-                    cursor.execute(
-                        f"INSERT INTO {schema_table} SELECT * FROM {main_table}"
-                    )
-
-                    # Get the name of the sequence used for object ID allocations (if one exists)
-                    cursor.execute(
-                        "SELECT pg_get_serial_sequence(%s, 'id')", [table]
-                    )
-                    # Set the default value for the ID column to the sequence associated with the source table
-                    if sequence_name := cursor.fetchone()[0]:
-                        cursor.execute(
-                            f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)", [sequence_name]
-                        )
-
-                # Rename indexes to ensure consistency with the main schema for migration compatibility
+                # Copy the django_migrations table
+                branch_migrations = f'{quote_ident(schema)}.django_migrations'
+                main_migrations = f'{quote_ident(main_schema)}.django_migrations'
+                logger.debug(f'Creating table {schema}.django_migrations')
+                cursor.execute(f"CREATE TABLE {branch_migrations} ( LIKE {main_migrations} )")
+                cursor.execute(f"INSERT INTO {branch_migrations} SELECT * FROM {main_migrations}")
                 cursor.execute(
-                    f"SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = '{schema}'"
+                    f"ALTER TABLE {branch_migrations} ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY"
                 )
-                for index in get_sql_results(cursor):
-                    # Skip duplicate indexes
-                    # TODO: Remove in v0.6.0
-                    if index.indexname in SKIP_INDEXES:
-                        continue
+                # COALESCE guards against an empty django_migrations on main: MAX
+                # of no rows returns NULL, which would TypeError on + 1 below.
+                cursor.execute(f"SELECT COALESCE(MAX(id), 0) + 1 FROM {branch_migrations}")
+                starting_id = cursor.fetchone()[0]
+                cursor.execute(
+                    f"ALTER SEQUENCE {quote_ident(schema)}.django_migrations_id_seq RESTART WITH {starting_id}"
+                )
 
-                    # Find the matching index in main based on its table & definition
-                    definition = index.indexdef.split(' USING ', maxsplit=1)[1]
+                # Create empty destination tables (no indexes) for the parallel copy.
+                # Indexes are built in Phase 3 after the data is loaded — far cheaper
+                # than maintaining them row-by-row during INSERT.
+                for table in tables_to_replicate:
+                    logger.debug(f'Creating table {schema}.{table}')
                     cursor.execute(
-                        "SELECT indexname FROM pg_indexes WHERE schemaname=%s AND tablename=%s AND indexdef LIKE %s",
-                        [main_schema, index.tablename, f'% {definition}']
+                        f"CREATE TABLE {quote_ident(schema)}.{quote_ident(table)} "
+                        f"( LIKE {quote_ident(main_schema)}.{quote_ident(table)} )"
                     )
-                    if result := cursor.fetchone():
-                        # Rename the branch schema index (if needed)
-                        new_name = result[0]
-                        if new_name != index.indexname:
-                            sql = f"ALTER INDEX {schema}.{index.indexname} RENAME TO {new_name}"
-                            try:
-                                cursor.execute(sql)
-                                logger.debug(sql)
-                            except Exception:
-                                logger.error(sql)
-                                raise
-                    else:
-                        logger.warning(
-                            f"Found no matching index in main for branch index {index.indexname}."
-                        )
 
-                # Commit the transaction
                 cursor.execute("COMMIT")
 
-            except Exception as e:
-                # Abort the transaction
-                cursor.execute("ROLLBACK")
+            # Order parallel work heaviest-table-first (longest-processing-time
+            # scheduling) so a single large table can't be dispatched last and left
+            # running alone while the other workers idle. Used by every phase below.
+            def by_size_desc(table_names):
+                return sorted(table_names, key=lambda t: main_table_sizes.get(t, 0), reverse=True)
 
-                # Mark the Branch as failed
-                logger.error(e)
-                Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
+            # Phase 2: parallel data copy under a single MVCC snapshot.
+            # The coordinator transaction holds the exported snapshot alive while
+            # workers import it; do not commit until every worker has finished.
+            coordinator_commit_failed = False
+            with connection.cursor() as cursor:
+                cursor.execute("BEGIN")
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+                cursor.execute("SELECT pg_export_snapshot()")
+                snapshot_token = cursor.fetchone()[0]
+                logger.debug(f'Exported snapshot {snapshot_token} for {len(tables_to_replicate)} tables')
 
+                try:
+                    parallel_copy_tables(
+                        tables=by_size_desc(tables_to_replicate),
+                        snapshot_token=snapshot_token,
+                        schema=schema,
+                        main_schema=main_schema,
+                        workers=workers,
+                    )
+                finally:
+                    # Close the snapshot-exporting transaction. Swallow any error
+                    # here so it can't mask a worker exception that's already in
+                    # flight — the original traceback is what the operator needs.
+                    try:
+                        cursor.execute("COMMIT")
+                    except Exception:
+                        coordinator_commit_failed = True
+                        logger.exception(
+                            "Failed to COMMIT Phase 2 coordinator transaction"
+                        )
+
+            # The copied data is already durable (each worker committed its own
+            # transaction) and this coordinator transaction was read-only, so a failed
+            # COMMIT is not fatal. But it can leave the main connection in an aborted
+            # transaction, which would then break the success-path status=READY write
+            # (and the cleanup path) with "current transaction is aborted". Drop the
+            # connection so Django reconnects clean for the remaining ORM work.
+            if coordinator_commit_failed:
+                connection.close()
+
+            # Phase 3: rebuild constraints and indexes against the populated
+            # branch tables. PK/UNIQUE/EXCLUDE constraints are added via
+            # ALTER TABLE ADD CONSTRAINT — each one builds its backing index
+            # implicitly under the constraint's name, so we exclude those
+            # index names from the plain CREATE INDEX pass to avoid duplicates.
+            relevant_tables = {*tables_to_replicate, objectchange_table, 'django_migrations'}
+
+            sorted_relevant = by_size_desc(relevant_tables)
+
+            constraint_tasks = []
+            constraint_backed_indexes = set()
+            index_tasks = []
+            # Build both task lists heaviest-table-first so the constraint and index
+            # phases drain their largest work early rather than tailing on it.
+            for table_name in sorted_relevant:
+                for conname, condef, backing_indexname in main_constraints_by_table.get(table_name, ()):
+                    constraint_tasks.append((table_name, conname, condef))
+                    if backing_indexname:
+                        constraint_backed_indexes.add(backing_indexname)
+                for indexname, indexdef in main_indexes_by_table.get(table_name, ()):
+                    index_tasks.append((table_name, indexname, indexdef))
+
+            parallel_add_constraints(
+                constraint_tasks=constraint_tasks,
+                schema=schema,
+                workers=workers,
+            )
+
+            parallel_build_indexes(
+                index_tasks=index_tasks,
+                schema=schema,
+                main_schema=main_schema,
+                workers=workers,
+                skip_indexes={*SKIP_INDEXES, *constraint_backed_indexes},
+            )
+
+            # Phase 4: refresh planner statistics. After the bulk copy the branch
+            # tables have no statistics, so the first queries against the branch
+            # (sync, change-diff computation, etc.) would plan against empty-table
+            # estimates until autovacuum eventually catches up. ANALYZE is
+            # statistics-only and never affects correctness, so a failure here must
+            # not fail the provision — log it and leave the stats to autovacuum.
+            #
+            # Skip empty tables: a zero-size table's planner estimate is already
+            # correct (there is nothing to mis-estimate), and a typical install has
+            # hundreds of empty branchable tables — ANALYZE-ing every one of them adds
+            # a fixed hundreds-of-statements tax that can dominate a small provision.
+            analyze_tables = [t for t in sorted_relevant if main_table_sizes.get(t, 0) > 0]
+            try:
+                parallel_analyze_tables(
+                    tables=analyze_tables,
+                    schema=schema,
+                    workers=workers,
+                )
+            except JobTimeoutException:
+                # RQ is killing the job via its timeout (raised in this, the main,
+                # thread). It is an Exception subclass, so it would otherwise be
+                # swallowed by the best-effort handler below — let it propagate to
+                # the cleanup path instead of marking a half-provisioned branch READY.
                 raise
+            except Exception:
+                logger.warning(
+                    f"ANALYZE of branch schema {schema} failed; planner statistics will be "
+                    f"populated by autovacuum instead.",
+                    exc_info=True,
+                )
+
+        except Exception as e:
+            logger.error(e)
+            # If Phase 1 raised mid-transaction the connection is in an aborted
+            # state; clear it before running cleanup or the DROP SCHEMA and the
+            # status update below would both fail with "current transaction is
+            # aborted". A Phase 2/3 failure leaves the connection idle (the
+            # coordinator already committed and the workers use their own
+            # connections), so only issue the ROLLBACK when the server actually
+            # has an open transaction — an out-of-transaction ROLLBACK would emit
+            # a spurious "no transaction in progress" warning.
+            if connection.connection is not None and \
+                    connection.connection.info.transaction_status != TransactionStatus.IDLE:
+                try:
+                    with connection.cursor() as cursor:
+                        cursor.execute("ROLLBACK")
+                except Exception:
+                    logger.exception(f"Failed to roll back aborted transaction for {schema}")
+            # Clean up any partial state from the failed provision.
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute(f"DROP SCHEMA IF EXISTS {quote_ident(schema)} CASCADE")
+            except Exception:
+                logger.exception(f"Failed to drop schema {schema} during provision cleanup")
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
+            raise
 
         # Emit post-provision signal
         post_provision.send(sender=self.__class__, branch=self, user=user)
@@ -1272,7 +1410,7 @@ class Branch(JobsMixin, PrimaryModel):
             # Delete the schema and all its tables
             logger.debug(f'Deleting schema {self.schema_name}')
             cursor.execute(
-                f"DROP SCHEMA IF EXISTS {self.schema_name} CASCADE"
+                f"DROP SCHEMA IF EXISTS {quote_ident(self.schema_name)} CASCADE"
             )
 
         # Emit post-deprovision signal
