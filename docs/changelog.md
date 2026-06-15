@@ -1,5 +1,13 @@
 # Change Log
 
+## v1.0.5
+
+### Bug Fixes
+
+* [#581](https://github.com/netboxlabs/netbox-branching/issues/581) - Close each branch's database connection during the post-migrate pending-migrations check to avoid leaking Postgres backends (and exhausting memory/connections) with many open branches
+
+---
+
 ## v1.0.4
 
 ### Enhancements
