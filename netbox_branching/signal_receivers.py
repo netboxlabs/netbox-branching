@@ -291,6 +291,8 @@ def check_pending_migrations(sender, using, **kwargs):
             if branch.pending_migrations:
                 branch.status = BranchStatusChoices.PENDING_MIGRATIONS
                 update_count += 1
+        except Exception:
+            logger.exception(f"Failed to check pending migrations for branch {branch!r}")
         finally:
             # Close the branch's database connection to release its Postgres backend (and the relcache memory
             # accumulated by the pending_migrations introspection) before moving on. Otherwise these connections
