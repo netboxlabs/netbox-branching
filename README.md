@@ -65,3 +65,4 @@ DATABASE_ROUTERS = [
 ```
 $ ./manage.py migrate
 ```
+This project demonstrates Git workflow using the main branch.
