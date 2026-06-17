@@ -65,4 +65,8 @@ DATABASE_ROUTERS = [
 ```
 $ ./manage.py migrate
 ```
+<<<<<<< HEAD
 This project demonstrates Git branching and conflict resolution.
+=======
+This project demonstrates Git workflow using the main branch.
+>>>>>>> main
