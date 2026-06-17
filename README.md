@@ -65,3 +65,4 @@ DATABASE_ROUTERS = [
 ```
 $ ./manage.py migrate
 ```
+This project demonstrates Git branching and conflict resolution.
