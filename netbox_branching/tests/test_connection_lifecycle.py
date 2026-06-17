@@ -1,11 +1,13 @@
 import time
 
+from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.db import connections
+from django.db import DEFAULT_DB_ALIAS, connections
 from django.test import TransactionTestCase, tag
 
 from netbox_branching.models import Branch
+from netbox_branching.signal_receivers import check_pending_migrations
 from netbox_branching.utilities import activate_branch, close_old_branch_connections
 
 
@@ -74,6 +76,27 @@ class BranchConnectionLifecycleTestCase(TransactionTestCase):
 
         for i, conn in enumerate(conns):
             self.assertIsNone(conn.connection, f"Branch {i} connection should be closed")
+
+    def test_check_pending_migrations_closes_branch_connections(self):
+        """check_pending_migrations should close each branch's connection after inspecting it (#581)."""
+        branches = [self.create_and_provision_branch(f'test-pending-{i}') for i in range(3)]
+
+        # Open each branch connection so we can verify the sweep closes it.
+        for branch in branches:
+            self.open_branch_connection(branch)
+        for branch in branches:
+            self.assertIsNotNone(
+                connections[branch.connection_name].connection, "Connection should be open before the sweep"
+            )
+
+        # Fire the post_migrate handler as Django would during `manage.py migrate`.
+        check_pending_migrations(sender=apps.get_app_config('netbox_branching'), using=DEFAULT_DB_ALIAS)
+
+        for branch in branches:
+            self.assertIsNone(
+                connections[branch.connection_name].connection,
+                "Branch connection should be closed after check_pending_migrations",
+            )
 
     def test_cleanup_handles_deleted_branch(self):
         """Cleanup should gracefully handle connections to deleted branch schemas."""
