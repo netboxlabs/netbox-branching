@@ -39,6 +39,11 @@ class AppConfig(PluginConfig):
         # Job timeout in seconds for long-running operations (sync, merge, revert)
         'job_timeout': 3600,
 
+        # Number of parallel workers used during branch provisioning to copy tables and build
+        # indexes. Set to 1 to disable parallelism. Each worker holds its own database
+        # connection for the duration of the provision.
+        'provision_workers': 4,
+
         # Branch action validators
         'sync_validators': [],
         'merge_validators': [],
@@ -67,6 +72,19 @@ class AppConfig(PluginConfig):
             raise ImproperlyConfigured(
                 "netbox_branching: DATABASE_ROUTERS must contain 'netbox_branching.database.BranchAwareRouter'."
             )
+
+        # Validate provision_workers up front rather than letting a bad value surface as an
+        # unhandled error only when a branch is first provisioned.
+        workers = get_plugin_config('netbox_branching', 'provision_workers')
+        if workers is not None:
+            if type(workers) is not int:
+                raise ImproperlyConfigured(
+                    "netbox_branching: 'provision_workers' must be an integer."
+                )
+            if workers < 1:
+                raise ImproperlyConfigured(
+                    "netbox_branching: 'provision_workers' must be greater than or equal to 1."
+                )
 
         # Register cleanup handler for branch connections (#358)
         # This ensures branch connections are closed when they exceed CONN_MAX_AGE,
