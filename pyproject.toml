@@ -23,9 +23,7 @@ classifiers = [
     'Programming Language :: Python :: 3.12',
 ]
 
-dependencies = [
-    "Django",
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = ["check-manifest", "mkdocs", "mkdocs-material", "ruff==0.15.2"]
