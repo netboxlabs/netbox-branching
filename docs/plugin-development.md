@@ -305,20 +305,6 @@ Use this only when the default heuristic would incorrectly fake a migration that
 
 Pure schema migrations (`AddField`, `AlterField`, etc.) on branchable models don't need the flag — the heuristic handles them correctly by running them on every branch.
 
-## Plugin Installation Order
-
-!!! warning
-    `netbox_branching` must be listed **last** in the `PLUGINS` configuration. Branching support is only registered for models provided by plugins that appear **before** it in the list.
-
-    ```python
-    PLUGINS = [
-        'my_plugin',          # branching support registered for my_plugin's models
-        'netbox_branching',   # must be last
-    ]
-    ```
-
-    Any plugin listed after `netbox_branching` will not have its models enrolled in branching support.
-
 ## Branches and Plugin Upgrades
 
 If a plugin is installed or upgraded after branches have been created, the existing branch schemas will **not** automatically receive the new database migrations. Branches with outstanding migrations will be flagged with the **Pending Migrations** status and can be brought up to date using the **Migrate** action; until they are migrated, they cannot be activated or merged.
