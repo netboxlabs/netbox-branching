@@ -1,5 +1,16 @@
 # Change Log
 
+## v1.0.5
+
+### Bug Fixes
+
+* [#496](https://github.com/netboxlabs/netbox-branching/issues/496) - Skip the branch deleted-in-main check when the request is absent from context
+* [#581](https://github.com/netboxlabs/netbox-branching/issues/581) - Close branch connections during the post-migrate pending-migrations check
+* [#588](https://github.com/netboxlabs/netbox-branching/issues/588) - Preserve unmodified JSON dict keys when merging branches
+* [#603](https://github.com/netboxlabs/netbox-branching/issues/603) - Remove the unconstrained `Django` dependency so installers do not upgrade Django past the version NetBox supports
+
+---
+
 ## v1.0.4
 
 ### Enhancements
