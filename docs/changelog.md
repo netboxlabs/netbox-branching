@@ -4,7 +4,7 @@
 
 ### Faster Branch Provisioning ([#595](https://github.com/netboxlabs/netbox-branching/issues/595))
 
-The main change for this version is a set of performance enhancements targeting branch provisioning. For large data sets we have seen up to a 4x reduction in the time it takes to provision a branch, so creating a new branch should be significantly faster on larger data sets. Provisioning now copies data across multiple workers in parallel; the level of parallelism is configurable via the new `provision_workers` setting (default 4, or set to 1 to disable it).
+The main change for this version is a set of performance enhancements targeting branch provisioning. For large data sets we have seen up to a 4x reduction in the time it takes to provision a branch, so creating a new branch should be significantly faster on larger data sets. Provisioning now copies data across multiple workers in parallel.
 
 ---
 
