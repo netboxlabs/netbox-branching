@@ -49,6 +49,7 @@ class AppConfig(PluginConfig):
         # Number of days before staleness at which to display a stale warning
         'stale_warning_threshold': 7,
     }
+    django_apps = ["django.contrib.postgres"]
 
     def ready(self):
         super().ready()
