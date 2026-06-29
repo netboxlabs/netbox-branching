@@ -431,6 +431,7 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
 
         branch.revert(user=self.user, commit=True)
         self.assertFalse(Device.objects.filter(id=device_id).exists())
+        self.assertFalse(Interface.objects.filter(id=iface_id).exists())
         self.assertFalse(IPAddress.objects.filter(id__in=[ip4_id, ip6_id]).exists())
 
     def test_merge_multinode_cycle_via_virtual_chassis(self):

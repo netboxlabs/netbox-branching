@@ -550,10 +550,12 @@ class SquashMergeStrategy(MergeStrategy):
         original_postchange = dict(create.postchange_data)
         create.postchange_data[field_name] = None
 
-        # 3-tuple keys distinguish synthetic UPDATEs from real (2-tuple) changes; assert the
-        # contract so a future 3-tuple key elsewhere can't silently overwrite a real change.
+        # 3-tuple keys distinguish synthetic UPDATEs from real (2-tuple) changes; enforce the
+        # contract with an unconditional raise (not assert, which is stripped under -O) so a
+        # future 3-tuple key elsewhere can't silently overwrite a real change.
         update_key = (create.key[0], create.key[1], f'update_{field_name}')
-        assert update_key not in collapsed_changes, f"Unexpected key collision: {update_key}"
+        if update_key in collapsed_changes:
+            raise RuntimeError(f"Unexpected key collision while deferring FK: {update_key}")
 
         update_collapsed = CollapsedChange(update_key, create.model_class)
         update_collapsed.change_count = 1  # Synthetic update from split
@@ -639,9 +641,20 @@ class SquashMergeStrategy(MergeStrategy):
                     break
 
             if not broke:
-                # No deferrable edge in this cycle: leave the data untouched so the
-                # topological sort reports it, but ignore one of its edges so detection
-                # can move on to find any other (breakable) cycles.
+                # No deferrable edge in this cycle. Reaching here means the merge is already
+                # doomed: this cycle survives untouched into the real dependency graph (we
+                # modified no data), so _dependency_order_by_references will fail on it
+                # regardless of anything else we do. We don't bail immediately only so the
+                # logs surface every distinct problem cycle, not just the first.
+                #
+                # To keep finding those other cycles we drop one edge of this one from the
+                # *detection* graph so _find_cycle stops returning it. We remove a single edge
+                # (the minimum to make progress), not the whole cycle's edge set: removing
+                # more would hide additional cycles that share those edges, which is the
+                # opposite of what we want here. A shared edge could in theory belong to an
+                # otherwise-breakable cycle we then miss, but that cannot rescue the merge —
+                # this unbreakable cycle already blocks the topological sort.
+                #
                 # A cycle always spans at least two distinct nodes (self-references are
                 # excluded when building the graph), so cycle[1] is always a valid edge.
                 src, dst = cycle[0], cycle[1]
