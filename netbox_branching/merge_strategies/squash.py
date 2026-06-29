@@ -422,16 +422,21 @@ class SquashMergeStrategy(MergeStrategy):
                         )
 
     @staticmethod
-    def _iter_create_references(create, creates):
+    def _iter_create_references(create, creates, ct_cache):
         """
         Yield ``(field_name, target_key, breakable)`` for every concrete ForeignKey and
         GenericForeignKey in ``create.postchange_data`` that points at another object in
-        ``creates`` (self-references excluded).
+        ``creates`` (self-references excluded). Fields are visited in model definition
+        order, so the yielded sequence is deterministic.
 
         ``breakable`` is True only for nullable concrete ForeignKeys — the edges a cycle
         can be deferred at by NULLing the field and restoring it in a follow-up UPDATE.
         GenericForeignKey edges are reported (so cycles through them are detected) but are
         never breakable, mirroring how NetBox persists these relationships at the DB level.
+
+        ``ct_cache`` memoises ContentType natural-key lookups (keyed by model class for
+        concrete FKs and by content-type id for GFKs) so repeated graph rebuilds don't
+        re-hit Django's ContentType cache once per FK field.
         """
         data = create.postchange_data
         if not data:
@@ -444,8 +449,11 @@ class SquashMergeStrategy(MergeStrategy):
             fk_value = data.get(field.name)
             if not fk_value:
                 continue
-            related_ct = ContentType.objects.get_for_model(field.related_model)
-            app_label, model = related_ct.natural_key()
+            natural_key = ct_cache.get(field.related_model)
+            if natural_key is None:
+                natural_key = ContentType.objects.get_for_model(field.related_model).natural_key()
+                ct_cache[field.related_model] = natural_key
+            app_label, model = natural_key
             target_key = (f"{app_label}.{model}", fk_value)
             if target_key in creates and target_key != create.key:
                 yield field.name, target_key, field.null
@@ -459,11 +467,14 @@ class SquashMergeStrategy(MergeStrategy):
             fk_value = data.get(field.fk_field)
             if not (ct_value and fk_value):
                 continue
-            try:
-                ct = ContentType.objects.get_for_id(ct_value)
-            except ContentType.DoesNotExist:
-                continue
-            app_label, model = ct.natural_key()
+            natural_key = ct_cache.get(ct_value)
+            if natural_key is None:
+                try:
+                    natural_key = ContentType.objects.get_for_id(ct_value).natural_key()
+                except ContentType.DoesNotExist:
+                    continue
+                ct_cache[ct_value] = natural_key
+            app_label, model = natural_key
             target_key = (f"{app_label}.{model}", fk_value)
             if target_key in creates and target_key != create.key:
                 yield field.name, target_key, False
@@ -471,9 +482,11 @@ class SquashMergeStrategy(MergeStrategy):
     @staticmethod
     def _find_cycle(adjacency):
         """
-        Return a single cycle in the directed graph ``adjacency`` (mapping key -> set of
-        target keys) as a list of keys ``[n0, n1, ..., nk]`` where each consecutive pair
-        and the closing pair ``(nk, n0)`` is an edge. Returns None if the graph is acyclic.
+        Return a single cycle in the directed graph ``adjacency`` (mapping key -> ordered
+        iterable of target keys) as a list of keys ``[n0, n1, ..., nk]`` where each
+        consecutive pair and the closing pair ``(nk, n0)`` is an edge. Returns None if the
+        graph is acyclic. Neighbours are visited in iteration order, so for a given graph
+        the cycle returned is deterministic.
 
         Uses iterative (stack-based) DFS with white/gray/black colouring so deep graphs
         do not hit Python's recursion limit.
@@ -521,6 +534,13 @@ class SquashMergeStrategy(MergeStrategy):
         and emitting a synthetic follow-up UPDATE that restores the original value once the
         referenced object exists. Mirrors how NetBox itself persists self-referential
         topologies such as ``primary_ip4`` / ``Circuit.termination_a``.
+
+        The UPDATE's ``postchange_data`` is a full snapshot, but it is applied as a diff
+        (``ObjectChange.apply`` -> ``get_merge_data`` -> ``diff_for_merge`` of pre vs post),
+        so only ``field_name`` is actually written. This is what makes deferring multiple
+        FKs on the same object safe: a later deferral NULLs another field in this snapshot,
+        but because that field is unchanged between this UPDATE's pre/post it is excluded
+        from the diff and therefore never clobbers the value restored by its own UPDATE.
         """
         original_postchange = dict(create.postchange_data)
         create.postchange_data[field_name] = None
@@ -558,19 +578,25 @@ class SquashMergeStrategy(MergeStrategy):
 
         broken_fields = set()  # (create_key, field_name) already deferred — don't redo
         ignored_edges = set()  # unbreakable edges excluded from detection to make progress
+        ct_cache = {}  # memoised ContentType natural keys; content types don't change mid-operation
         # Safety bound: every iteration either defers an FK or ignores an edge, both finite.
         max_iterations = 2 * sum(len(c.postchange_data or {}) for c in creates.values()) + len(creates) + 1
 
         for _ in range(max_iterations):
             # (Re)build the adjacency graph from the current postchange data, so deferred
-            # edges drop out automatically once their field has been NULLed.
-            adjacency = {key: set() for key in creates}
+            # edges drop out automatically once their field has been NULLed. Targets are
+            # stored as ordered lists (deduped) so cycle detection is deterministic.
+            adjacency = {key: [] for key in creates}
             edge_fields = {}  # (src_key, dst_key) -> list of (field_name, breakable)
             for key, create in creates.items():
-                for field_name, target_key, breakable in SquashMergeStrategy._iter_create_references(create, creates):
+                seen_targets = set()
+                refs = SquashMergeStrategy._iter_create_references(create, creates, ct_cache)
+                for field_name, target_key, breakable in refs:
                     if (key, target_key) in ignored_edges:
                         continue
-                    adjacency[key].add(target_key)
+                    if target_key not in seen_targets:
+                        seen_targets.add(target_key)
+                        adjacency[key].append(target_key)
                     edge_fields.setdefault((key, target_key), []).append((field_name, breakable))
 
             cycle = SquashMergeStrategy._find_cycle(adjacency)
@@ -599,7 +625,9 @@ class SquashMergeStrategy(MergeStrategy):
                 # No deferrable edge in this cycle: leave the data untouched so the
                 # topological sort reports it, but ignore one of its edges so detection
                 # can move on to find any other (breakable) cycles.
-                src, dst = cycle[0], cycle[1 % len(cycle)]
+                # A cycle always spans at least two distinct nodes (self-references are
+                # excluded when building the graph), so cycle[1] is always a valid edge.
+                src, dst = cycle[0], cycle[1]
                 ignored_edges.add((src, dst))
                 logger.warning(
                     f"  Unbreakable dependency cycle (length {len(cycle)}) involving "
