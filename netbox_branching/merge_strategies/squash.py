@@ -422,106 +422,192 @@ class SquashMergeStrategy(MergeStrategy):
                         )
 
     @staticmethod
-    def _has_fk_to(collapsed, target_model_class, target_obj_id):
+    def _iter_create_references(create, creates):
         """
-        Check if a CollapsedChange has a foreign key reference to a specific object.
-        Returns True if any FK or GenericFK field in postchange_data points to the target object.
+        Yield ``(field_name, target_key, breakable)`` for every concrete ForeignKey and
+        GenericForeignKey in ``create.postchange_data`` that points at another object in
+        ``creates`` (self-references excluded).
+
+        ``breakable`` is True only for nullable concrete ForeignKeys — the edges a cycle
+        can be deferred at by NULLing the field and restoring it in a follow-up UPDATE.
+        GenericForeignKey edges are reported (so cycles through them are detected) but are
+        never breakable, mirroring how NetBox persists these relationships at the DB level.
         """
-        if not collapsed.postchange_data:
-            return False
+        data = create.postchange_data
+        if not data:
+            return
 
-        for field in collapsed.model_class._meta.get_fields():
-            if isinstance(field, models.ForeignKey):
-                fk_value = collapsed.postchange_data.get(field.name)
-                if fk_value:
-                    # Check if this FK points to target model
-                    related_model = field.related_model
-                    if related_model == target_model_class and fk_value == target_obj_id:
-                        return True
+        # Concrete ForeignKey fields
+        for field in create.model_class._meta.get_fields():
+            if not isinstance(field, models.ForeignKey):
+                continue
+            fk_value = data.get(field.name)
+            if not fk_value:
+                continue
+            related_ct = ContentType.objects.get_for_model(field.related_model)
+            app_label, model = related_ct.natural_key()
+            target_key = (f"{app_label}.{model}", fk_value)
+            if target_key in creates and target_key != create.key:
+                yield field.name, target_key, field.null
 
-        for field in collapsed.model_class._meta.private_fields:
-            if isinstance(field, GenericForeignKey):
-                # ObjectChange data may store the CT FK as either 'field_name' or 'field_name_id'
-                ct_value = (collapsed.postchange_data.get(field.ct_field)
-                            or collapsed.postchange_data.get(field.ct_field + '_id'))
-                fk_value = collapsed.postchange_data.get(field.fk_field)
-                if ct_value and fk_value == target_obj_id:
-                    try:
-                        ct = ContentType.objects.get_for_id(ct_value)
-                        if ct.model_class() == target_model_class:
-                            return True
-                    except ContentType.DoesNotExist:
-                        pass
-
-        return False
+        # GenericForeignKey fields
+        for field in create.model_class._meta.private_fields:
+            if not isinstance(field, GenericForeignKey):
+                continue
+            # ObjectChange data may store the CT FK as either 'field_name' or 'field_name_id'
+            ct_value = data.get(field.ct_field) or data.get(field.ct_field + '_id')
+            fk_value = data.get(field.fk_field)
+            if not (ct_value and fk_value):
+                continue
+            try:
+                ct = ContentType.objects.get_for_id(ct_value)
+            except ContentType.DoesNotExist:
+                continue
+            app_label, model = ct.natural_key()
+            target_key = (f"{app_label}.{model}", fk_value)
+            if target_key in creates and target_key != create.key:
+                yield field.name, target_key, False
 
     @staticmethod
-    def _split_bidirectional_cycles(collapsed_changes, logger):
+    def _find_cycle(adjacency):
         """
-        Special case: Preemptively detect and split CREATE operations involved in
-        bidirectional FK cycles.
+        Return a single cycle in the directed graph ``adjacency`` (mapping key -> set of
+        target keys) as a list of keys ``[n0, n1, ..., nk]`` where each consecutive pair
+        and the closing pair ``(nk, n0)`` is an edge. Returns None if the graph is acyclic.
 
-        For each CREATE A with a nullable FK to CREATE B, check if CREATE B has any FK back to A.
-        If so, split CREATE A by setting the nullable FK to NULL and creating a separate UPDATE.
-
-        This handles the common case of bidirectional FK relationships (e.g., Circuit ↔ CircuitTermination)
-        without needing complex cycle detection.
+        Uses iterative (stack-based) DFS with white/gray/black colouring so deep graphs
+        do not hit Python's recursion limit.
         """
+        WHITE, GRAY, BLACK = 0, 1, 2
+        color = {node: WHITE for node in adjacency}
+        parent = {}
 
-        creates = {key: c for key, c in collapsed_changes.items() if c.final_action == ActionType.CREATE}
-        splits_made = 0
-
-        for key_a, create_a in list(creates.items()):
-            if not create_a.postchange_data:
+        for start in adjacency:
+            if color[start] != WHITE:
                 continue
+            color[start] = GRAY
+            stack = [(start, iter(adjacency[start]))]
+            while stack:
+                node, neighbors = stack[-1]
+                advanced = False
+                for target in neighbors:
+                    if target not in color:
+                        continue  # target is not itself a tracked CREATE node
+                    if color[target] == WHITE:
+                        color[target] = GRAY
+                        parent[target] = node
+                        stack.append((target, iter(adjacency[target])))
+                        advanced = True
+                        break
+                    if color[target] == GRAY:
+                        # Back edge node -> target closes a cycle; walk parents back up.
+                        cycle = [node]
+                        cursor = node
+                        while cursor != target:
+                            cursor = parent[cursor]
+                            cycle.append(cursor)
+                        cycle.reverse()
+                        return cycle
+                if not advanced:
+                    color[node] = BLACK
+                    stack.pop()
 
-            # Find nullable FK fields in this CREATE
-            for field in create_a.model_class._meta.get_fields():
-                if not (isinstance(field, models.ForeignKey) and field.null):
-                    continue
+        return None
 
-                fk_value = create_a.postchange_data.get(field.name)
-                if not fk_value:
-                    continue
+    @staticmethod
+    def _defer_fk(collapsed_changes, create, field_name, logger):
+        """
+        Break a cycle at ``create``'s nullable FK ``field_name`` by NULLing it on the CREATE
+        and emitting a synthetic follow-up UPDATE that restores the original value once the
+        referenced object exists. Mirrors how NetBox itself persists self-referential
+        topologies such as ``primary_ip4`` / ``Circuit.termination_a``.
+        """
+        original_postchange = dict(create.postchange_data)
+        create.postchange_data[field_name] = None
 
-                # Get the target's key
-                related_model = field.related_model
-                target_ct = ContentType.objects.get_for_model(related_model)
-                app_label, model = target_ct.natural_key()
-                model_label = f"{app_label}.{model}"
-                key_b = (model_label, fk_value)
+        update_key = (create.key[0], create.key[1], f'update_{field_name}')
+        update_collapsed = CollapsedChange(update_key, create.model_class)
+        update_collapsed.change_count = 1  # Synthetic update from split
+        update_collapsed.final_action = ActionType.UPDATE
+        update_collapsed.prechange_data = dict(create.postchange_data)
+        update_collapsed.postchange_data = original_postchange
+        update_collapsed.last_change = create.last_change
 
-                # Is target also being created?
-                if key_b not in creates:
-                    continue
+        collapsed_changes[update_key] = update_collapsed
 
-                create_b = creates[key_b]
+    @staticmethod
+    def _break_dependency_cycles(collapsed_changes, logger):
+        """
+        Preemptively detect and break dependency cycles of any length among CREATE
+        operations.
 
-                # Does target have FK back to us? (bidirectional cycle)
-                if SquashMergeStrategy._has_fk_to(create_b, create_a.model_class, key_a[1]):
-                    logger.info(
-                        f"  Detected bidirectional cycle: {create_a.model_class.__name__}:{key_a[1]} ↔ "
-                        f"{create_b.model_class.__name__}:{key_b[1]} (via {field.name})"
-                    )
+        A cycle exists when a set of newly-created objects reference each other in a loop
+        via concrete ForeignKeys and/or GenericForeignKeys. Each cycle is broken at an
+        eligible edge — one backed by a nullable concrete ForeignKey — by deferring it:
+        the field is set NULL on the CREATE and a follow-up UPDATE restores it once the
+        referenced object exists (see ``_defer_fk``).
 
-                    # Split create_a: set nullable FK to NULL, create UPDATE to set it later
-                    original_postchange = dict(create_a.postchange_data)
-                    create_a.postchange_data[field.name] = None
+        The two-node case (e.g. Circuit ↔ CircuitTermination) is just the length-2
+        specialisation of this routine. The three-node primary-IP loop
+        (Device → IPAddress → Interface → Device) is broken at ``Device.primary_ip4``.
 
-                    # Create UPDATE operation
-                    update_key = (key_a[0], key_a[1], f'update_{field.name}')
-                    update_collapsed = CollapsedChange(update_key, create_a.model_class)
-                    update_collapsed.change_count = 1  # Synthetic update from split
-                    update_collapsed.final_action = ActionType.UPDATE
-                    update_collapsed.prechange_data = dict(create_a.postchange_data)
-                    update_collapsed.postchange_data = original_postchange
-                    update_collapsed.last_change = create_a.last_change
+        Cycles containing no deferrable (nullable concrete FK) edge are left in place for
+        the topological sort to report, as before.
+        """
+        creates = {key: c for key, c in collapsed_changes.items() if c.final_action == ActionType.CREATE}
 
-                    # Add UPDATE to collapsed_changes
-                    collapsed_changes[update_key] = update_collapsed
-                    splits_made += 1
+        broken_fields = set()  # (create_key, field_name) already deferred — don't redo
+        ignored_edges = set()  # unbreakable edges excluded from detection to make progress
+        # Safety bound: every iteration either defers an FK or ignores an edge, both finite.
+        max_iterations = 2 * sum(len(c.postchange_data or {}) for c in creates.values()) + len(creates) + 1
 
+        for _ in range(max_iterations):
+            # (Re)build the adjacency graph from the current postchange data, so deferred
+            # edges drop out automatically once their field has been NULLed.
+            adjacency = {key: set() for key in creates}
+            edge_fields = {}  # (src_key, dst_key) -> list of (field_name, breakable)
+            for key, create in creates.items():
+                for field_name, target_key, breakable in SquashMergeStrategy._iter_create_references(create, creates):
+                    if (key, target_key) in ignored_edges:
+                        continue
+                    adjacency[key].add(target_key)
+                    edge_fields.setdefault((key, target_key), []).append((field_name, breakable))
+
+            cycle = SquashMergeStrategy._find_cycle(adjacency)
+            if cycle is None:
+                return
+
+            # Find a deferrable edge along the cycle and break it there.
+            broke = False
+            for i, src in enumerate(cycle):
+                dst = cycle[(i + 1) % len(cycle)]
+                for field_name, breakable in edge_fields.get((src, dst), ()):
+                    if breakable and (src, field_name) not in broken_fields:
+                        logger.info(
+                            f"  Breaking dependency cycle at {creates[src].model_class.__name__}:{src[1]} "
+                            f".{field_name} -> {creates[dst].model_class.__name__}:{dst[1]} "
+                            f"(cycle length {len(cycle)})"
+                        )
+                        SquashMergeStrategy._defer_fk(collapsed_changes, creates[src], field_name, logger)
+                        broken_fields.add((src, field_name))
+                        broke = True
+                        break
+                if broke:
                     break
+
+            if not broke:
+                # No deferrable edge in this cycle: leave the data untouched so the
+                # topological sort reports it, but ignore one of its edges so detection
+                # can move on to find any other (breakable) cycles.
+                src, dst = cycle[0], cycle[1 % len(cycle)]
+                ignored_edges.add((src, dst))
+                logger.warning(
+                    f"  Unbreakable dependency cycle (length {len(cycle)}) involving "
+                    f"{creates[src].model_class.__name__}:{src[1]}; no nullable FK to defer. "
+                    f"Leaving for topological sort to report."
+                )
+
+        logger.warning("  Cycle breaking exceeded its iteration bound; remaining cycles left for topological sort.")
 
     @staticmethod
     def _log_cycle_details(remaining, collapsed_changes, logger, max_to_show=5):
@@ -674,9 +760,9 @@ class SquashMergeStrategy(MergeStrategy):
         if not to_process:
             return []
 
-        # Preemptively detect and split bidirectional FK cycles
-        # This may add new UPDATE operations to to_process
-        SquashMergeStrategy._split_bidirectional_cycles(to_process, logger)
+        # Preemptively detect and break FK dependency cycles of any length.
+        # This may add new UPDATE operations to to_process.
+        SquashMergeStrategy._break_dependency_cycles(to_process, logger)
 
         # Group by action and sort each group by time - need this to build the
         # dependency graph correctly

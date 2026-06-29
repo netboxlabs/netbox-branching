@@ -4,7 +4,7 @@ Tests for Branch merge functionality with ObjectChange collapsing using squash m
 import uuid
 
 from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
-from dcim.models import Device, Interface, Location, Region, Site
+from dcim.models import Device, Interface, Location, Region, Site, VirtualChassis
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory, TransactionTestCase
@@ -304,6 +304,215 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
         # Verify revert deleted both objects
         self.assertFalse(Circuit.objects.filter(id=circuit_id).exists())
         self.assertFalse(CircuitTermination.objects.filter(id=termination_id).exists())
+
+    def test_merge_device_primary_ip_on_own_interface(self):
+        """
+        Regression test for GitHub issue #608.
+
+        A Device whose primary_ip4 lives on one of its own newly-created interfaces forms a
+        three-node CREATE cycle that the old two-node-only splitter could not break:
+
+            Device    --primary_ip4 (nullable FK)--> IPAddress
+            IPAddress --assigned_object (GFK)-------> Interface
+            Interface --device (FK)-----------------> Device
+
+        The generalised cycle breaker defers Device.primary_ip4, so the squash merge
+        succeeds (Device created with primary_ip4 NULL, then Interface, then IP, then a
+        follow-up UPDATE backfills primary_ip4).
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # Site lives in main; the device topology is created entirely in the branch.
+        with event_tracking(request):
+            site = Site.objects.create(name='Test Site', slug='test-site')
+
+        branch = self._create_and_provision_branch()
+
+        request2 = RequestFactory().get(reverse('home'))
+        request2.id = uuid.uuid4()
+        request2.user = self.user
+
+        with activate_branch(branch), event_tracking(request2):
+            device = Device.objects.create(
+                name='Test Device',
+                site=site,
+                device_type=self.device_type,
+                role=self.device_role,
+            )
+            iface = Interface.objects.create(device=device, name='eth0', type='virtual')
+            ip = IPAddress.objects.create(address='10.0.0.1/24')
+
+            ip.snapshot()
+            ip.assigned_object = iface
+            ip.save()
+
+            device.snapshot()
+            device.primary_ip4 = ip
+            device.save()
+
+            device_id, iface_id, ip_id = device.id, iface.id, ip.id
+
+        # Squash merge — previously raised "Cycle detected in dependency graph".
+        branch.merge(user=self.user, commit=True)
+
+        self.assertTrue(Device.objects.filter(id=device_id).exists())
+        self.assertTrue(Interface.objects.filter(id=iface_id).exists())
+        self.assertTrue(IPAddress.objects.filter(id=ip_id).exists())
+        self.assertEqual(Device.objects.get(id=device_id).primary_ip4_id, ip_id)
+        self.assertEqual(IPAddress.objects.get(id=ip_id).assigned_object_id, iface_id)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        # Revert cleanly removes the whole topology.
+        branch.revert(user=self.user, commit=True)
+        self.assertFalse(Device.objects.filter(id=device_id).exists())
+        self.assertFalse(Interface.objects.filter(id=iface_id).exists())
+        self.assertFalse(IPAddress.objects.filter(id=ip_id).exists())
+
+    def test_merge_device_dual_primary_ip4_and_ip6(self):
+        """
+        Variant of issue #608 where a Device has both primary_ip4 and primary_ip6 set to
+        new IPs on its own interface. Two distinct nullable-FK edges (primary_ip4 and
+        primary_ip6) must each be deferred to break the two interlocking cycles.
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Test Site', slug='test-site')
+
+        branch = self._create_and_provision_branch()
+
+        request2 = RequestFactory().get(reverse('home'))
+        request2.id = uuid.uuid4()
+        request2.user = self.user
+
+        with activate_branch(branch), event_tracking(request2):
+            device = Device.objects.create(
+                name='Test Device',
+                site=site,
+                device_type=self.device_type,
+                role=self.device_role,
+            )
+            iface = Interface.objects.create(device=device, name='eth0', type='virtual')
+
+            ip4 = IPAddress.objects.create(address='10.0.0.1/24')
+            ip4.snapshot()
+            ip4.assigned_object = iface
+            ip4.save()
+
+            ip6 = IPAddress.objects.create(address='2001:db8::1/64')
+            ip6.snapshot()
+            ip6.assigned_object = iface
+            ip6.save()
+
+            device.snapshot()
+            device.primary_ip4 = ip4
+            device.primary_ip6 = ip6
+            device.save()
+
+            device_id, iface_id = device.id, iface.id
+            ip4_id, ip6_id = ip4.id, ip6.id
+
+        branch.merge(user=self.user, commit=True)
+
+        merged_device = Device.objects.get(id=device_id)
+        self.assertEqual(merged_device.primary_ip4_id, ip4_id)
+        self.assertEqual(merged_device.primary_ip6_id, ip6_id)
+        self.assertEqual(IPAddress.objects.get(id=ip4_id).assigned_object_id, iface_id)
+        self.assertEqual(IPAddress.objects.get(id=ip6_id).assigned_object_id, iface_id)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        branch.revert(user=self.user, commit=True)
+        self.assertFalse(Device.objects.filter(id=device_id).exists())
+        self.assertFalse(IPAddress.objects.filter(id__in=[ip4_id, ip6_id]).exists())
+
+    def test_merge_multinode_cycle_via_virtual_chassis(self):
+        """
+        A longer, multi-node cycle spanning a virtual chassis. The VC master's primary IP
+        lives on an interface of a *different* member device, producing a five-node cycle
+        plus an interlocking two-node cycle:
+
+            Device1   --primary_ip4 (nullable FK)----> IPAddress
+            IPAddress --assigned_object (GFK)--------> Interface
+            Interface --device (FK)------------------> Device2
+            Device2   --virtual_chassis (nullable FK)-> VirtualChassis
+            VirtualChassis --master (nullable FK)----> Device1
+            Device1   --virtual_chassis (nullable FK)-> VirtualChassis  (2-node with master)
+
+        The generalised breaker must defer multiple nullable FK edges to untangle all of
+        the interlocking cycles before the topological sort runs.
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Test Site', slug='test-site')
+
+        branch = self._create_and_provision_branch()
+
+        request2 = RequestFactory().get(reverse('home'))
+        request2.id = uuid.uuid4()
+        request2.user = self.user
+
+        with activate_branch(branch), event_tracking(request2):
+            vc = VirtualChassis.objects.create(name='VC1')
+
+            device1 = Device.objects.create(
+                name='Device 1', site=site, device_type=self.device_type, role=self.device_role,
+            )
+            device2 = Device.objects.create(
+                name='Device 2', site=site, device_type=self.device_type, role=self.device_role,
+            )
+
+            # The primary IP of device1 lives on an interface of device2.
+            iface = Interface.objects.create(device=device2, name='eth0', type='virtual')
+            ip = IPAddress.objects.create(address='10.0.0.1/24')
+            ip.snapshot()
+            ip.assigned_object = iface
+            ip.save()
+
+            device1.snapshot()
+            device1.primary_ip4 = ip
+            device1.virtual_chassis = vc
+            device1.vc_position = 1
+            device1.save()
+
+            device2.snapshot()
+            device2.virtual_chassis = vc
+            device2.vc_position = 2
+            device2.save()
+
+            vc.snapshot()
+            vc.master = device1
+            vc.save()
+
+            vc_id = vc.id
+            device1_id, device2_id = device1.id, device2.id
+            iface_id, ip_id = iface.id, ip.id
+
+        branch.merge(user=self.user, commit=True)
+
+        self.assertEqual(Device.objects.get(id=device1_id).primary_ip4_id, ip_id)
+        self.assertEqual(Device.objects.get(id=device1_id).virtual_chassis_id, vc_id)
+        self.assertEqual(Device.objects.get(id=device2_id).virtual_chassis_id, vc_id)
+        self.assertEqual(VirtualChassis.objects.get(id=vc_id).master_id, device1_id)
+        self.assertEqual(IPAddress.objects.get(id=ip_id).assigned_object_id, iface_id)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+        branch.revert(user=self.user, commit=True)
+        self.assertFalse(Device.objects.filter(id__in=[device1_id, device2_id]).exists())
+        self.assertFalse(VirtualChassis.objects.filter(id=vc_id).exists())
+        self.assertFalse(IPAddress.objects.filter(id=ip_id).exists())
 
     def test_merge_squash_multiple_field_changes(self):
         """
