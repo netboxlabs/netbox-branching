@@ -499,6 +499,11 @@ class SquashMergeStrategy(MergeStrategy):
             if color[start] != WHITE:
                 continue
             color[start] = GRAY
+            # Each stack frame stores a *live iterator* over a node's neighbours, not the
+            # neighbour list. Revisiting a frame resumes that iterator where it left off
+            # (Python iterators return self from __iter__), which is what lets DFS continue
+            # past an already-explored child. Do not replace iter(...) with the list itself
+            # or copy the frame's iterator — either would restart the scan and break the DFS.
             stack = [(start, iter(adjacency[start]))]
             while stack:
                 node, neighbors = stack[-1]
@@ -528,7 +533,7 @@ class SquashMergeStrategy(MergeStrategy):
         return None
 
     @staticmethod
-    def _defer_fk(collapsed_changes, create, field_name, logger):
+    def _defer_fk(collapsed_changes, create, field_name):
         """
         Break a cycle at ``create``'s nullable FK ``field_name`` by NULLing it on the CREATE
         and emitting a synthetic follow-up UPDATE that restores the original value once the
@@ -545,13 +550,25 @@ class SquashMergeStrategy(MergeStrategy):
         original_postchange = dict(create.postchange_data)
         create.postchange_data[field_name] = None
 
+        # 3-tuple keys distinguish synthetic UPDATEs from real (2-tuple) changes; assert the
+        # contract so a future 3-tuple key elsewhere can't silently overwrite a real change.
         update_key = (create.key[0], create.key[1], f'update_{field_name}')
+        assert update_key not in collapsed_changes, f"Unexpected key collision: {update_key}"
+
         update_collapsed = CollapsedChange(update_key, create.model_class)
         update_collapsed.change_count = 1  # Synthetic update from split
         update_collapsed.final_action = ActionType.UPDATE
         update_collapsed.prechange_data = dict(create.postchange_data)
         update_collapsed.postchange_data = original_postchange
         update_collapsed.last_change = create.last_change
+
+        # The UPDATE depends on the originating CREATE existing first. That ordering is also
+        # enforced transitively through the cycle (the FK target leads back to this object),
+        # but make it direct so _defer_fk doesn't rely on that implicit precondition.
+        # _build_fk_dependency_graph runs afterwards and only adds to these sets, so the
+        # manual edge survives.
+        update_collapsed.depends_on.add(create.key)
+        create.depended_by.add(update_key)
 
         collapsed_changes[update_key] = update_collapsed
 
@@ -614,7 +631,7 @@ class SquashMergeStrategy(MergeStrategy):
                             f".{field_name} -> {creates[dst].model_class.__name__}:{dst[1]} "
                             f"(cycle length {len(cycle)})"
                         )
-                        SquashMergeStrategy._defer_fk(collapsed_changes, creates[src], field_name, logger)
+                        SquashMergeStrategy._defer_fk(collapsed_changes, creates[src], field_name)
                         broken_fields.add((src, field_name))
                         broke = True
                         break
