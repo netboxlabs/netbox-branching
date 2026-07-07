@@ -12,6 +12,8 @@ from dcim.models import (
     DeviceType,
     Interface,
     Manufacturer,
+    ModuleBay,
+    ModuleBayTemplate,
     Region,
     Site,
     VirtualChassis,
@@ -915,6 +917,92 @@ class BaseMergeTests:
         # Verify new nodes are deleted
         self.assertFalse(Region.objects.filter(id=grandchild_a2_1_id).exists())
         self.assertFalse(Region.objects.filter(id=great_grandchild_id).exists())
+
+    def test_merge_module_bays(self):
+        """
+        Create a device whose device type defines module bays. NetBox instantiates a
+        ModuleBay (an MPTT model) per template. Because the deserialized instances carry
+        a preset PK and ModuleBay.save() repopulates tree_id, merging previously drove
+        MPTT into its "move existing node" path and raised NotUpdated. Merge must insert
+        the module bays into main, and revert must remove them again. (#610)
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # Add module bays to the device type and a site to hold the device (in main).
+        with event_tracking(request):
+            ModuleBayTemplate.objects.create(device_type=self.device_type, name='Module Bay 1')
+            ModuleBayTemplate.objects.create(device_type=self.device_type, name='Module Bay 2')
+            site = Site.objects.create(name='Site 1', slug='site-1')
+
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # In branch: create a device from the device type (instantiates two ModuleBays)
+        with activate_branch(branch), event_tracking(request):
+            device = Device.objects.create(
+                name='Device 1', device_type=self.device_type, role=self.device_role, site=site
+            )
+            device_id = device.id
+            self.assertEqual(ModuleBay.objects.filter(device=device).count(), 2)
+
+        # Merge branch
+        branch.merge(user=self.user, commit=True)
+
+        # Device and its module bays now exist in main
+        self.assertTrue(Device.objects.filter(id=device_id).exists())
+        module_bays = ModuleBay.objects.filter(device_id=device_id)
+        self.assertEqual(module_bays.count(), 2)
+        # Each root module bay should have received a distinct tree_id
+        self.assertEqual(len(set(module_bays.values_list('tree_id', flat=True))), 2)
+
+        # Revert branch
+        branch.revert(user=self.user, commit=True)
+
+        # Device and its module bays are removed again
+        self.assertFalse(Device.objects.filter(id=device_id).exists())
+        self.assertEqual(ModuleBay.objects.filter(device_id=device_id).count(), 0)
+
+    def test_merge_revert_restores_deleted_mptt_object(self):
+        """
+        Deleting an MPTT component (ModuleBay) in a branch and then reverting the merge
+        must restore it. The restore path deserializes the object with its original PK,
+        so it hits the same MPTT insert-vs-update hazard as a create. (#610)
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In main: a device with two module bays.
+        with event_tracking(request):
+            ModuleBayTemplate.objects.create(device_type=self.device_type, name='Module Bay 1')
+            ModuleBayTemplate.objects.create(device_type=self.device_type, name='Module Bay 2')
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            device = Device.objects.create(
+                name='Device 1', device_type=self.device_type, role=self.device_role, site=site
+            )
+        device_id = device.id
+        deleted_bay = ModuleBay.objects.filter(device_id=device_id).order_by('pk').first()
+        deleted_bay_id = deleted_bay.id
+        deleted_bay_name = deleted_bay.name
+
+        # Create branch
+        branch = self._create_and_provision_branch()
+
+        # In branch: delete one module bay
+        with activate_branch(branch), event_tracking(request):
+            ModuleBay.objects.get(id=deleted_bay_id).delete()
+
+        # Merge branch: the module bay is deleted in main
+        branch.merge(user=self.user, commit=True)
+        self.assertFalse(ModuleBay.objects.filter(id=deleted_bay_id).exists())
+
+        # Revert branch: the module bay is restored in main
+        branch.revert(user=self.user, commit=True)
+        restored = ModuleBay.objects.filter(id=deleted_bay_id)
+        self.assertEqual(restored.count(), 1)
+        self.assertEqual(restored.first().name, deleted_bay_name)
 
     def test_merge_many_to_many_tags(self):
         """
