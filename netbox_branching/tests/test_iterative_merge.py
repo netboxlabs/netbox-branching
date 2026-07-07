@@ -967,14 +967,19 @@ class BaseMergeTests:
     def test_merge_revert_restores_deleted_mptt_object(self):
         """
         Deleting an MPTT component (ModuleBay) in a branch and then reverting the merge
-        must restore it. The restore path deserializes the object with its original PK,
-        so it hits the same MPTT insert-vs-update hazard as a create. (#610)
+        must restore it, including its M2M relationships (e.g. tags). The restore path
+        deserializes the object with its original PK, so it hits the same MPTT
+        insert-vs-update hazard as a create and bypasses DeserializedObject's M2M
+        handling. (#610)
         """
+        tag1 = Tag.objects.create(name='Tag 1', slug='tag-1')
+        tag2 = Tag.objects.create(name='Tag 2', slug='tag-2')
+
         request = RequestFactory().get(reverse('home'))
         request.id = uuid.uuid4()
         request.user = self.user
 
-        # In main: a device with two module bays.
+        # In main: a device with two module bays; tag one of them.
         with event_tracking(request):
             ModuleBayTemplate.objects.create(device_type=self.device_type, name='Module Bay 1')
             ModuleBayTemplate.objects.create(device_type=self.device_type, name='Module Bay 2')
@@ -982,15 +987,16 @@ class BaseMergeTests:
             device = Device.objects.create(
                 name='Device 1', device_type=self.device_type, role=self.device_role, site=site
             )
-        device_id = device.id
-        deleted_bay = ModuleBay.objects.filter(device_id=device_id).order_by('pk').first()
+            device_id = device.id
+            deleted_bay = ModuleBay.objects.filter(device_id=device_id).order_by('pk').first()
+            deleted_bay.tags.add(tag1, tag2)
         deleted_bay_id = deleted_bay.id
         deleted_bay_name = deleted_bay.name
 
         # Create branch
         branch = self._create_and_provision_branch()
 
-        # In branch: delete one module bay
+        # In branch: delete the tagged module bay
         with activate_branch(branch), event_tracking(request):
             ModuleBay.objects.get(id=deleted_bay_id).delete()
 
@@ -998,11 +1004,12 @@ class BaseMergeTests:
         branch.merge(user=self.user, commit=True)
         self.assertFalse(ModuleBay.objects.filter(id=deleted_bay_id).exists())
 
-        # Revert branch: the module bay is restored in main
+        # Revert branch: the module bay and its tags are restored in main
         branch.revert(user=self.user, commit=True)
         restored = ModuleBay.objects.filter(id=deleted_bay_id)
         self.assertEqual(restored.count(), 1)
         self.assertEqual(restored.first().name, deleted_bay_name)
+        self.assertEqual(set(restored.first().tags.all()), {tag1, tag2})
 
     def test_merge_many_to_many_tags(self):
         """

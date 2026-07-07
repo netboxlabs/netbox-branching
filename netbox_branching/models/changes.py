@@ -171,10 +171,16 @@ class ObjectChange(ObjectChange_):
             # applying a create: the preset PK (and, for models like ModuleBay whose save()
             # repopulates tree_id, a non-null tree_id) makes MPTT treat the row as existing
             # and force a zero-row UPDATE. Clear the tree fields and force the insert so MPTT
-            # recomputes them against the local tree. (#531, #610)
+            # recomputes them against the local tree. force_insert requires saving the raw
+            # instance, which bypasses DeserializedObject's M2M handling, so — exactly as the
+            # MPTT create path above does — reassign the M2M data explicitly. This is scoped
+            # to MPTT models to match the create fix; the non-MPTT branch is left unchanged.
+            # (#531, #610)
             if isinstance(instance, MPTTModel):
                 clear_mptt_fields(instance)
                 instance.save(using=using, force_insert=True)
+                for accessor_name, object_list in (deserialized.m2m_data or {}).items():
+                    getattr(instance, accessor_name).set(object_list)
             else:
                 instance.save(using=using)
 
