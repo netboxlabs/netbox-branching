@@ -85,9 +85,16 @@ class ObjectChange(ObjectChange_):
             # other rows (e.g. due to order_insertion_by) — those side-effects aren't in
             # the changelog, so reusing the source's tree fields would leave the
             # destination tree inconsistent and break later parent updates. (#531)
+            #
+            # force_insert is required because the deserialized instance carries a preset
+            # PK. Without it, MPTT's _is_saved() can report the node as already existing
+            # (e.g. ModuleBay's save() repopulates tree_id, so tree_id is no longer None)
+            # and route it through the "move existing node" path, which forces an UPDATE
+            # with update_fields that matches zero rows and raises NotUpdated. Applying a
+            # CREATE change is always an INSERT, so force_insert is correct here. (#610)
             if isinstance(instance.object, MPTTModel):
                 clear_mptt_fields(instance.object)
-                instance.object.save(using=using)
+                instance.object.save(using=using, force_insert=True)
                 for accessor_name, object_list in (instance.m2m_data or {}).items():
                     getattr(instance.object, accessor_name).set(object_list)
             else:
@@ -159,7 +166,23 @@ class ObjectChange(ObjectChange_):
                         setattr(instance, field.name, ct_field.get_object_for_this_type(pk=fk_field))
 
             instance.full_clean()
-            instance.save(using=using)
+
+            # Restoring a deleted object is an INSERT, so it hits the same MPTT hazard as
+            # applying a create: the preset PK (and, for models like ModuleBay whose save()
+            # repopulates tree_id, a non-null tree_id) makes MPTT treat the row as existing
+            # and force a zero-row UPDATE. Clear the tree fields and force the insert so MPTT
+            # recomputes them against the local tree. force_insert requires saving the raw
+            # instance, which bypasses DeserializedObject's M2M handling, so — exactly as the
+            # MPTT create path above does — reassign the M2M data explicitly. This is scoped
+            # to MPTT models to match the create fix; the non-MPTT branch is left unchanged.
+            # (#531, #610)
+            if isinstance(instance, MPTTModel):
+                clear_mptt_fields(instance)
+                instance.save(using=using, force_insert=True)
+                for accessor_name, object_list in (deserialized.m2m_data or {}).items():
+                    getattr(instance, accessor_name).set(object_list)
+            else:
+                instance.save(using=using)
 
     undo.alters_data = True
 
