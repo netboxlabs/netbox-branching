@@ -1,5 +1,14 @@
 # Change Log
 
+## v1.1.1
+
+### Bug Fixes
+
+* [#608](https://github.com/netboxlabs/netbox-branching/issues/608) - Generalize squash merge cycle breaking to handle foreign key cycles of any length
+* [#610](https://github.com/netboxlabs/netbox-branching/issues/610) - Fix handling of MPTT component models during iterative merge
+
+---
+
 ## v1.1.0
 
 ### Faster Branch Provisioning ([#595](https://github.com/netboxlabs/netbox-branching/issues/595))
