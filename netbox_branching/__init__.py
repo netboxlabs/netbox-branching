@@ -90,6 +90,19 @@ class AppConfig(PluginConfig):
                     "netbox_branching: 'provision_workers' must be greater than or equal to 1."
                 )
 
+        # Validate auto_archive_days up front so a misconfigured value surfaces at startup rather
+        # than as an opaque timedelta error the first time the daily archival job runs.
+        auto_archive_days = get_plugin_config('netbox_branching', 'auto_archive_days')
+        if auto_archive_days is not None:
+            if type(auto_archive_days) is not int:
+                raise ImproperlyConfigured(
+                    "netbox_branching: 'auto_archive_days' must be an integer or None."
+                )
+            if auto_archive_days < 1:
+                raise ImproperlyConfigured(
+                    "netbox_branching: 'auto_archive_days' must be greater than or equal to 1."
+                )
+
         # Register cleanup handler for branch connections (#358)
         # This ensures branch connections are closed when they exceed CONN_MAX_AGE,
         # preventing connection leaks. Django's built-in close_old_connections()

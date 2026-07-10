@@ -273,16 +273,28 @@ class AutoArchiveBranchJob(JobRunner):
             return
 
         cutoff = timezone.now() - timedelta(days=auto_archive_days)
-        branches = Branch.objects.filter(
-            status=BranchStatusChoices.MERGED,
-            merged_time__lt=cutoff,
+        # Fetch only the PKs rather than whole Branch rows so a large backlog of merged branches
+        # isn't loaded into memory all at once. We deliberately don't use .iterator() here: each
+        # archive() commits in its own transaction, whereas a server-side cursor would hold a
+        # single transaction open across the entire loop, defeating that per-branch isolation and
+        # holding locks for the job's full duration.
+        branch_pks = list(
+            Branch.objects.filter(
+                status=BranchStatusChoices.MERGED,
+                merged_time__lt=cutoff,
+            ).values_list('pk', flat=True)
         )
         self.logger.info(
-            f"Found {len(branches)} merged branch(es) merged before {cutoff:%Y-%m-%d %H:%M:%S} "
+            f"Found {len(branch_pks)} merged branch(es) merged before {cutoff:%Y-%m-%d %H:%M:%S} "
             f"eligible for automatic archival."
         )
 
-        for branch in branches:
+        for pk in branch_pks:
+            # Re-fetch each branch for its current state; it may have been archived or deleted
+            # since the initial query was taken.
+            branch = Branch.objects.filter(pk=pk).first()
+            if branch is None or branch.status != BranchStatusChoices.MERGED:
+                continue
             # Respect any configured archive validators; skip (rather than fail) branches which
             # are not permitted to be archived so a single blocked branch can't stall the batch.
             if not branch.can_archive:
