@@ -273,11 +273,9 @@ class AutoArchiveBranchJob(JobRunner):
             return
 
         cutoff = timezone.now() - timedelta(days=auto_archive_days)
-        # Fetch only the PKs rather than whole Branch rows so a large backlog of merged branches
-        # isn't loaded into memory all at once. We deliberately don't use .iterator() here: each
-        # archive() commits in its own transaction, whereas a server-side cursor would hold a
-        # single transaction open across the entire loop, defeating that per-branch isolation and
-        # holding locks for the job's full duration.
+        # Fetch only PKs to avoid loading a large backlog of merged branches into memory. Not
+        # .iterator(): its server-side cursor would hold one transaction open across the whole
+        # loop, defeating the per-branch transaction isolation each archive() relies on.
         branch_pks = list(
             Branch.objects.filter(
                 status=BranchStatusChoices.MERGED,
