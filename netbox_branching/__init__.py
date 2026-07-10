@@ -53,13 +53,17 @@ class AppConfig(PluginConfig):
 
         # Number of days before staleness at which to display a stale warning
         'stale_warning_threshold': 7,
+
+        # Automatically archive branches merged more than this many days ago (via a daily job).
+        # Set to None to disable automatic archival.
+        'auto_archive_days': 30,
     }
 
     def ready(self):
         super().ready()
         from django.core.signals import request_finished, request_started
 
-        from . import constants, events, search, signal_receivers, webhook_callbacks  # noqa: F401
+        from . import constants, events, jobs, search, signal_receivers, webhook_callbacks  # noqa: F401
         from .models import Branch
         from .utilities import DynamicSchemaDict, close_old_branch_connections
 

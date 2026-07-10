@@ -1,25 +1,28 @@
 import logging
 from collections import defaultdict
 from contextlib import contextmanager
+from datetime import timedelta
 
-from core.choices import ObjectChangeActionChoices
+from core.choices import JobIntervalChoices, ObjectChangeActionChoices
 from core.signals import handle_changed_object, handle_deleted_object
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db.models import Case, IntegerField, Max, When
 from django.db.models.signals import m2m_changed, post_save, pre_delete
-from netbox.jobs import JobRunner
+from django.utils import timezone
+from netbox.jobs import JobRunner, system_job
 from netbox.plugins import get_plugin_config
 from netbox.signals import post_clean
 from utilities.exceptions import AbortTransaction
 
-from .choices import BranchMergeStrategyChoices
+from .choices import BranchMergeStrategyChoices, BranchStatusChoices
 from .error_report import build_error_report
 from .signal_receivers import validate_branching_operations
 from .utilities import ListHandler
 
 __all__ = (
+    'AutoArchiveBranchJob',
     'MergeBranchJob',
     'MigrateBranchJob',
     'ProvisionBranchJob',
@@ -248,3 +251,47 @@ class MigrateBranchJob(BranchJobRunner):
                 branch.migrate(user=self.job.user)
             except AbortTransaction:
                 logger.info("Dry run completed; rolling back changes")
+
+
+@system_job(interval=JobIntervalChoices.INTERVAL_DAILY)
+class AutoArchiveBranchJob(JobRunner):
+    """
+    Automatically archive branches which were merged more than `auto_archive_days` days ago. This
+    daily housekeeping job cleans up old merged branches which are no longer needed, helping to
+    combat database bloat. Archival is disabled entirely when `auto_archive_days` is None.
+    """
+    class Meta:
+        name = 'Auto-archive branches'
+
+    def run(self, *args, **kwargs):
+        # Import here to avoid a circular import at module load time (models imports jobs).
+        from .models import Branch
+
+        auto_archive_days = get_plugin_config('netbox_branching', 'auto_archive_days')
+        if auto_archive_days is None:
+            self.logger.info("Automatic branch archival is disabled (auto_archive_days is None); skipping.")
+            return
+
+        cutoff = timezone.now() - timedelta(days=auto_archive_days)
+        branches = Branch.objects.filter(
+            status=BranchStatusChoices.MERGED,
+            merged_time__lt=cutoff,
+        )
+        self.logger.info(
+            f"Found {len(branches)} merged branch(es) merged before {cutoff:%Y-%m-%d %H:%M:%S} "
+            f"eligible for automatic archival."
+        )
+
+        for branch in branches:
+            # Respect any configured archive validators; skip (rather than fail) branches which
+            # are not permitted to be archived so a single blocked branch can't stall the batch.
+            if not branch.can_archive:
+                self.logger.warning(f"Skipping branch {branch}: archival is not permitted.")
+                continue
+            try:
+                self.logger.info(
+                    f"Archiving branch {branch} (merged {branch.merged_time:%Y-%m-%d %H:%M:%S})."
+                )
+                branch.archive(user=self.job.user)
+            except Exception as e:  # noqa: BLE001 — isolate failures so one branch can't abort the batch
+                self.logger.error(f"Failed to archive branch {branch}: {e}")
