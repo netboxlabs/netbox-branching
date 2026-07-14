@@ -55,8 +55,8 @@ class AppConfig(PluginConfig):
         'stale_warning_threshold': 7,
 
         # Automatically archive branches merged more than this many days ago (via a daily job).
-        # Set to None to disable automatic archival.
-        'auto_archive_days': 30,
+        # Set to an integer number of days to enable automatic archival.
+        'auto_archive_days': None,
     }
 
     def ready(self):
@@ -100,7 +100,7 @@ class AppConfig(PluginConfig):
                 )
             if auto_archive_days < 1:
                 raise ImproperlyConfigured(
-                    "netbox_branching: 'auto_archive_days' must be greater than or equal to 1."
+                    "netbox_branching: 'auto_archive_days' must be greater than or equal to 1 (if enabled)."
                 )
 
         # Register cleanup handler for branch connections (#358)
