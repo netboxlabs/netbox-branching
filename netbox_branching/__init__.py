@@ -53,13 +53,17 @@ class AppConfig(PluginConfig):
 
         # Number of days before staleness at which to display a stale warning
         'stale_warning_threshold': 7,
+
+        # Automatically archive branches merged more than this many days ago (via a daily job).
+        # Set to an integer number of days to enable automatic archival.
+        'auto_archive_days': None,
     }
 
     def ready(self):
         super().ready()
         from django.core.signals import request_finished, request_started
 
-        from . import constants, events, search, signal_receivers, webhook_callbacks  # noqa: F401
+        from . import constants, events, jobs, search, signal_receivers, webhook_callbacks  # noqa: F401
         from .models import Branch
         from .utilities import DynamicSchemaDict, close_old_branch_connections
 
@@ -84,6 +88,19 @@ class AppConfig(PluginConfig):
             if workers < 1:
                 raise ImproperlyConfigured(
                     "netbox_branching: 'provision_workers' must be greater than or equal to 1."
+                )
+
+        # Validate auto_archive_days up front so a misconfigured value surfaces at startup rather
+        # than as an opaque timedelta error the first time the daily archival job runs.
+        auto_archive_days = get_plugin_config('netbox_branching', 'auto_archive_days')
+        if auto_archive_days is not None:
+            if type(auto_archive_days) is not int:
+                raise ImproperlyConfigured(
+                    "netbox_branching: 'auto_archive_days' must be an integer or None."
+                )
+            if auto_archive_days < 1:
+                raise ImproperlyConfigured(
+                    "netbox_branching: 'auto_archive_days' must be greater than or equal to 1 (if enabled)."
                 )
 
         # Register cleanup handler for branch connections (#358)

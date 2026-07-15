@@ -14,6 +14,7 @@ critically:
     a FAILED state with a structured report attached to job.data)
 """
 import weakref
+from datetime import timedelta
 from types import SimpleNamespace
 from unittest import mock
 
@@ -22,11 +23,14 @@ from core.signals import handle_changed_object, handle_deleted_object
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db.models.signals import m2m_changed, post_save, pre_delete
-from django.test import SimpleTestCase, TestCase
+from django.test import SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
 from netbox.signals import post_clean
 from utilities.exceptions import AbortTransaction
 
+from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.jobs import (
+    AutoArchiveBranchJob,
     MergeBranchJob,
     MigrateBranchJob,
     RevertBranchJob,
@@ -35,6 +39,7 @@ from netbox_branching.jobs import (
 )
 from netbox_branching.models import Branch
 from netbox_branching.signal_receivers import validate_branching_operations
+from netbox_branching.utilities import BranchActionIndicator
 
 
 def _receivers_for(signal):
@@ -219,3 +224,75 @@ class JobRunWrapperTestCase(TestCase):
         self.assertEqual(summary['creates_total'], 0)
         self.assertEqual(summary['updates_total'], 0)
         self.assertEqual(summary['deletes_total'], 0)
+
+
+class AutoArchiveBranchJobTestCase(TestCase):
+    """
+    AutoArchiveBranchJob is the daily system job that archives merged branches once they
+    exceed the `auto_archive_days` threshold (issue #107). These tests exercise the selection
+    logic and the disable/skip paths. The branches are never provisioned, so archive()'s
+    DROP SCHEMA IF EXISTS is a harmless no-op — only the status transition matters here.
+    """
+
+    def _make_job(self):
+        # AutoArchiveBranchJob.run() uses self.logger (which dispatches to job.log) and
+        # self.job.user; it never touches job.object. Provide just enough of a stub.
+        return SimpleNamespace(object=None, user=None, data={}, log=lambda record: None)
+
+    def _run(self):
+        AutoArchiveBranchJob(self._make_job()).run()
+
+    def _make_merged_branch(self, name, days_ago):
+        branch = Branch(name=name, status=BranchStatusChoices.MERGED)
+        branch.save(provision=False)
+        Branch.objects.filter(pk=branch.pk).update(
+            merged_time=timezone.now() - timedelta(days=days_ago)
+        )
+        branch.refresh_from_db()
+        return branch
+
+    @override_settings(PLUGINS_CONFIG={'netbox_branching': {'auto_archive_days': 30}})
+    def test_archives_branches_merged_before_cutoff(self):
+        branch = self._make_merged_branch('Stale', days_ago=31)
+        self._run()
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.ARCHIVED)
+
+    @override_settings(PLUGINS_CONFIG={'netbox_branching': {'auto_archive_days': 30}})
+    def test_leaves_recently_merged_branches(self):
+        branch = self._make_merged_branch('Recent', days_ago=1)
+        self._run()
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+    @override_settings(PLUGINS_CONFIG={'netbox_branching': {'auto_archive_days': 30}})
+    def test_ignores_non_merged_branches(self):
+        # A ready (never-merged) branch has no merged_time and must be left untouched.
+        branch = Branch(name='Ready', status=BranchStatusChoices.READY)
+        branch.save(provision=False)
+        self._run()
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+    @override_settings(PLUGINS_CONFIG={'netbox_branching': {'auto_archive_days': None}})
+    def test_disabled_when_auto_archive_days_is_none(self):
+        branch = self._make_merged_branch('Stale', days_ago=365)
+        self._run()
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+
+    @override_settings(PLUGINS_CONFIG={'netbox_branching': {'auto_archive_days': 30}})
+    def test_skips_branches_blocked_by_validator(self):
+        branch = self._make_merged_branch('Blocked', days_ago=31)
+
+        def deny(branch):
+            return BranchActionIndicator(False, 'archival blocked')
+
+        Branch.register_preaction_check(deny, 'archive')
+        try:
+            self._run()
+        finally:
+            Branch._preaction_validators['archive'].discard(deny)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)

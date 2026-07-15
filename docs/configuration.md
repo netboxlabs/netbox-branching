@@ -23,6 +23,30 @@ A list of import paths to functions which validate whether a branch is permitted
 
 ---
 
+## `auto_archive_days`
+
+Default: `None` (disabled)
+
+The number of days after which a merged branch is automatically archived. When set to an integer, a daily background job archives any branch whose merge occurred more than this many days ago, providing a housekeeping mechanism to clean up old branches which are no longer needed and help combat database bloat.
+
+Automatic archival is disabled by default. Set this to an integer number of days to enable it.
+
+```python
+PLUGINS_CONFIG = {
+    'netbox_branching': {
+        'auto_archive_days': 30,
+    }
+}
+```
+
+!!! warning
+    Once a branch has been archived its PostgreSQL schema is dropped and it can no longer be reverted. Enable this setting only if you are comfortable with old merged branches becoming non-revertible after the configured number of days.
+
+!!! note
+    Archiving a branch drops its PostgreSQL schema but retains the `Branch` record and its merged change history. Any [archive validators](#archive_validators) configured are honoured; a branch which a validator blocks from being archived is skipped and left in the merged state.
+
+---
+
 ## `exempt_models`
 
 Default: `[]` (empty list)
