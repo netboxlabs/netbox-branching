@@ -51,7 +51,12 @@ class MergeStrategy(ABC):
 
         for model in models:
 
-            # Recalculate MPTT as needed
+            # Recalculate MPTT as needed. MPTT keeps its lft/rght/tree_id numbering
+            # in Python, so replaying changes one row at a time can leave the tree
+            # inconsistent until a full rebuild. NetBox 4.7+ ltree models need no
+            # equivalent step: their path/sort_path columns are maintained by
+            # PostgreSQL triggers on every write (replicated into the branch schema
+            # at provision time), so each replayed change leaves the tree consistent.
             if issubclass(model, MPTTModel):
                 logger.debug(f"Recalculating MPTT for model {model}")
                 model.objects.rebuild()

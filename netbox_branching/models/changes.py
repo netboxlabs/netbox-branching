@@ -173,16 +173,20 @@ class ObjectChange(ObjectChange_):
             # and force a zero-row UPDATE. Clear the tree fields and force the insert so MPTT
             # recomputes them against the local tree. force_insert requires saving the raw
             # instance, which bypasses DeserializedObject's M2M handling, so — exactly as the
-            # MPTT create path above does — reassign the M2M data explicitly. This is scoped
-            # to MPTT models to match the create fix; the non-MPTT branch is left unchanged.
-            # (#531, #610)
+            # MPTT create path above does — reassign the M2M data explicitly. (#531, #610)
+            #
+            # Every other model (including NetBox 4.7+ ltree models, whose path/sort_path
+            # columns are recomputed server-side by triggers) is restored through
+            # DeserializedObject.save(), which persists the object and re-establishes its
+            # M2M relationships. Saving the raw instance here instead would silently drop
+            # M2M data (e.g. tags on a reverted ModuleBay).
             if isinstance(instance, MPTTModel):
                 clear_mptt_fields(instance)
                 instance.save(using=using, force_insert=True)
                 for accessor_name, object_list in (deserialized.m2m_data or {}).items():
                     getattr(instance, accessor_name).set(object_list)
             else:
-                instance.save(using=using)
+                deserialized.save(using=using)
 
     undo.alters_data = True
 

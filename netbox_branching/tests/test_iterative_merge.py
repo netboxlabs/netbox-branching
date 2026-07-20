@@ -954,8 +954,8 @@ class BaseMergeTests:
         self.assertTrue(Device.objects.filter(id=device_id).exists())
         module_bays = ModuleBay.objects.filter(device_id=device_id)
         self.assertEqual(module_bays.count(), 2)
-        # Each root module bay should have received a distinct tree_id
-        self.assertEqual(len(set(module_bays.values_list('tree_id', flat=True))), 2)
+        # Each root module bay should have received a distinct ltree path
+        self.assertEqual(len(set(module_bays.values_list('path', flat=True))), 2)
 
         # Revert branch
         branch.revert(user=self.user, commit=True)

@@ -12,11 +12,13 @@ class AppConfig(PluginConfig):
     name = 'netbox_branching'
     verbose_name = 'NetBox Branching'
     description = 'A git-like branching implementation for NetBox'
-    version = '1.1.1'
+    version = '1.2.0'
     base_url = 'branching'
     # Remember to update COMPATIBILITY.md when modifying the minimum/maximum supported NetBox versions.
-    min_version = '4.4.1'
-    max_version = '4.6.99'
+    # NetBox 4.7 replaced django-mptt with a PostgreSQL ltree implementation and moved ltree/denorm
+    # maintenance into database triggers; branch provisioning replicates those triggers, so 4.7 is required.
+    min_version = '4.7.0'
+    max_version = '4.7.99'
     middleware = (
         'netbox_branching.middleware.BranchMiddleware',
     )
