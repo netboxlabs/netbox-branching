@@ -70,10 +70,10 @@ class ChangeDiffFilterSet(BaseFilterSet):
         label=_('Branch (ID)'),
     )
     branch = django_filters.ModelMultipleChoiceFilter(
-        field_name='branch__schema_id',
+        field_name='branch__backend_id',
         queryset=Branch.objects.all(),
-        to_field_name='schema_id',
-        label=_('Branch (schema ID)'),
+        to_field_name='backend_id',
+        label=_('Branch (backend ID)'),
     )
     last_updated = filters.MultiValueDateTimeFilter()
     object_type_id = django_filters.ModelMultipleChoiceFilter(

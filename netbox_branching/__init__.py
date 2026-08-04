@@ -1,4 +1,3 @@
-from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 from netbox.plugins import PluginConfig, get_plugin_config
@@ -23,6 +22,10 @@ class AppConfig(PluginConfig):
         'netbox_branching.middleware.BranchMiddleware',
     )
     default_settings = {  # noqa: RUF012
+        # The branching backend, which implements the mechanism by which each branch's data
+        # is isolated from main. Must be a dotted path to a BranchingBackend subclass.
+        'backend': 'netbox_branching.backends.SchemaBranchingBackend',
+
         # The maximum number of working branches (excludes merged & archived branches)
         'max_working_branches': None,
 
@@ -74,31 +77,14 @@ class AppConfig(PluginConfig):
         from django.core.signals import request_finished, request_started
 
         from . import constants, events, jobs, search, signal_receivers, webhook_callbacks  # noqa: F401
+        from .backends import get_branching_backend
         from .models import Branch
-        from .utilities import DynamicSchemaDict, close_old_branch_connections
+        from .utilities import close_old_branch_connections
 
-        # Validate required settings
-        if type(settings.DATABASES) is not DynamicSchemaDict:
-            raise ImproperlyConfigured(
-                "netbox_branching: DATABASES must be a DynamicSchemaDict instance."
-            )
-        if 'netbox_branching.database.BranchAwareRouter' not in settings.DATABASE_ROUTERS:
-            raise ImproperlyConfigured(
-                "netbox_branching: DATABASE_ROUTERS must contain 'netbox_branching.database.BranchAwareRouter'."
-            )
-
-        # Validate provision_workers up front rather than letting a bad value surface as an
-        # unhandled error only when a branch is first provisioned.
-        workers = get_plugin_config('netbox_branching', 'provision_workers')
-        if workers is not None:
-            if type(workers) is not int:
-                raise ImproperlyConfigured(
-                    "netbox_branching: 'provision_workers' must be an integer."
-                )
-            if workers < 1:
-                raise ImproperlyConfigured(
-                    "netbox_branching: 'provision_workers' must be greater than or equal to 1."
-                )
+        # Validate any host configuration required by the configured branching backend. This
+        # resolves the 'backend' parameter as a side effect, so an unimportable backend path
+        # surfaces here rather than on the first branch-aware query.
+        get_branching_backend().validate_configuration()
 
         # Validate auto_archive_days up front so a misconfigured value surfaces at startup rather
         # than as an opaque timedelta error the first time the daily archival job runs.

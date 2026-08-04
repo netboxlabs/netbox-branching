@@ -9,11 +9,11 @@
 {% block extra_controls %}
   {% if not object.is_active %}
     {% if object.ready %}
-      <a href="?_branch={{ object.schema_id }}" class="btn btn-green" role="button">
+      <a href="?_branch={{ object.backend_id }}" class="btn btn-green" role="button">
         <i class="mdi mdi-check-bold"></i> {% trans "Activate" %}
       </a>
     {% else %}
-      <a href="?_branch={{ object.schema_id }}" class="btn btn-green disabled" role="button" aria-disabled="true">
+      <a class="btn btn-green disabled" role="button" aria-disabled="true">
         <i class="mdi mdi-check-bold"></i> {% trans "Activate" %}
       </a>
     {% endif %}
@@ -108,8 +108,8 @@
             <td>{{ object.name }}</td>
           </tr>
           <tr>
-            <th scope="row">{% trans "Schema ID" %}</th>
-            <td>{{ object.schema_id }}</td>
+            <th scope="row">{% trans "Backend ID" %}</th>
+            <td>{{ object.backend_id|placeholder }}</td>
           </tr>
           <tr>
             <th scope="row">{% trans "Status" %}</th>
@@ -186,7 +186,11 @@
           </tr>
           <tr>
             <th scope="row">{% trans "Database schema" %}</th>
-            <td class="font-monospace">{{ object.schema_name }}</td>
+            {% if object.backend_id %}
+              <td class="font-monospace">{{ object.schema_name }}</td>
+            {% else %}
+              <td>{{ ''|placeholder }}</td>
+            {% endif %}
           </tr>
         </table>
       </div>
