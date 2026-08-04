@@ -1,5 +1,6 @@
 from django.db import migrations, models
-from netbox.plugins import get_plugin_config
+
+from netbox_branching.backends import SchemaBranchingBackend
 
 # This migration's only model operation targets Branch, which is exempt from branching, so
 # the default heuristic already fakes it on branch schemas. State it explicitly: the backfill
@@ -39,7 +40,7 @@ def set_provisioned(apps, schema_editor):
     SKIPPED_STATUSES and AMBIGUOUS_STATUS above.
     """
     Branch = apps.get_model('netbox_branching', 'Branch')
-    schema_prefix = get_plugin_config('netbox_branching', 'schema_prefix')
+    schema_prefix = SchemaBranchingBackend().get_config('schema_prefix')
 
     # Query the database being migrated rather than whichever one the router would pick: the
     # schemas are read from this connection, so the rows compared against them must come from

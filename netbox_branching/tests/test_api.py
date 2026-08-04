@@ -96,12 +96,23 @@ class APITestCase(BaseAPITestCase, TransactionTestCase):
         # Branch-aware API query
         header = {
             **self.header,
-            'HTTP_X_NETBOX_BRANCH': branch.schema_id,
+            'HTTP_X_NETBOX_BRANCH': branch.backend_id,
         }
         response = self.client.get(url, **header)
         results = self.get_results(response)
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['name'], 'Site 2')
+
+    def test_branch_serializer_exposes_backend_id(self):
+        url = reverse('plugins-api:netbox_branching-api:branch-list')
+        branch = Branch.objects.first()
+        self.assertIsNotNone(branch, "Branch was not created")
+
+        response = self.client.get(url, **self.header)
+        result = self.get_results(response)[0]
+
+        self.assertEqual(result['backend_id'], branch.backend_id)
+        self.assertNotIn('schema_id', result)
 
     def test_with_branch_cookie(self):
         url = reverse('dcim-api:site-list')
@@ -116,7 +127,7 @@ class APITestCase(BaseAPITestCase, TransactionTestCase):
 
         # Branch-aware API query
         self.client.cookies.load({
-            COOKIE_NAME: branch.schema_id,
+            COOKIE_NAME: branch.backend_id,
         })
         response = self.client.get(url, **self.header)
         results = self.get_results(response)
@@ -126,10 +137,12 @@ class APITestCase(BaseAPITestCase, TransactionTestCase):
 
 class BranchProvisionedAPITestCase(BaseAPITestCase, TestCase):
     # No branch provisioning here — every test creates a Branch row with
-    # provision=False and sets the flag directly.
+    # provision=False and sets the flag directly. A branch standing in for a provisioned
+    # one carries the backend ID provisioning would have assigned, which a CHECK
+    # constraint requires of anything claiming a dataset.
 
     def test_provisioned_is_returned(self):
-        branch = Branch(name='Test Branch')
+        branch = Branch(name='Test Branch', backend_id='apitest1')
         branch.save(provision=False)
         Branch.objects.filter(pk=branch.pk).update(provisioned=True)
 
@@ -244,8 +257,16 @@ class BaseBranchAPITestCase(BaseAPITestCase):
         return reverse(f'plugins-api:netbox_branching-api:branch-{self.action}', kwargs={'pk': pk})
 
     def make_branch(self, status=None):
-        branch = Branch(name='Test Branch', status=status or self.valid_status)
+        status = status or self.valid_status
+        branch = Branch(name='Test Branch', status=status)
         branch.save(provision=False)
+        if status != BranchStatusChoices.NEW:
+            # Nothing is provisioned here, but a branch past that point has to look as
+            # though it is: the endpoints refuse to act on a branch with no dataset. The
+            # backend ID is what a CHECK constraint requires of anything claiming one.
+            branch.set_backend_id(branch.backend.generate_branch_id())
+            Branch.objects.filter(pk=branch.pk).update(provisioned=True)
+            branch.provisioned = True
         return branch
 
     def test_endpoint_success(self):
@@ -432,7 +453,7 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, TransactionTestCase):
         connections[self.branch.connection_name].close()
 
     def _branch_header(self):
-        return {**self.header, 'HTTP_X_NETBOX_BRANCH': self.branch.schema_id}
+        return {**self.header, 'HTTP_X_NETBOX_BRANCH': self.branch.backend_id}
 
     def test_changediff_list_create_action(self):
         """
@@ -474,7 +495,7 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, TransactionTestCase):
                 reverse('dcim-api:site-detail', kwargs={'pk': site.pk}),
                 data=json.dumps({'description': 'updated in branch'}),
                 content_type='application/json',
-                **{**self.header, 'HTTP_X_NETBOX_BRANCH': branch.schema_id},
+                **{**self.header, 'HTTP_X_NETBOX_BRANCH': branch.backend_id},
             )
             self.assertEqual(response.status_code, 200)
 
@@ -507,7 +528,7 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, TransactionTestCase):
         try:
             response = self.client.delete(
                 reverse('dcim-api:site-detail', kwargs={'pk': site.pk}),
-                **{**self.header, 'HTTP_X_NETBOX_BRANCH': branch.schema_id},
+                **{**self.header, 'HTTP_X_NETBOX_BRANCH': branch.backend_id},
             )
             self.assertEqual(response.status_code, 204)
 
@@ -558,7 +579,7 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, TransactionTestCase):
             # Delete the cable inside the branch
             response = self.client.delete(
                 reverse('dcim-api:cable-detail', kwargs={'pk': cable_pk}),
-                **{**self.header, 'HTTP_X_NETBOX_BRANCH': branch.schema_id},
+                **{**self.header, 'HTTP_X_NETBOX_BRANCH': branch.backend_id},
             )
             self.assertEqual(response.status_code, 204)
 
@@ -568,7 +589,7 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, TransactionTestCase):
             response = self.client.get(
                 url,
                 {'branch_id': branch.pk},
-                **{**self.header, 'HTTP_X_NETBOX_BRANCH': branch.schema_id},
+                **{**self.header, 'HTTP_X_NETBOX_BRANCH': branch.backend_id},
             )
             self.assertEqual(response.status_code, 200)
 

@@ -1,7 +1,6 @@
 from django.test import TestCase, override_settings
 from ipam.models import Prefix
 
-from netbox_branching.models import Branch
 from netbox_branching.utilities import DynamicSchemaDict, supports_branching
 
 
@@ -15,15 +14,6 @@ class ConfigTestCase(TestCase):
     })
     def test_exempt_models(self):
         self.assertFalse(supports_branching(Prefix))
-
-    @override_settings(PLUGINS_CONFIG={
-        'netbox_branching': {
-            'schema_prefix': 'dummy_',
-        }
-    })
-    def test_schema_prefix(self):
-        branch = Branch(name='Branch 5')
-        self.assertEqual(branch.schema_name, f'dummy_{branch.schema_id}')
 
 
 class DynamicSchemaDictTestCase(TestCase):

@@ -3,7 +3,6 @@ import logging
 from collections import namedtuple
 from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
-from functools import cached_property
 
 from asgiref.local import Local
 from core.choices import JobStatusChoices
@@ -11,7 +10,7 @@ from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db import connections
 from django.db.models import ForeignKey, ManyToManyField
-from django.http import HttpResponseBadRequest
+from django.db.utils import ConnectionDoesNotExist
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext as _
@@ -42,14 +41,16 @@ RQ_DEAD_STATUSES = ('failed', 'stopped', 'canceled')
 RQ_PENDING_STATUSES = ('queued', 'deferred', 'scheduled')
 
 # Thread-local storage for tracking branch connection aliases (matches Django's approach)
-# Note: Aliases are tracked once and never removed, matching Django's pattern where
-# DATABASES.keys() is static. Memory overhead is negligible (string references only).
+# Note: An alias is tracked on first lookup and dropped only once it stops resolving --
+# i.e. when its branch has been deprovisioned. Memory overhead is negligible (string
+# references only).
 _branch_connections_tracker = Local(thread_critical=False)
 
 __all__ = (
     'DELETED',
     'ActiveBranchContextManager',
     'BranchActionIndicator',
+    'BranchNotReady',
     'ChangeSummary',
     'DynamicSchemaDict',
     'ListHandler',
@@ -71,6 +72,7 @@ __all__ = (
     'resolve_changes_summary',
     'supports_branching',
     'track_branch_connection',
+    'untrack_branch_connection',
     'update_object',
 )
 
@@ -87,33 +89,56 @@ def track_branch_connection(alias):
     _get_tracked_branch_aliases().add(alias)
 
 
+def untrack_branch_connection(alias):
+    """
+    Stop tracking a branch connection alias.
+
+    Called when an alias stops addressing anything -- see
+    BranchingBackend.invalidate_connection(). Both this tracker and Django's connection
+    handler are thread-local, so this affects the calling thread only; the sweep below
+    prunes what other threads still hold.
+    """
+    _get_tracked_branch_aliases().discard(alias)
+
+
 class DynamicSchemaDict(dict):
     """
-    Behaves like a normal dictionary, except for keys beginning with "schema_". Any lookup for
-    "schema_*" will return the default configuration extended to include the search_path option.
+    Behaves like a normal dictionary, except for branch connection aliases (by default,
+    keys beginning with "schema_"). Any lookup for a branch alias is handed to the
+    configured branching backend, which derives the connection configuration from the
+    "default" entry.
+
+    The backend is resolved leniently: this dict is installed as ``DATABASES`` by the host's
+    configuration and stays installed when the plugin is removed from ``PLUGINS``, in which
+    case there is no backend to resolve and every lookup falls through to ``dict``.
     """
-    @cached_property
-    def main_schema(self):
-        return get_plugin_config('netbox_branching', 'main_schema')
+    @staticmethod
+    def _branching_backend():
+        """
+        Return the configured branching backend, or None if there is none to resolve.
+        """
+        from netbox_branching.backends import get_branching_backend
+        return get_branching_backend(required=False)
+
+    def _backend_config(self, alias):
+        """
+        Return the connection config the configured backend derives for `alias`, or None
+        if no backend claims it — either because there is no backend to resolve, or
+        because the configured one owns the alias but declines to configure it.
+        """
+        backend = self._branching_backend()
+        if backend is None or not backend.owns_connection_alias(alias):
+            return None
+        return backend.get_connection_config(alias, super().__getitem__('default'))
 
     def __getitem__(self, item):
-        if type(item) is str and item.startswith('schema_') and (schema := item.removeprefix('schema_')):
+        if (config := self._backend_config(item)) is not None:
             track_branch_connection(item)
-
-            default_config = super().__getitem__('default')
-            return {
-                **default_config,
-                'OPTIONS': {
-                    **default_config.get('OPTIONS', {}),
-                    'options': f'-c search_path={schema},{self.main_schema}'
-                },
-            }
+            return config
         return super().__getitem__(item)
 
     def __contains__(self, item):
-        if type(item) is str and item.startswith('schema_'):
-            return True
-        return super().__contains__(item)
+        return self._backend_config(item) is not None or super().__contains__(item)
 
 
 def close_old_branch_connections(**kwargs):
@@ -130,12 +155,25 @@ def close_old_branch_connections(**kwargs):
     be cleaned up, causing connection leaks.
 
     This function is connected to request_started and request_finished signals,
-    matching Django's cleanup timing.
+    matching Django's cleanup timing. Aliases which no longer resolve are dropped from
+    the tracker as they are encountered.
     """
+    stale = set()
 
-    for alias in _get_tracked_branch_aliases():
-        conn = connections[alias]
+    for alias in tuple(_get_tracked_branch_aliases()):
+        try:
+            conn = connections[alias]
+        except ConnectionDoesNotExist:
+            # The backend can no longer configure this alias: its branch has been
+            # deprovisioned, here or in another thread (invalidate_connection() can only
+            # untrack its own). Nothing is left to close and it will never resolve again,
+            # so drop it rather than raise out of a request signal handler -- which would
+            # otherwise break every subsequent request served by this thread.
+            stale.add(alias)
+            continue
         conn.close_if_unusable_or_obsolete()
+
+    _get_tracked_branch_aliases().difference_update(stale)
 
 
 @contextmanager
@@ -535,25 +573,39 @@ def is_api_request(request):
     return request.path_info.startswith(reverse('api-root')) or request.path_info.startswith(reverse('graphql'))
 
 
+class BranchNotReady(Exception):
+    """
+    Raised by get_active_branch() when the request names a branch which exists but is not ready for
+    use. Returning the branch would let queries run against a dataset which may be mid-sync, mid-merge
+    or gone entirely, so the request has to be refused: BranchMiddleware translates this into an HTTP
+    400. Callers which cannot refuse the request (such as request processors) must treat it as "no
+    branch" rather than activating one.
+    """
+
+
 def get_active_branch(request):
     """
-    Return the active Branch (if any).
+    Return the active Branch, or None if no branch is active.
+
+    Raises BranchNotReady if the request names a branch which exists but is not usable. Always
+    returns a Branch or None otherwise; never a response object, as callers install the return
+    value as the active branch.
     """
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
     from .models import Branch
     if is_api_request(request) and BRANCH_HEADER in request.headers:
-        branch = Branch.objects.get(schema_id=request.headers.get(BRANCH_HEADER))
+        branch = Branch.objects.get(backend_id=request.headers.get(BRANCH_HEADER))
         if not branch.ready:
-            return HttpResponseBadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
+            raise BranchNotReady(f"Branch {branch} is not ready for use (status: {branch.status})")
         return branch
 
     # Branch activated/deactivated by URL query parameter
     if QUERY_PARAM in request.GET:
-        if schema_id := request.GET.get(QUERY_PARAM):
-            branch = Branch.objects.get(schema_id=schema_id)
+        if backend_id := request.GET.get(QUERY_PARAM):
+            branch = Branch.objects.get(backend_id=backend_id)
             if branch.ready:
                 if (
-                    schema_id != request.COOKIES.get(COOKIE_NAME)
+                    backend_id != request.COOKIES.get(COOKIE_NAME)
                     and not getattr(request, '_branch_activation_notified', False)
                 ):
                     messages.success(request, _("Activated branch {branch}").format(branch=branch))
@@ -572,9 +624,9 @@ def get_active_branch(request):
         return None
 
     # Branch set by cookie
-    if schema_id := request.COOKIES.get(COOKIE_NAME):
+    if backend_id := request.COOKIES.get(COOKIE_NAME):
         try:
-            branch = Branch.objects.get(schema_id=schema_id)
+            branch = Branch.objects.get(backend_id=backend_id)
             if branch.ready:
                 return branch
         except ObjectDoesNotExist:
@@ -625,7 +677,18 @@ def ActiveBranchContextManager(request):
     """
     Activate a branch if indicated by the request (except for exempt paths).
     """
-    if request and request.path not in EXEMPT_PATHS and (branch := get_active_branch(request)):
+    if not request or request.path in EXEMPT_PATHS:
+        return nullcontext()
+
+    # This runs ahead of BranchMiddleware (plugin middleware is appended after NetBox's
+    # CoreMiddleware, which applies the request processors), so it is reached even for requests
+    # the middleware is about to refuse with a 400. Leave the branch inactive and let it do so.
+    try:
+        branch = get_active_branch(request)
+    except BranchNotReady:
+        return nullcontext()
+
+    if branch:
         return activate_branch(branch)
     return nullcontext()
 

@@ -11,6 +11,8 @@ PLUGINS_CONFIG = {
 }
 ```
 
+Parameters belonging to the configured [branching backend](#backend) rather than to the plugin itself are set one level deeper, under [`backend_config`](#backend_config); those for the default schema backend are documented in [Schema Backend Parameters](#schema-backend-parameters).
+
 A small number of related settings live outside the plugin's own configuration; those are covered in the [NetBox settings](#netbox-settings) section at the bottom of this page.
 
 ---
@@ -20,6 +22,56 @@ A small number of related settings live outside the plugin's own configuration; 
 Default: `[]` (empty list)
 
 A list of import paths to functions which validate whether a branch is permitted to be archived. See [Plugin Development: Custom Validators](./plugin-development.md#custom-validators) for the validator signature and usage details.
+
+---
+
+## `backend`
+
+Default: `"netbox_branching.backends.SchemaBranchingBackend"`
+
+The import path of the branching backend, which implements the mechanism by which each branch's data is isolated from main: how a branch's dataset is created and destroyed, how database connections addressing it are named and configured, and how outstanding migrations are applied to it.
+
+The default backend, `SchemaBranchingBackend`, replicates the main schema into a dedicated PostgreSQL schema for each branch. This is the only backend shipped with the plugin; there is no reason to change this setting unless you are running an alternative backend supplied elsewhere.
+
+See [Plugin Development: Branching Backends](./plugin-development.md#branching-backends) for the backend contract.
+
+A backend's own parameters are set under [`backend_config`](#backend_config), not alongside the plugin's. For the default backend those are [`main_schema`](#main_schema), [`schema_prefix`](#schema_prefix) and [`provision_workers`](#provision_workers), which have no effect under a different backend.
+
+---
+
+## `backend_config`
+
+Default: `{}` (empty dict)
+
+Configuration for the backend named by [`backend`](#backend). Its contents are defined by that backend: each declares its own parameters and their defaults, so what belongs here changes with the backend in use. Nesting them keeps a backend's parameters namespaced from the plugin's own and from every other backend's.
+
+For the default `SchemaBranchingBackend` these are [`main_schema`](#main_schema), [`schema_prefix`](#schema_prefix) and [`provision_workers`](#provision_workers):
+
+```python
+PLUGINS_CONFIG = {
+    'netbox_branching': {
+        'backend_config': {
+            'schema_prefix': 'nbbranch_',
+            'provision_workers': 8,
+        },
+    }
+}
+```
+
+Parameters may be set individually; anything omitted takes the backend's default. Naming a parameter the configured backend does not recognise has no effect.
+
+!!! note "Setting them at the root is deprecated"
+    `main_schema`, `schema_prefix` and `provision_workers` predate this parameter and are still read from the root of the `netbox_branching` block, so an existing configuration continues to work unchanged:
+
+    ```python
+    PLUGINS_CONFIG = {
+        'netbox_branching': {
+            'schema_prefix': 'nbbranch_',  # Deprecated; use backend_config
+        }
+    }
+    ```
+
+    NetBox raises a `FutureWarning` at startup for each one found there, and the fallback will be removed in a future release. A value under `backend_config` takes precedence over one at the root.
 
 ---
 
@@ -161,50 +213,11 @@ PLUGINS_CONFIG = {
 
 ---
 
-## `main_schema`
-
-Default: `"public"`
-
-The name of the main (primary) PostgreSQL schema. (Use the `\dn` command in the PostgreSQL CLI to list all schemas.)
-
----
-
 ## `max_branches`
 
 Default: `None`
 
 The maximum total number of branches that can exist simultaneously, including merged branches that have not been archived or deleted. It may be desirable to limit the total number of provisioned branches to safeguard against excessive database size. A value of `None` (the default) imposes no limit.
-
----
-
-## `provision_workers`
-
-Default: `4`
-
-The number of parallel workers used during branch provisioning to copy tables and build indexes. Each worker holds its own database connection for the duration of the provision and shares an MVCC snapshot of the main schema, ensuring every worker sees an identical view of the source data.
-
-Increasing this value reduces wall-clock provisioning time on multi-GB databases by overlapping table copies and index builds. Scaling is bounded by both your storage subsystem (during the copy phase) and CPU (during the index-build phase); on modern NVMe-backed deployments, benefit tapers off above 4-8 workers. Set to `1` to disable parallelism entirely (e.g. for debugging).
-
-!!! warning "CPU usage on shared or constrained deployments"
-    The index-build phase is CPU-bound, and the load multiplies: each of the `provision_workers` builds indexes concurrently, and PostgreSQL may itself fan each build out across `max_parallel_maintenance_workers` more backends. The peak is roughly `provision_workers × (1 + max_parallel_maintenance_workers)` busy backends. On a shared cluster or a small/burstable instance this can saturate CPU and starve other workloads, so lower `provision_workers` (e.g. `1`–`2`) where the database is not dedicated to this NetBox instance.
-
-Each provisioning operation holds up to `provision_workers + 1` PostgreSQL connections concurrently (the workers plus the coordinator). When estimating against the database's `max_connections`, multiply by the number of provisioning operations that may run simultaneously.
-
-On a database dedicated to this NetBox instance, also tune PostgreSQL's index-build settings:
-
-* `maintenance_work_mem` — raise to 256MB or higher during provisioning to give each index build a larger sort buffer.
-* `max_parallel_maintenance_workers` — enables per-index parallel build workers. Raising it speeds individual index builds but compounds the CPU fan-out described above, so weigh it against `provision_workers` rather than maximizing both.
-* `wal_compression` — leave on to reduce WAL volume during the bulk copy.
-
-```python
-PLUGINS_CONFIG = {
-    'netbox_branching': {
-        # Raise only on a dedicated database with CPU headroom; lower to 1-2 on
-        # shared or burstable instances.
-        'provision_workers': 8,
-    }
-}
-```
 
 ---
 
@@ -237,16 +250,6 @@ A list of import paths to functions which validate whether a branch is permitted
 Default: `[]` (empty list)
 
 A list of import paths to functions which validate whether a branch is permitted to be reverted. See [Plugin Development: Custom Validators](./plugin-development.md#custom-validators) for the validator signature and usage details.
-
----
-
-## `schema_prefix`
-
-Default: `"branch_"`
-
-The string to prefix to the unique branch ID when provisioning the PostgreSQL schema for a branch. Per [the PostgreSQL documentation](https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS), this string must begin with a letter or underscore.
-
-A non-empty prefix is required, because the randomly-generated branch ID alone may begin with a digit, which is not a valid PostgreSQL schema name.
 
 ---
 
@@ -302,6 +305,78 @@ A list of import paths to functions which validate whether a branch is permitted
 
 ---
 
+## Schema Backend Parameters
+
+The parameters below belong to the default [`SchemaBranchingBackend`](#backend) and are set under
+[`backend_config`](#backend_config):
+
+```python
+PLUGINS_CONFIG = {
+    'netbox_branching': {
+        'backend_config': {
+            'main_schema': 'public',
+            'schema_prefix': 'branch_',
+            'provision_workers': 4,
+        },
+    }
+}
+```
+
+They have no effect under a different backend, which brings its own parameters instead. Setting them
+at the root of the `netbox_branching` block still works but is deprecated; see
+[`backend_config`](#backend_config).
+
+### `main_schema`
+
+Default: `"public"`
+
+The name of the main (primary) PostgreSQL schema. (Use the `\dn` command in the PostgreSQL CLI to list all schemas.)
+
+---
+
+### `provision_workers`
+
+Default: `4`
+
+The number of parallel workers used during branch provisioning to copy tables and build indexes. Each worker holds its own database connection for the duration of the provision and shares an MVCC snapshot of the main schema, ensuring every worker sees an identical view of the source data.
+
+Increasing this value reduces wall-clock provisioning time on multi-GB databases by overlapping table copies and index builds. Scaling is bounded by both your storage subsystem (during the copy phase) and CPU (during the index-build phase); on modern NVMe-backed deployments, benefit tapers off above 4-8 workers. Set to `1` to disable parallelism entirely (e.g. for debugging).
+
+!!! warning "CPU usage on shared or constrained deployments"
+    The index-build phase is CPU-bound, and the load multiplies: each of the `provision_workers` builds indexes concurrently, and PostgreSQL may itself fan each build out across `max_parallel_maintenance_workers` more backends. The peak is roughly `provision_workers × (1 + max_parallel_maintenance_workers)` busy backends. On a shared cluster or a small/burstable instance this can saturate CPU and starve other workloads, so lower `provision_workers` (e.g. `1`–`2`) where the database is not dedicated to this NetBox instance.
+
+Each provisioning operation holds up to `provision_workers + 1` PostgreSQL connections concurrently (the workers plus the coordinator). When estimating against the database's `max_connections`, multiply by the number of provisioning operations that may run simultaneously.
+
+On a database dedicated to this NetBox instance, also tune PostgreSQL's index-build settings:
+
+* `maintenance_work_mem` — raise to 256MB or higher during provisioning to give each index build a larger sort buffer.
+* `max_parallel_maintenance_workers` — enables per-index parallel build workers. Raising it speeds individual index builds but compounds the CPU fan-out described above, so weigh it against `provision_workers` rather than maximizing both.
+* `wal_compression` — leave on to reduce WAL volume during the bulk copy.
+
+```python
+PLUGINS_CONFIG = {
+    'netbox_branching': {
+        'backend_config': {
+            # Raise only on a dedicated database with CPU headroom; lower to 1-2 on
+            # shared or burstable instances.
+            'provision_workers': 8,
+        },
+    }
+}
+```
+
+---
+
+### `schema_prefix`
+
+Default: `"branch_"`
+
+The string to prefix to the unique branch ID when provisioning the PostgreSQL schema for a branch. Per [the PostgreSQL documentation](https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS), this string must begin with a letter or underscore.
+
+A non-empty prefix is required, because the randomly-generated [`backend_id`](./models/branch.md#backend-id) alone may begin with a digit, which is not a valid PostgreSQL schema name.
+
+---
+
 ## NetBox Settings
 
 The settings below are not part of the plugin's own `PLUGINS_CONFIG` block, but interact with the plugin and may need to be updated in `configuration.py`.
@@ -317,7 +392,7 @@ EVENTS_PIPELINE = [
 ]
 ```
 
-When active, this injects an `active_branch` key into each queued event's data payload, with `id`, `name`, and `schema_id` fields (or `null` if the change was made on main). See [Event Rules](./event-rules.md) for usage details.
+When active, this injects an `active_branch` key into each queued event's data payload, with `id`, `name`, and `backend_id` fields (or `null` if the change was made on main). See [Event Rules](./event-rules.md) for usage details.
 
 !!! note
     This entry must be placed **before** `extras.events.process_event_queue` in the list to take effect.

@@ -340,7 +340,7 @@ def parallel_copy_tables(tables, snapshot_token, schema, main_schema, workers):
             logger.debug(f'Copying {main_schema}.{table} -> {schema}.{table}')
             # Safe only because triggers are replicated after this phase: a trigger on the
             # branch table would resolve its own targets via this connection's search_path
-            # (the main schema) and write there. See Branch._replicate_triggers().
+            # (the main schema) and write there. See SchemaBranchingBackend._replicate_triggers().
             cursor.execute(f"INSERT INTO {schema_table} SELECT * FROM {main_table}")
 
             # Point the branch table's id default at main's sequence so all branches

@@ -18,7 +18,7 @@ from utilities.testing import ViewTestCases, create_tags
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.models import Branch, ChangeDiff
-from netbox_branching.tables import ChangesGroupedTable, ChangesTable
+from netbox_branching.tables import BranchTable, ChangesGroupedTable, ChangesTable
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
 from netbox_branching.views import BaseBranchActionView, GroupedChangesViewMixin
@@ -72,6 +72,33 @@ class BranchTestCase(ViewTestCases.PrimaryObjectViewTestCase):
     def tearDown(self):
         # Clear jobs queue
         get_queue('default').connection.flushall()
+
+
+class BranchTableTestCase(TestCase):
+    """
+    The Backend ID column renders through a template, and TemplateColumn declares no
+    empty_values, so django_tables2 hands a null value to the template rather than
+    substituting the column default. The field is null until provisioning completes, and
+    the column is shown by default.
+    """
+
+    def test_backend_id_column_renders_a_placeholder_when_unassigned(self):
+        branch = Branch(name='Unprovisioned Branch')
+        branch.save(provision=False)
+        self.assertIsNone(branch.backend_id)
+
+        cell = BranchTable(Branch.objects.filter(pk=branch.pk)).rows[0].get_cell('backend_id')
+
+        self.assertNotIn('None', cell)
+        self.assertIn('&mdash;', cell)
+
+    def test_backend_id_column_renders_the_identifier_when_assigned(self):
+        branch = Branch(name='Provisioned Branch', backend_id='branch01')
+        branch.save(provision=False)
+
+        cell = BranchTable(Branch.objects.filter(pk=branch.pk)).rows[0].get_cell('backend_id')
+
+        self.assertIn('branch01', cell)
 
 
 class BranchBulkMigrateViewTestCase(TestCase):
@@ -503,7 +530,7 @@ class BranchMiddlewareTestCase(TransactionTestCase):
         site_url = reverse('dcim:site', kwargs={'pk': site_pk})
 
         # First, verify the site is accessible when the branch is active
-        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.schema_id}')
+        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.backend_id}')
         self.assertEqual(response.status_code, 200)
 
         # Now deactivate the branch while viewing the site (which only exists in the branch)
@@ -546,14 +573,14 @@ class BranchMiddlewareTestCase(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
 
         # Now activate the branch while viewing the site (which doesn't exist in the branch)
-        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.schema_id}', follow=False)
+        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.backend_id}', follow=False)
 
         # Should redirect to the dashboard
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, '/')
 
         # Follow the redirect and check for the warning message
-        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.schema_id}', follow=True)
+        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.backend_id}', follow=True)
         messages_list = list(get_messages(response.wsgi_request))
         warning_messages = [m for m in messages_list if 'does not exist' in str(m)]
         self.assertGreaterEqual(len(warning_messages), 1, "Expected at least one warning message")

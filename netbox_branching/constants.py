@@ -13,11 +13,28 @@ __all__ = (
     'EXEMPT_MODELS',
     'EXEMPT_PATHS',
     'INCLUDE_MODELS',
+    'MIGRATE_LOGGER',
     'PG_UNIQUE_VIOLATION',
+    'PLUGIN_NAME',
+    'PROVISION_LOGGER',
     'QUERY_PARAM',
     'SKIP_INDEXES',
 )
 
+
+# The plugin's name as NetBox knows it: the app's package path, which is what
+# AppConfig.name declares and what get_plugin_config() and registry['plugins'] are keyed
+# by. It lives here rather than on the AppConfig because the backends need it to read
+# their configuration, and importing the package's __init__ from a submodule to reach
+# AppConfig.name would make that submodule's import order load-bearing.
+PLUGIN_NAME = 'netbox_branching'
+
+# Logging channels for the branch lifecycle operations a backend carries out. They are
+# named here because a backend is expected to log into them, which makes them part of the
+# backend contract rather than an implementation detail of the one shipped here; see
+# BranchingBackend.provision_logger / .migrate_logger.
+PROVISION_LOGGER = 'netbox_branching.branch.provision'
+MIGRATE_LOGGER = 'netbox_branching.branch.migrate'
 
 # HTTP cookie
 COOKIE_NAME = 'active_branch'

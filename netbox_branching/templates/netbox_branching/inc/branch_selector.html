@@ -10,7 +10,7 @@
     </a>
     {% for branch in branches %}
       {% if branch.ready %}
-        <a class="dropdown-item d-flex justify-content-between" href="?_branch={{ branch.schema_id }}">
+        <a class="dropdown-item d-flex justify-content-between" href="?_branch={{ branch.backend_id }}">
           {{ branch.name }}
           {% if branch.is_active %}<span class="badge bg-green ms-auto"></span>{% endif %}
         </a>
