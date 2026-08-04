@@ -503,7 +503,7 @@ class BranchMiddlewareTestCase(TransactionTestCase):
         site_url = reverse('dcim:site', kwargs={'pk': site_pk})
 
         # First, verify the site is accessible when the branch is active
-        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.schema_id}')
+        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.backend_id}')
         self.assertEqual(response.status_code, 200)
 
         # Now deactivate the branch while viewing the site (which only exists in the branch)
@@ -546,14 +546,14 @@ class BranchMiddlewareTestCase(TransactionTestCase):
         self.assertEqual(response.status_code, 200)
 
         # Now activate the branch while viewing the site (which doesn't exist in the branch)
-        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.schema_id}', follow=False)
+        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.backend_id}', follow=False)
 
         # Should redirect to the dashboard
         self.assertEqual(response.status_code, 302)
         self.assertEqual(response.url, '/')
 
         # Follow the redirect and check for the warning message
-        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.schema_id}', follow=True)
+        response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.backend_id}', follow=True)
         messages_list = list(get_messages(response.wsgi_request))
         warning_messages = [m for m in messages_list if 'does not exist' in str(m)]
         self.assertGreaterEqual(len(warning_messages), 1, "Expected at least one warning message")

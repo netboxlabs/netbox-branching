@@ -12,8 +12,10 @@ class RequestTestCase(TestCase):
     @classmethod
     def setUpTestData(cls):
         # Create a Branch
-        branch = Branch(name='Branch 1')
-        branch.status = BranchStatusChoices.READY  # Fake provisioning
+        # Fake provisioning: a provisioned branch has both a READY status and the
+        # backend ID the backend would have assigned it
+        branch = Branch(name='Branch 1', backend_id='branch01')
+        branch.status = BranchStatusChoices.READY
         branch.save(provision=False)
 
     @override_settings(
@@ -28,12 +30,12 @@ class RequestTestCase(TestCase):
 
         # Activate the Branch
         url = reverse('home')
-        response = self.client.get(f'{url}?{QUERY_PARAM}={branch.schema_id}')
+        response = self.client.get(f'{url}?{QUERY_PARAM}={branch.backend_id}')
         self.assertEqual(response.status_code, 200)
         self.assertIn(COOKIE_NAME, self.client.cookies, msg="Cookie was not set on response")
         self.assertEqual(
             self.client.cookies[COOKIE_NAME].value,
-            branch.schema_id,
+            branch.backend_id,
             msg="Branch ID set in cookie is incorrect"
         )
 
@@ -59,7 +61,7 @@ class RequestTestCase(TestCase):
         # Attach the cookie to the test client
         branch = Branch.objects.first()
         self.client.cookies.load({
-            COOKIE_NAME: branch.schema_id,
+            COOKIE_NAME: branch.backend_id,
         })
 
         # Deactivate the Branch
@@ -78,11 +80,11 @@ class RequestTestCase(TestCase):
     def test_reactivate_branch_no_message(self):
         branch = Branch.objects.first()
         self.client.cookies.load({
-            COOKIE_NAME: branch.schema_id,
+            COOKIE_NAME: branch.backend_id,
         })
 
         url = reverse('home')
-        response = self.client.get(f'{url}?{QUERY_PARAM}={branch.schema_id}')
+        response = self.client.get(f'{url}?{QUERY_PARAM}={branch.backend_id}')
         self.assertEqual(response.status_code, 200)
         messages_list = list(response.wsgi_request._messages)
         self.assertEqual(len(messages_list), 0, msg="Unexpected toast message on branch re-activation")
@@ -97,7 +99,7 @@ class RequestTestCase(TestCase):
         branch.save(provision=False, update_merge_sync_fields=True)
 
         self.client.cookies.load({
-            COOKIE_NAME: branch.schema_id,
+            COOKIE_NAME: branch.backend_id,
         })
 
         url = reverse('home')
@@ -126,7 +128,7 @@ class RequestTestCase(TestCase):
         """
         get_active_branch routes API requests with the X-NetBox-Branch header
         through Branch.objects.get(), which raises Branch.DoesNotExist for an
-        unknown schema_id — caught by the middleware and surfaced as 400.
+        unknown backend_id — caught by the middleware and surfaced as 400.
         """
         response = self.client.get(
             reverse('api-root'),

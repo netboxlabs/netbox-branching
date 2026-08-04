@@ -294,10 +294,9 @@ def check_pending_migrations(sender, using, **kwargs):
             logger.exception(f"Failed to check pending migrations for branch {branch!r}")
         finally:
             # Close the branch's database connection to release its Postgres backend (and the relcache memory
-            # accumulated by the pending_migrations introspection) before moving on. Otherwise these connections
-            # leak across the loop, since close_old_branch_connections() only fires on request signals and this
-            # sweep runs under `manage.py migrate`. See issue #581.
-            connections[branch.connection_name].close()
+            # accumulated by the pending_migrations introspection) before moving on.
+            if branch.backend_id:
+                connections[branch.connection_name].close()
     if update_count:
         logger.info(f"Updating status of {update_count} branches with pending migrations")
         Branch.objects.bulk_update(open_branches, ['status'], batch_size=100)

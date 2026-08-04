@@ -51,7 +51,7 @@ class SetActiveBranchTestCase(TestCase):
                 'active_branch': {
                     'id': branch.pk,
                     'name': 'Webhook Branch',
-                    'schema_id': branch.schema_id,
+                    'backend_id': branch.backend_id,
                 },
             },
         )
