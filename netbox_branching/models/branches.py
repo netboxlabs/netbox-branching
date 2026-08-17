@@ -957,6 +957,16 @@ class Branch(JobsMixin, PrimaryModel):
                         if migration in migrations_to_run:
                             fake = _fake_for_branch(migration)
                             state = executor.apply_migration(state, migration, fake=fake)
+                            if fake:
+                                # apply_migration() records a faked migration without touching
+                                # `state` — Django only mutates it via Migration.apply(). Because
+                                # we fake selectively, the models a faked migration would have
+                                # changed stay at their pre-migration shape, and a later data
+                                # migration reading them through apps.get_model() resolves fields
+                                # against a stale historical model (e.g. core.0026 backfilling
+                                # Job.execution_time, added by the faked core.0025). Apply the
+                                # faked migration's state changes ourselves. (#617)
+                                state = migration.mutate_state(state, preserve=False)
                             migrations_to_run.remove(migration)
             except Exception as e:
                 if err_message := str(e):

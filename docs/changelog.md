@@ -12,6 +12,7 @@ NetBox 4.7 replaces django-mptt with a PostgreSQL ltree-backed implementation fo
 * [#617](https://github.com/netboxlabs/netbox-branching/issues/617) - Restore many-to-many relationships (e.g. tags) when reverting the merge of a deleted ltree object such as a module bay
 * [#617](https://github.com/netboxlabs/netbox-branching/issues/617) - Apply changes to tagged objects under Django 6.1, whose deserializer requires a `set_base()` method that django-taggit's manager does not implement
 * [#617](https://github.com/netboxlabs/netbox-branching/issues/617) - Resolve extension-provided types (e.g. `ltree`) in `RunSQL` migration bodies applied to a branch schema
+* [#617](https://github.com/netboxlabs/netbox-branching/issues/617) - Advance the migration state for migrations faked on a branch, so that later data migrations see the current historical models
 
 ---
 
