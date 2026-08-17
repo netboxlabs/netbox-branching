@@ -21,7 +21,7 @@ from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transac
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.operations.special import RunSQL, SeparateDatabaseAndState
 from django.db.models.signals import post_save, pre_delete
-from django.db.utils import ProgrammingError
+from django.db.utils import DatabaseError, ProgrammingError
 from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
@@ -74,6 +74,11 @@ __all__ = (
 # of SET LOCAL — value is passed as a query parameter rather than interpolated.
 _SET_SEARCH_PATH = "SELECT pg_catalog.set_config('search_path', %s, true)"
 
+# PostgreSQL SQLSTATEs for a name that could not be resolved from the current search_path:
+# undefined_object (types, collations, extensions...) and undefined_function. Deliberately
+# excludes undefined_table (42P01) — see _branch_isolated_runsql().
+_UNRESOLVED_NAME_SQLSTATES = frozenset(('42704', '42883'))
+
 
 def _serialize_for_sync(obj):
     """
@@ -100,18 +105,52 @@ def _branch_isolated_runsql(branch_schema, main_schema):
     duration of the block. Safe because NetBox runs branch migrations as RQ
     jobs (one per worker process); concurrent ``Branch.migrate()`` calls in
     the same process would race.
+
+    Types and functions provided by a PostgreSQL extension live in the schema the
+    extension was installed into — normally the main schema — and are unresolvable
+    under the restricted path. NetBox 4.7's ltree backfill migrations hit this: their
+    RunSQL bodies cast with an unqualified ``::ltree``. A body that fails to resolve a
+    name is therefore rolled back to a savepoint and retried once with
+    ``<branch>,<main>`` on the path. Only "undefined object/function" is retried, never
+    "undefined table" — a RunSQL body naming a table the branch schema doesn't have
+    still fails loudly rather than quietly rewriting the main schema. (#617)
     """
+    logger = logging.getLogger('netbox_branching.branch.migrate')
     original = RunSQL.database_forwards
+    isolated_path = branch_schema
+    full_path = f'{branch_schema},{main_schema}'
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         connection = schema_editor.connection
-        with connection.cursor() as cursor:
-            cursor.execute(_SET_SEARCH_PATH, [branch_schema])
-        try:
-            return original(self, app_label, schema_editor, from_state, to_state)
-        finally:
+
+        def set_search_path(value):
             with connection.cursor() as cursor:
-                cursor.execute(_SET_SEARCH_PATH, [f'{branch_schema},{main_schema}'])
+                cursor.execute(_SET_SEARCH_PATH, [value])
+
+        set_search_path(isolated_path)
+        try:
+            try:
+                # Savepoint, so that a body which fails partway can be rolled back before
+                # the retry below re-runs it in full.
+                with transaction.atomic(using=connection.alias):
+                    return original(self, app_label, schema_editor, from_state, to_state)
+            except ProgrammingError as e:
+                if getattr(e.__cause__, 'sqlstate', None) not in _UNRESOLVED_NAME_SQLSTATES:
+                    raise
+                logger.warning(
+                    f'RunSQL in {app_label} references an object outside {branch_schema} ({e}); '
+                    f'retrying with search_path {full_path}'
+                )
+                set_search_path(full_path)
+                return original(self, app_label, schema_editor, from_state, to_state)
+        finally:
+            try:
+                set_search_path(full_path)
+            except DatabaseError:
+                # The body failed and left the transaction aborted, so the restore can't run.
+                # Swallow it rather than let it mask the original failure; the executor rolls
+                # the transaction back, which discards the search_path setting anyway.
+                logger.debug(f'Unable to restore search_path after failed RunSQL in {app_label}')
 
     RunSQL.database_forwards = database_forwards
     try:
