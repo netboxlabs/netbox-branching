@@ -74,9 +74,7 @@ __all__ = (
 # of SET LOCAL — value is passed as a query parameter rather than interpolated.
 _SET_SEARCH_PATH = "SELECT pg_catalog.set_config('search_path', %s, true)"
 
-# PostgreSQL SQLSTATEs for a name that could not be resolved from the current search_path:
-# undefined_object (types, collations, extensions...) and undefined_function. Deliberately
-# excludes undefined_table (42P01) — see _branch_isolated_runsql().
+# undefined_object and undefined_function; excludes undefined_table (see _branch_isolated_runsql)
 _UNRESOLVED_NAME_SQLSTATES = frozenset(('42704', '42883'))
 
 
@@ -130,8 +128,7 @@ def _branch_isolated_runsql(branch_schema, main_schema):
         set_search_path(isolated_path)
         try:
             try:
-                # Savepoint, so that a body which fails partway can be rolled back before
-                # the retry below re-runs it in full.
+                # Savepoint, so a body which fails partway can be rolled back before the retry
                 with transaction.atomic(using=connection.alias):
                     return original(self, app_label, schema_editor, from_state, to_state)
             except ProgrammingError as e:
@@ -147,9 +144,7 @@ def _branch_isolated_runsql(branch_schema, main_schema):
             try:
                 set_search_path(full_path)
             except DatabaseError:
-                # The body failed and left the transaction aborted, so the restore can't run.
-                # Swallow it rather than let it mask the original failure; the executor rolls
-                # the transaction back, which discards the search_path setting anyway.
+                # Transaction already aborted; don't mask the original failure
                 logger.debug(f'Unable to restore search_path after failed RunSQL in {app_label}')
 
     RunSQL.database_forwards = database_forwards
@@ -958,14 +953,8 @@ class Branch(JobsMixin, PrimaryModel):
                             fake = _fake_for_branch(migration)
                             state = executor.apply_migration(state, migration, fake=fake)
                             if fake:
-                                # apply_migration() records a faked migration without touching
-                                # `state` — Django only mutates it via Migration.apply(). Because
-                                # we fake selectively, the models a faked migration would have
-                                # changed stay at their pre-migration shape, and a later data
-                                # migration reading them through apps.get_model() resolves fields
-                                # against a stale historical model (e.g. core.0026 backfilling
-                                # Job.execution_time, added by the faked core.0025). Apply the
-                                # faked migration's state changes ourselves. (#617)
+                                # apply_migration() doesn't advance the state when faking, leaving
+                                # later data migrations with stale historical models. (#617)
                                 state = migration.mutate_state(state, preserve=False)
                             migrations_to_run.remove(migration)
             except Exception as e:
