@@ -237,7 +237,7 @@ GitHub Actions workflows in `.github/workflows/`:
 
 - **`lint-tests.yaml`** — Runs on every PR. Two jobs:
   - *Linting*: Python 3.12, runs `ruff check` and `mkdocs build`.
-  - *Tests*: Matrix of Python 3.12, 3.13, 3.14 against a configurable NetBox ref (defaults to `main`). Spins up PostgreSQL + Redis services, installs the plugin, links `testing/configuration.py`, and runs `python netbox/manage.py test netbox_branching.tests --keepdb`.
+  - *Tests*: Matrix of Python 3.12, 3.13, 3.14 against a configurable NetBox ref (defaults to `v4.7.0-beta1`, since the plugin requires NetBox 4.7 and 4.7 has not yet reached GA; override per-PR with a `test-against:<ref>` label or via `workflow_dispatch`). Spins up PostgreSQL + Redis services, installs the plugin, links `testing/configuration.py`, and runs `python netbox/manage.py test netbox_branching.tests --keepdb`.
 - **`release.yaml`** — Runs on published GitHub releases. Builds sdist + wheel with `python -m build`, then publishes to PyPI using OIDC trusted publishing.
 - **`claude.yaml`** — Claude Code automation hook; triggers on issue/PR comments mentioning `@claude`.
 
