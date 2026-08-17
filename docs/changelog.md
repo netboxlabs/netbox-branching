@@ -13,6 +13,14 @@ NetBox 4.7 replaces django-mptt with a PostgreSQL ltree-backed implementation fo
 
 ---
 
+## v1.1.2
+
+### Enhancements
+
+* [#107](https://github.com/netboxlabs/netbox-branching/issues/107) - Introduce the `auto_archive_days` config parameter to automatically archive branches merged more than _n_ days ago
+
+---
+
 ## v1.1.1
 
 ### Bug Fixes
