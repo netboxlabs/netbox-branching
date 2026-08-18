@@ -110,8 +110,18 @@ def _branch_isolated_runsql(branch_schema, main_schema):
     RunSQL bodies cast with an unqualified ``::ltree``. A body that fails to resolve a
     name is therefore rolled back to a savepoint and retried once with
     ``<branch>,<main>`` on the path. Only "undefined object/function" is retried, never
-    "undefined table" — a RunSQL body naming a table the branch schema doesn't have
-    still fails loudly rather than quietly rewriting the main schema. (#617)
+    "undefined table", so a body naming a table the branch schema lacks still fails
+    loudly instead of operating on main's copy. Note the narrower residual hazard: a
+    body whose DDL names a *function or type* that exists only in main (e.g. a bare
+    ``DROP FUNCTION legacy_fn()``) also raises one of these codes, and the retry will
+    then resolve it against main. Migrations doing such DDL should use ``IF EXISTS``
+    or set ``fake_on_branch``. (#617)
+
+    The savepoint is only taken when the migration is atomic. Under ``atomic = False``
+    the connection is in autocommit, where a failed statement leaves nothing to roll
+    back and statements such as ``CREATE INDEX CONCURRENTLY`` cannot run inside a
+    transaction at all. (Note that ``SET LOCAL`` is likewise discarded there, so the
+    isolation this function provides applies only to atomic migrations.)
     """
     logger = logging.getLogger('netbox_branching.branch.migrate')
     original = RunSQL.database_forwards
@@ -125,12 +135,17 @@ def _branch_isolated_runsql(branch_schema, main_schema):
             with connection.cursor() as cursor:
                 cursor.execute(_SET_SEARCH_PATH, [value])
 
+        def run_body():
+            return original(self, app_label, schema_editor, from_state, to_state)
+
         set_search_path(isolated_path)
         try:
             try:
-                # Savepoint, so a body which fails partway can be rolled back before the retry
-                with transaction.atomic(using=connection.alias):
-                    return original(self, app_label, schema_editor, from_state, to_state)
+                if connection.in_atomic_block:
+                    # Savepoint, so a body failing partway can be rolled back before the retry
+                    with transaction.atomic(using=connection.alias):
+                        return run_body()
+                return run_body()
             except ProgrammingError as e:
                 if getattr(e.__cause__, 'sqlstate', None) not in _UNRESOLVED_NAME_SQLSTATES:
                     raise
@@ -139,7 +154,7 @@ def _branch_isolated_runsql(branch_schema, main_schema):
                     f'retrying with search_path {full_path}'
                 )
                 set_search_path(full_path)
-                return original(self, app_label, schema_editor, from_state, to_state)
+                return run_body()
         finally:
             try:
                 set_search_path(full_path)
@@ -1453,6 +1468,19 @@ class Branch(JobsMixin, PrimaryModel):
         per-branch functions are created and the trigger operates only on branch
         data. Internal (constraint/FK-enforcement) triggers are excluded; those
         are rebuilt by the Phase 3 constraint pass.
+
+        Two consequences of resolving the target through ``search_path``:
+
+        * Any raw SQL which writes a branch table by *schema-qualified* name from a
+          connection whose ``search_path`` is the main schema (as the provisioning
+          copy statements do) would have its triggers read and write main's tables.
+          Such statements are only safe against tables which carry no triggers, or
+          when run on a connection with the branch schema searched first.
+        * NetBox's ltree triggers take a per-tree advisory lock keyed on
+          ``TG_TABLE_NAME``, which carries no schema. A branch and the main schema
+          therefore contend on the same key for the same tree, and because the
+          cross-tree path takes two locks, a branch operation and a main operation
+          touching the same pair of trees in opposite order can deadlock.
         """
         logger = logging.getLogger('netbox_branching.branch.provision')
         with connection.cursor() as cursor:
@@ -1491,7 +1519,11 @@ class Branch(JobsMixin, PrimaryModel):
                 cursor.execute("COMMIT")
                 logger.debug(f'Replicated {len(triggerdefs)} trigger(s) onto schema {schema}')
             except Exception:
-                cursor.execute("ROLLBACK")
+                try:
+                    cursor.execute("ROLLBACK")
+                except Exception:
+                    # Don't let a broken connection mask the original failure
+                    logger.exception(f'Failed to roll back trigger replication for {schema}')
                 raise
 
     def archive(self, user):
