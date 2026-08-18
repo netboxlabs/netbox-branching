@@ -75,8 +75,6 @@ jobs:
       - name: Get NetBox ref from PR labels
         id: netbox-ref
         run: |
-          # The plugin requires NetBox 4.7 (see min_version in netbox_branching/__init__.py), which is
-          # still in beta, so the default ref is the 4.7 beta tag rather than main.
           DEFAULT_REF="v4.7.0-beta1"
           # Check for label like "test-against:feature" or "test-against:v4.7.0-beta1"
           LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'

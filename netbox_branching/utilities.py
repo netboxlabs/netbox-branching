@@ -56,8 +56,6 @@ __all__ = (
     'register_branching_resolver',
     'register_objectchange_field_migrator',
     'resolve_changes_summary',
-    'restore_m2m_values',
-    'save_deserialized_object',
     'supports_branching',
     'track_branch_connection',
     'update_object',
@@ -352,36 +350,6 @@ def clear_mptt_fields(instance):
     opts = instance._mptt_meta
     for attr in (opts.left_attr, opts.right_attr, opts.level_attr, opts.tree_id_attr):
         setattr(instance, attr, None)
-
-
-def restore_m2m_values(instance, m2m_data):
-    """
-    Reassign the M2M relationships captured in a deserialized object's ``m2m_data``.
-
-    Django 6.1's ``DeserializedObject.save()`` calls ``set_base(objects, raw=True)`` on
-    each M2M accessor, which only exists on Django's own ``ManyRelatedManager``.
-    django-taggit's manager (NetBox's ``NetBoxTaggableManager``) implements ``set()``
-    but not ``set_base()``, so replaying a change for any tagged object raises
-    ``AttributeError``. Prefer ``set_base()`` where it exists — it preserves Django's
-    raw-save semantics, sending ``m2m_changed`` with ``raw=True`` — and fall back to
-    ``set()`` for managers that don't provide it. (#617)
-    """
-    for accessor_name, object_list in (m2m_data or {}).items():
-        manager = getattr(instance, accessor_name)
-        if hasattr(manager, 'set_base'):
-            manager.set_base(object_list, raw=True)
-        else:
-            manager.set(object_list)
-
-
-def save_deserialized_object(deserialized, using=None):
-    """
-    Persist a ``DeserializedObject`` and its M2M data, routing the M2M assignment through
-    ``restore_m2m_values()`` rather than ``DeserializedObject.save()``'s own handling.
-    """
-    m2m_data = deserialized.m2m_data
-    deserialized.save(save_m2m=False, using=using)
-    restore_m2m_values(deserialized.object, m2m_data)
 
 
 class _DeletedKey:

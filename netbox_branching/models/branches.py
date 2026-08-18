@@ -74,9 +74,6 @@ __all__ = (
 # of SET LOCAL — value is passed as a query parameter rather than interpolated.
 _SET_SEARCH_PATH = "SELECT pg_catalog.set_config('search_path', %s, true)"
 
-# undefined_object and undefined_function; excludes undefined_table (see _branch_isolated_runsql)
-_UNRESOLVED_NAME_SQLSTATES = frozenset(('42704', '42883'))
-
 
 def _serialize_for_sync(obj):
     """
@@ -104,24 +101,9 @@ def _branch_isolated_runsql(branch_schema, main_schema):
     jobs (one per worker process); concurrent ``Branch.migrate()`` calls in
     the same process would race.
 
-    Types and functions provided by a PostgreSQL extension live in the schema the
-    extension was installed into — normally the main schema — and are unresolvable
-    under the restricted path. NetBox 4.7's ltree backfill migrations hit this: their
-    RunSQL bodies cast with an unqualified ``::ltree``. A body that fails to resolve a
-    name is therefore rolled back to a savepoint and retried once with
-    ``<branch>,<main>`` on the path. Only "undefined object/function" is retried, never
-    "undefined table", so a body naming a table the branch schema lacks still fails
-    loudly instead of operating on main's copy. Note the narrower residual hazard: a
-    body whose DDL names a *function or type* that exists only in main (e.g. a bare
-    ``DROP FUNCTION legacy_fn()``) also raises one of these codes, and the retry will
-    then resolve it against main. Migrations doing such DDL should use ``IF EXISTS``
-    or set ``fake_on_branch``. (#617)
-
-    The savepoint is only taken when the migration is atomic. Under ``atomic = False``
-    the connection is in autocommit, where a failed statement leaves nothing to roll
-    back and statements such as ``CREATE INDEX CONCURRENTLY`` cannot run inside a
-    transaction at all. (Note that ``SET LOCAL`` is likewise discarded there, so the
-    isolation this function provides applies only to atomic migrations.)
+    A body needing objects from another schema — extension types and operators, which
+    live wherever the extension was installed — must put that schema on the path itself;
+    NetBox's ltree backfills do so (see ``utilities/mptt_to_ltree.py``). (#617)
     """
     logger = logging.getLogger('netbox_branching.branch.migrate')
     original = RunSQL.database_forwards
@@ -135,26 +117,9 @@ def _branch_isolated_runsql(branch_schema, main_schema):
             with connection.cursor() as cursor:
                 cursor.execute(_SET_SEARCH_PATH, [value])
 
-        def run_body():
-            return original(self, app_label, schema_editor, from_state, to_state)
-
         set_search_path(isolated_path)
         try:
-            try:
-                if connection.in_atomic_block:
-                    # Savepoint, so a body failing partway can be rolled back before the retry
-                    with transaction.atomic(using=connection.alias):
-                        return run_body()
-                return run_body()
-            except ProgrammingError as e:
-                if getattr(e.__cause__, 'sqlstate', None) not in _UNRESOLVED_NAME_SQLSTATES:
-                    raise
-                logger.warning(
-                    f'RunSQL in {app_label} references an object outside {branch_schema} ({e}); '
-                    f'retrying with search_path {full_path}'
-                )
-                set_search_path(full_path)
-                return run_body()
+            return original(self, app_label, schema_editor, from_state, to_state)
         finally:
             try:
                 set_search_path(full_path)

@@ -17,8 +17,6 @@ from netbox_branching.utilities import (
     diff_for_merge,
     full_clean_with_file_check,
     resolve_objectchange_field_migration,
-    restore_m2m_values,
-    save_deserialized_object,
     update_object,
 )
 
@@ -97,9 +95,10 @@ class ObjectChange(ObjectChange_):
             if isinstance(instance.object, MPTTModel):
                 clear_mptt_fields(instance.object)
                 instance.object.save(using=using, force_insert=True)
-                restore_m2m_values(instance.object, instance.m2m_data)
+                for accessor_name, object_list in (instance.m2m_data or {}).items():
+                    getattr(instance.object, accessor_name).set(object_list)
             else:
-                save_deserialized_object(instance, using=using)
+                instance.save(using=using)
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
@@ -184,9 +183,10 @@ class ObjectChange(ObjectChange_):
             if isinstance(instance, MPTTModel):
                 clear_mptt_fields(instance)
                 instance.save(using=using, force_insert=True)
-                restore_m2m_values(instance, deserialized.m2m_data)
+                for accessor_name, object_list in (deserialized.m2m_data or {}).items():
+                    getattr(instance, accessor_name).set(object_list)
             else:
-                save_deserialized_object(deserialized, using=using)
+                deserialized.save(using=using)
 
     undo.alters_data = True
 
