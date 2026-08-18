@@ -1,18 +1,5 @@
 # Change Log
 
-## v1.2.0
-
-### NetBox 4.7 Support (LTree)
-
-NetBox 4.7 replaces django-mptt with a PostgreSQL ltree-backed implementation for hierarchical models (regions, site groups, locations, tenant/contact groups, platforms, module bays, inventory items, etc.), and moves both the ltree path maintenance and the device-component denormalized `_site`/`_location`/`_rack` columns from Python into per-table database triggers. This release requires NetBox 4.7.
-
-### Bug Fixes
-
-* [#617](https://github.com/netboxlabs/netbox-branching/issues/617) - Replicate PostgreSQL triggers into branch schemas during provisioning so ltree paths and denormalized columns stay consistent within a branch (`CREATE TABLE ... (LIKE ...)` does not copy triggers)
-* [#617](https://github.com/netboxlabs/netbox-branching/issues/617) - Restore many-to-many relationships (e.g. tags) when reverting the merge of a deleted ltree object such as a module bay
-
----
-
 ## v1.1.2
 
 ### Enhancements
