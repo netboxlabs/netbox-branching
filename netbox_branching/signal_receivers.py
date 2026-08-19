@@ -6,10 +6,9 @@ from core.models import ObjectChange, ObjectType
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, connections
+from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, transaction
 from django.db.models.signals import post_migrate, post_save, pre_delete
 from django.dispatch import receiver
-from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 from extras.events import process_event_rules
 from extras.models import EventRule
@@ -134,26 +133,26 @@ def record_change_diff(instance, **kwargs):
         if instance.action == ObjectChangeActionChoices.ACTION_CREATE:
             return
 
-        logger.debug(f"Updating change diff for global change to {instance.changed_object}")
-        ChangeDiff.objects.filter(
+        if logger.isEnabledFor(logging.DEBUG):
+            # changed_object is a GenericForeignKey, so it is resolved eagerly as an argument even
+            # though logger.debug() would defer the formatting.
+            logger.debug("Updating change diff for global change to %s", instance.changed_object)
+        current_data = instance.postchange_data_clean or None
+        for diff in ChangeDiff.objects.filter(
             object_type=content_type,
             object_id=object_id,
             branch__status=BranchStatusChoices.READY
-        ).update(
-            last_updated=timezone.now(),
-            current=instance.postchange_data_clean or None
-        )
-
-        # When main deletes an object, recompute conflicts for any branch edits on that object,
-        # as the branch-UPDATE + main-DELETE combination is not caught by the bulk update above.
-        if instance.action == ObjectChangeActionChoices.ACTION_DELETE:
-            for diff in ChangeDiff.objects.filter(
-                object_type=content_type,
-                object_id=object_id,
-                branch__status=BranchStatusChoices.READY,
-                action=ObjectChangeActionChoices.ACTION_UPDATE,
-            ):
-                diff.save()
+        ).select_related('object_type'):
+            diff.current = current_data
+            # object_repr is excluded from update_fields because save() recomputes it from the
+            # GenericForeignKey, which resolves against main here (no active branch). The stored
+            # value must keep reflecting the branch's view of the object.
+            try:
+                with transaction.atomic():
+                    diff.save(update_fields=('current', 'conflicts', 'last_updated'))
+            except DatabaseError:
+                # The ChangeDiff was deleted (e.g. along with its Branch) after being retrieved above.
+                logger.debug("ChangeDiff %s no longer exists; skipping update", diff.pk)
 
     # If this is a branch-aware change, create or update ChangeDiff for this object.
     else:
