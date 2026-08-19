@@ -65,3 +65,14 @@ DATABASE_ROUTERS = [
 ```
 $ ./manage.py migrate
 ```
+
+## Running Tests
+
+Plugin tests must be run from the NetBox application directory. Pass the `PYTHONPATH` environment variable to specify the `testing/` directory which holds the testing configuration.
+
+```
+cd $NETBOX_ROOT/netbox
+PYTHONPATH=$PLUGIN_ROOT/testing \
+NETBOX_CONFIGURATION=configuration \
+python manage.py test netbox_branching.tests
+```
