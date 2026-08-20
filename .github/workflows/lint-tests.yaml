@@ -5,7 +5,7 @@ on:
       netbox_ref:
         description: 'NetBox ref to checkout (branch, tag, or commit)'
         required: false
-        default: 'v4.7.0-beta1'
+        default: 'feature'
         type: string
   pull_request:
   push:
@@ -75,7 +75,7 @@ jobs:
       - name: Get NetBox ref from PR labels
         id: netbox-ref
         run: |
-          DEFAULT_REF="v4.7.0-beta1"
+          DEFAULT_REF="feature"
           # Check for label like "test-against:feature" or "test-against:v4.7.0-beta1"
           LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
           echo "Labels: $LABELS"
