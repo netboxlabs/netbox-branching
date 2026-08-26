@@ -1,5 +1,15 @@
 # Change Log
 
+## v1.2.0-beta1
+
+### NetBox v4.7 Support ([#617](https://github.com/netboxlabs/netbox-branching/issues/617))
+
+This release adds support for NetBox v4.7, which replaces django-mptt with a PostgreSQL ltree implementation and moves the maintenance of ltree and denormalized fields into database triggers. Branch provisioning now replicates those triggers into each branch schema, so nested object hierarchies behave consistently within a branch.
+
+**NetBox v4.7 is now required.** Earlier NetBox releases are not supported by this version; continue to use the 1.1.x series with NetBox v4.4 through v4.6.
+
+---
+
 ## v1.1.2
 
 ### Enhancements
