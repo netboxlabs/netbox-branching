@@ -1,4 +1,13 @@
 *.pyc
 *.egg-info
+__pycache__/
 .claude/settings.local.json
 .idea/
+
+# Build output
+build/
+dist/
+sdist-wheel/
+
+# mkdocs build output
+site/
