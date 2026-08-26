@@ -1,17 +1,22 @@
 #!/usr/bin/env python3
 """Verify a built wheel ships the runtime data NetBox needs and nothing it shouldn't.
 
-Usage: verify_wheel_contents.py <wheel>
+Usage: verify_wheel_contents.py <wheel-or-installed-directory>
 
 The wheel's contents come entirely from the ``package-data`` glob in pyproject.toml, so
 a packaging change can silently drop the templates (leaving a plugin that installs fine
 and then 500s on every view) or sweep in artefacts from a dirty working tree. Both
 failure modes are caught here, before anything is published.
+
+Passing a directory instead of a wheel applies the same checks to the package tree under
+it, which is how the install smoke test holds a ``pip install``ed copy to the same rules
+without keeping a second list of expected files. That install must use ``--no-compile``,
+since byte-compiling the package would trip the no-bytecode check below.
 """
 
 import sys
 import zipfile
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 PACKAGE = 'netbox_branching'
 
@@ -35,6 +40,9 @@ REQUIRED_PREFIXES = (
     f'{PACKAGE}/templates/{PACKAGE}/',
     f'{PACKAGE}/templates/{PACKAGE}/buttons/',
     f'{PACKAGE}/templates/{PACKAGE}/inc/',
+    # Widget templates are named by Widget.template_name (see forms/misc.py) and are as
+    # load-bearing as the view templates.
+    f'{PACKAGE}/templates/{PACKAGE}/widgets/',
     f'{PACKAGE}/templatetags/',
 )
 
@@ -50,14 +58,19 @@ FORBIDDEN_SEGMENTS = (
 FORBIDDEN_SEGMENT_SUFFIXES = ('.egg-info',)
 
 
-def members(wheel_path):
-    with zipfile.ZipFile(wheel_path) as archive:
+def members(target):
+    """Return the package-relative file list of a wheel, or of an installed package tree."""
+    path = Path(target)
+    if path.is_dir():
+        # Scoped to the package so that the rest of site-packages is not swept in.
+        return [str(p.relative_to(path).as_posix()) for p in (path / PACKAGE).rglob('*') if p.is_file()]
+    with zipfile.ZipFile(path) as archive:
         return [name for name in archive.namelist() if not name.endswith('/')]
 
 
 def main(argv):
     if len(argv) != 2:
-        print('usage: verify_wheel_contents.py <wheel>')
+        print('usage: verify_wheel_contents.py <wheel-or-installed-directory>')
         return 2
     names = members(argv[1])
     errors = []
@@ -76,9 +89,9 @@ def main(argv):
             segment in FORBIDDEN_SEGMENTS or segment.endswith(FORBIDDEN_SEGMENT_SUFFIXES)
             for segment in PurePosixPath(name).parts
         ):
-            errors.append(f'build artefact leaked into the wheel: {name}')
+            errors.append(f'unexpected build artefact: {name}')
         elif name.endswith(('.pyc', '.pyo')):
-            errors.append(f'compiled bytecode leaked into the wheel: {name}')
+            errors.append(f'unexpected compiled bytecode: {name}')
 
     if errors:
         print(f'{argv[1]} failed verification:')
@@ -86,7 +99,7 @@ def main(argv):
             print(f'  - {error}')
         return 1
 
-    print(f'OK: {argv[1]} contains {len(names)} members and passes all checks')
+    print(f'OK: {argv[1]} contains {len(names)} package files and passes all checks')
     return 0
 
 
