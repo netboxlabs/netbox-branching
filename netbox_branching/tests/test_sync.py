@@ -825,14 +825,14 @@ class SyncTestCase(TransactionTestCase):
             self.assertEqual(ws_in_branch.name, 'Windows Server')
             self.assertEqual(ws_in_branch.parent_id, windows_id)
 
-            # MPTT tree consistency: tree fields must have been recomputed against the
-            # branch's local state, not carried over from main. (#531)
+            # ltree tree consistency: the path must have been recomputed against the
+            # branch's local state (child descends from its new parent), not carried
+            # over from main. Under ltree this is maintained by the branch schema's
+            # replicated triggers. (#531, #617)
             windows_in_branch = Platform.objects.get(id=windows_id)
             self.assertEqual(windows_in_branch.level, 0)
             self.assertEqual(ws_in_branch.level, 1)
-            self.assertEqual(ws_in_branch.tree_id, windows_in_branch.tree_id)
-            self.assertGreater(ws_in_branch.lft, windows_in_branch.lft)
-            self.assertLess(ws_in_branch.rght, windows_in_branch.rght)
+            self.assertTrue(str(ws_in_branch.path).startswith(f'{windows_in_branch.path}.'))
             self.assertEqual(list(ws_in_branch.get_ancestors()), [windows_in_branch])
 
     def test_sync_mptt_branch_and_main_extend_tree(self):
