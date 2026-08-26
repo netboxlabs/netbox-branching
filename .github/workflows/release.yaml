@@ -1,9 +1,24 @@
 name: Release
 
+# Releases are driven by pushing a v* tag, not by publishing a GitHub release, so that
+# pre-releases (v1.3.0-beta1 -> 1.3.0b1 on PyPI) follow the same automated path as a
+# final release. The GitHub release is created by this workflow after PyPI accepts the
+# upload; see the release job below.
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - 'v*'
+  pull_request:
+    paths:
+      - '.github/workflows/release.yaml'
+      - 'pyproject.toml'
+      - 'scripts/verify_*.py'
+      - 'netbox_branching/**'
+      - 'README.md'
+      - 'LICENSE.md'
+  workflow_dispatch:
 
+# Least-privilege default for every job; the publish and release jobs widen this themselves.
 permissions:
   contents: read
 
@@ -12,37 +27,212 @@ jobs:
     name: Build distribution
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      with:
-        persist-credentials: false
-    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-      with:
-        python-version: "3.x"
-    - name: Install pypa/build
-      run: |
-        python3 -m pip install build
-    - name: Build distribution package
-      run: |
-        python3 -m build
-    - name: Upload distribution package
-      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-      with:
-        name: python-package-distributions
-        path: dist/
-        if-no-files-found: error
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
-  publish:
-    name: Publish to PyPI
-    needs:
-      - build
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install build tooling
+        run: python -m pip install --upgrade build twine packaging
+
+      - name: Build sdist and wheel
+        run: python -m build
+
+      - name: Check package metadata
+        run: twine check dist/*
+
+      - name: Verify the release tag and version declarations
+        # Runs here, in the unprivileged build job, against the exact artifacts this run
+        # uploads, so neither publish job needs a checkout while holding id-token: write.
+        # A failure skips every downstream job. On pull requests and branch dispatches
+        # there is no tag, and only pyproject.toml, AppConfig.version and the wheel are
+        # cross-checked.
+        env:
+          TAG: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+        run: |
+          if [[ -n "$TAG" ]]; then
+            [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]] || {
+              echo "Ref '$TAG' is not a release tag of the form vX.Y.Z[-designation]"
+              exit 1
+            }
+            python scripts/verify_release_tag.py --tag "$TAG" dist/*.whl
+          else
+            python scripts/verify_release_tag.py dist/*.whl
+          fi
+
+      - name: Verify the wheel contents
+        run: python scripts/verify_wheel_contents.py dist/*.whl
+
+      - name: Upload distribution package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-package-distributions
+          path: dist/
+          if-no-files-found: error
+
+  verify-sdist:
+    name: Verify the sdist builds a wheel
     runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install tooling
+        run: python -m pip install --upgrade pip packaging
+
+      - name: Download distribution package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Build a wheel from the sdist
+        run: python -m pip wheel --no-deps dist/*.tar.gz -w sdist-wheel/
+
+      - name: Verify the sdist-built wheel
+        run: python scripts/verify_wheel_contents.py sdist-wheel/*.whl
+
+  install-test:
+    name: Smoke test wheel install
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.12'
+
+      - name: Download distribution package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Install the wheel into a clean virtual environment
+        # --no-deps: importing the plugin requires a full NetBox installation, which this
+        # job deliberately does not build. It verifies that the distribution installs and
+        # that the package data lands on disk; the test suite in lint-tests.yaml covers
+        # the plugin running inside NetBox.
+        run: |
+          python -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --upgrade pip
+          "$RUNNER_TEMP/venv/bin/python" -m pip install --no-deps dist/*.whl
+
+      - name: Verify the installed package data
+        run: |
+          SITE_PACKAGES=$("$RUNNER_TEMP/venv/bin/python" -c 'import sysconfig; print(sysconfig.get_paths()["purelib"])')
+          for f in \
+            netbox_branching/__init__.py \
+            netbox_branching/database.py \
+            netbox_branching/migrations/0001_initial.py \
+            netbox_branching/templates/netbox_branching/branch.html \
+            netbox_branching/templates/netbox_branching/buttons/branch_merge.html
+          do
+            test -s "$SITE_PACKAGES/$f" || { echo "missing or empty $f"; exit 1; }
+          done
+          "$RUNNER_TEMP/venv/bin/python" -m pip show netboxlabs-netbox-branching
+
+  publish-testpypi:
+    name: Publish to Test PyPI
+    runs-on: ubuntu-latest
+    needs: [verify-sdist, install-test]
+    # Test PyPI is an opt-in rehearsal channel: only a manual dispatch from a v* tag
+    # publishes here, so the publish path can be exercised against a real index without
+    # touching production. A branch dispatch still runs build and verification as a dry
+    # run, with both publish jobs skipped.
+    if: github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/netboxlabs-netbox-branching
     permissions:
+      contents: read
       id-token: write
     steps:
-    - name: Download distribution package
-      uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-      with:
-        name: python-package-distributions
-        path: dist/
-    - name: Publish distribution to PyPI
-      uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc # v1.12.4
+      - name: Download distribution package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish distribution to Test PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          print-hash: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [verify-sdist, install-test]
+    # A v* tag push is the production path. Test PyPI is a rehearsal rather than a
+    # promotion stage, so it is deliberately absent from this job's needs. The tag format
+    # and the tag-to-wheel version match are enforced in the build job, which fails the
+    # whole run before anything is uploaded.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    environment:
+      name: pypi
+      url: https://pypi.org/p/netboxlabs-netbox-branching
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download distribution package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Publish distribution to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          print-hash: true
+
+  github-release:
+    name: Create the GitHub release
+    runs-on: ubuntu-latest
+    needs: publish-pypi
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download distribution package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-package-distributions
+          path: dist/
+
+      - name: Create the release if it does not already exist
+        # A tag pushed from a GitHub release already has one, in which case this is a
+        # no-op; a tag pushed from the command line gets a release created here. Any tag
+        # carrying a designation (v1.3.0-beta1, v1.3.0-rc1) is marked as a pre-release.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; uploading distribution files to it"
+            gh release upload "$TAG" dist/* --clobber
+            exit 0
+          fi
+          PRERELEASE=""
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || PRERELEASE="--prerelease"
+          gh release create "$TAG" dist/* \
+            --title "$TAG" \
+            --generate-notes \
+            $PRERELEASE
