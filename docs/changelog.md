@@ -1,5 +1,13 @@
 # Change Log
 
+## v1.1.3
+
+### Bug Fixes
+
+* [#624](https://github.com/netboxlabs/netbox-branching/issues/624) - Ensure conflicts are recorded in `ChangeDiff` records during object updates
+
+---
+
 ## v1.1.2
 
 ### Enhancements
