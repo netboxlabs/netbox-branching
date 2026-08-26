@@ -255,7 +255,10 @@ class ChangeDiff(models.Model):
 
     def save(self, *args, **kwargs):
         self._update_conflicts()
-        if self.object:
+        # Resolving the object (a GenericForeignKey) and rendering it as a string can require several
+        # queries, so skip it entirely when object_repr is not among the fields being saved.
+        update_fields = kwargs.get('update_fields')
+        if (update_fields is None or 'object_repr' in update_fields) and self.object:
             self.object_repr = str(self.object)
 
         super().save(*args, **kwargs)
@@ -285,11 +288,11 @@ class ChangeDiff(models.Model):
         if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             if current is None:
                 # Object was deleted in main; all branch modifications are in conflict
-                conflicts = [k for k, v in original.items() if v != modified[k]]
+                conflicts = [k for k, v in original.items() if v != modified.get(k)]
             else:
                 conflicts = [
                     k for k, v in original.items()
-                    if v != modified[k] and v != current.get(k) and modified[k] != current.get(k)
+                    if v != modified.get(k) and v != current.get(k) and modified.get(k) != current.get(k)
                 ]
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
             if current is None:

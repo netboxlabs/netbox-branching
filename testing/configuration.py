@@ -2,17 +2,24 @@
 #  This file serves as a base configuration for testing purposes  #
 #  only. It is not intended for production use.                   #
 ###################################################################
+from netbox_branching.utilities import DynamicSchemaDict
 
 ALLOWED_HOSTS = ["*"]
 
-DATABASE = {
-    "NAME": "netbox",
-    "USER": "netbox",
-    "PASSWORD": "netbox",
-    "HOST": "localhost",
-    "PORT": "",
-    "CONN_MAX_AGE": 300,
-}
+DATABASES = DynamicSchemaDict({
+    'default': {
+        "NAME": "netbox",
+        "USER": "netbox",
+        "PASSWORD": "netbox",
+        "HOST": "localhost",
+        "PORT": "",
+        "CONN_MAX_AGE": 300,
+    },
+})
+
+DATABASE_ROUTERS = [
+    'netbox_branching.database.BranchAwareRouter',
+]
 
 PLUGINS = [
     "netbox_branching",

@@ -106,8 +106,6 @@ jobs:
         working-directory: netbox
         run: |
           ln -s $(pwd)/../netbox-branching/testing/configuration.py netbox/netbox/configuration.py
-          ln -s $(pwd)/../netbox-branching/testing/local_settings.py netbox/netbox/local_settings.py
-          
           python -m pip install --upgrade pip
           pip install -r requirements.txt -U
       - name: Run tests
