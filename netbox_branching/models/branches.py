@@ -579,23 +579,14 @@ class Branch(JobsMixin, PrimaryModel):
 
     def _apply_from_main(self, change, logger, skip_missing=True):
         """
-        Apply a change originating in main to this branch's schema, translating a
-        validation or constraint failure into an error which identifies the object and
-        explains how to resolve it.
+        Apply a change from main to this branch's schema, raising an error which identifies
+        the object and the collision if it cannot be applied.
 
-        A change which is perfectly valid in main can still be rejected by the branch,
-        because a model's ``clean()`` (and its database constraints) consider objects
-        beyond the one being changed: a rack unit occupied by a device the branch created,
-        an address the branch assigned within the same VRF, a position the branch already
-        filled, and so on. Nothing in the branch's own change set diverges — the collision
-        is between two independently created objects — so no ChangeDiff conflict is
-        recorded and the failure only appears here.
-
-        The sync is aborted rather than continued without the offending change: later
-        changes from main routinely depend on earlier ones, so skipping one would leave
-        the branch referencing objects it never received. The user resolves the collision
-        within the branch (by moving or removing the branch's own object) and syncs again.
-        (#632)
+        A change valid in main can still be rejected by the branch when a model's clean()
+        or a database constraint considers objects beyond the one being changed (e.g. a rack
+        unit the branch has already filled). The two objects are independent, so there is no
+        ChangeDiff conflict for it. The sync is aborted rather than continued without the
+        change, as later changes from main may depend on it. (#632)
         """
         try:
             change.apply(self, using=self.connection_name, logger=logger, skip_missing=skip_missing)

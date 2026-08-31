@@ -1232,15 +1232,10 @@ class SyncTestCase(TransactionTestCase):
 
     def test_sync_cross_object_validation_conflict_reports_object_and_reason(self):
         """
-        A change from main can be rejected by the branch because of an object the branch
-        created independently — here, two devices claiming the same rack unit. Neither
-        object diverges from a common ancestor, so no ChangeDiff conflict is recorded and
-        the collision only surfaces when the change is applied.
-
-        The sync must abort (later changes from main may depend on this one), but the
-        error has to identify the object from main and the reason, so the user knows what
-        to change in the branch. Before #632 it raised a bare field-level ValidationError
-        naming neither.
+        Two devices claiming the same rack unit are independent objects, so no ChangeDiff
+        conflict is recorded and the collision only surfaces on apply. The sync aborts, but
+        the error must name the object from main and the reason; before #632 it raised a
+        bare field-level ValidationError naming neither.
         """
         with event_tracking(self.request):
             site = Site.objects.create(name='Site 1', slug='site-1')
@@ -1279,8 +1274,8 @@ class SyncTestCase(TransactionTestCase):
 
     def test_sync_succeeds_once_branch_side_conflict_is_resolved(self):
         """
-        Moving the branch's own device out of the contested rack unit is enough to let the
-        sync through; no change in main and no loss of branch work is required.
+        Moving the branch's own device out of the contested unit is enough to let the sync
+        through, with no change in main and no loss of branch work.
         """
         with event_tracking(self.request):
             site = Site.objects.create(name='Site 1', slug='site-1')

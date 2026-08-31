@@ -1343,8 +1343,7 @@ class BaseMergeTests:
     def _setup_rack_slot_collision(self):
         """
         Build the #632 scenario: the branch and main each create a different device in the
-        same rack unit. Both are valid where they were made; only replaying one onto the
-        other schema trips Device.clean(). Returns (branch, branch_device_id).
+        same rack unit. Returns (branch, branch_device_id).
         """
         request = RequestFactory().get(reverse('home'))
         request.id = uuid.uuid4()
@@ -1373,14 +1372,9 @@ class BaseMergeTests:
 
     def test_merge_cross_object_conflict_is_reported_as_such(self):
         """
-        Two independently created objects colliding on a Python-level constraint produce no
-        ChangeDiff conflict — there is no per-object divergence to detect — so the failure
-        first appears when the branch's change is replayed onto main.
-
-        The report must say so: before #632 the same failure was classified as a plain
-        validation error and the user was told to "fix the invalid value in the branch",
-        which is misleading when the value is perfectly valid there and the colliding
-        object lives in main.
+        The collision produces no ChangeDiff conflict, so it first appears when the branch's
+        change is replayed onto main. Before #632 it was reported as a plain validation error
+        advising the user to fix a value which is valid in the branch.
         """
         branch, _ = self._setup_rack_slot_collision()
 
@@ -1418,11 +1412,9 @@ class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
 
     def test_cross_object_conflict_resolved_in_branch_still_blocks_iterative_merge(self):
         """
-        Resolving the collision in the branch (moving its device to a free unit) unblocks the
-        sync, but not an iterative merge: iterative replays every change, including the
-        original create in the contested unit, which main still rejects. This is why the
-        report recommends the squash strategy for this class of failure — squash applies only
-        the object's final state (see the squash suite for the passing counterpart).
+        Resolving the collision in the branch unblocks the sync but not an iterative merge,
+        which replays the original create in the contested unit. Hence the squash
+        recommendation; see the squash suite for the passing counterpart.
         """
         branch, device_id = self._setup_rack_slot_collision()
 

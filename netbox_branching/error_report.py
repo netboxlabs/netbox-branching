@@ -84,15 +84,11 @@ def annotate_validation_error(exc, model_class, object_id, content_type_id, bran
 
 def _validates_in_branch(branch, model_class, object_id):
     """
-    Return True if the object still passes model validation inside the branch schema.
+    Return True if the object passes model validation inside the branch schema, False if it
+    does not, or None if the check could not be performed.
 
-    A replayed change is always valid within the branch it came from; when it fails
-    validation against main, the cause is normally data outside the branch's own change
-    set — another object which occupies the same rack unit, IP address, or interface
-    position. Re-validating the object where it lives distinguishes that case (valid in
-    the branch, rejected by main) from data which is simply invalid everywhere, so the
-    two can be reported differently. Returns None when the check cannot be performed;
-    callers treat that as "unknown" and fall back to the generic report. (#632)
+    A replayed change which main rejects but the branch accepts is colliding with data
+    outside the branch's own change set. (#632)
     """
     from .utilities import activate_branch
 
@@ -295,9 +291,8 @@ def get_merge_recommendations(entry, merge_strategy=None):
         else:
             recs = [_REC_SYNC_AND_RESOLVE_GENERIC]
         if not is_squash:
-            # The iterative strategy replays every intermediate state, so a change which
-            # collides in main keeps colliding even once the branch object has been
-            # corrected; squashing applies only the corrected final state.
+            # Iterative replays every intermediate state, so a corrected branch object still
+            # collides; squash applies only the final state.
             recs.append(_REC_TRY_SQUASH_VALIDATION)
         recs.append(_REC_CHANGE_MAIN)
         return recs

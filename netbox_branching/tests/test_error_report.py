@@ -92,11 +92,7 @@ class BuildErrorReportTestCase(SimpleTestCase):
         self.assertEqual(entry['field'], 'name')
 
     def test_validation_error_valid_in_branch_classified_as_conflict(self):
-        """
-        An object which passes validation inside the branch but is rejected by main is
-        colliding with something outside the branch's change set (#632) — a different
-        classification from a value which is simply invalid.
-        """
+        """An object valid in the branch but rejected by main is a cross-schema collision (#632)."""
         exc = ValidationError({'position': [ValidationError('U12 is already occupied', code='invalid')]})
         exc.netbox_branching_valid_in_branch = True
         entry = build_error_report(exc)
@@ -258,10 +254,7 @@ class GetMergeRecommendationsTestCase(SimpleTestCase):
 
 
 class DescribeValidationFailureTestCase(SimpleTestCase):
-    """
-    The sync path renders the raw exception into its own error message, so field names
-    have to survive and the string must stay on one line.
-    """
+    """Field names must survive into the sync error message, and it must stay on one line."""
 
     def test_field_errors_are_prefixed_with_the_field_name(self):
         exc = ValidationError({'position': ['U12 is already occupied']})

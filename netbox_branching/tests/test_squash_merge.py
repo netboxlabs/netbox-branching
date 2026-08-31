@@ -1002,10 +1002,9 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
 
     def test_cross_object_conflict_resolved_in_branch_can_be_merged(self):
         """
-        The escape route from a cross-object collision (#632): move the branch's own device
-        to a free rack unit, sync to pull main's device in, then merge. Squash applies only
-        the object's final state, so the create in the contested unit is never replayed and
-        the branch's work is preserved — no need to discard it and start over.
+        The escape route from a cross-object collision (#632): move the branch's own device to
+        a free unit, sync, then merge. Squash never replays the create in the contested unit,
+        so the branch's work is preserved.
         """
         branch, device_id = self._setup_rack_slot_collision()
 
