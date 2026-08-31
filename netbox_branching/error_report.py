@@ -1,7 +1,7 @@
 import re
 
 from django.apps import apps
-from django.core.exceptions import ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.db import IntegrityError
 from django.utils.translation import gettext as _
 from django.utils.translation import gettext_lazy as _l
@@ -27,6 +27,22 @@ _REC_FIX_FIELD = _l(
 _REC_FIX_GENERIC = _l(
     'Fix the invalid value on the affected object in the branch before retrying.'
 )
+_REC_SYNC_AND_RESOLVE_WITH_FIELD = _l(
+    'Sync the branch to pull in the conflicting data from main, then change %(field)s on the'
+    ' affected object within the branch so that it no longer conflicts, and merge again.'
+)
+_REC_SYNC_AND_RESOLVE_GENERIC = _l(
+    'Sync the branch to pull in the conflicting data from main, then resolve the conflict on the'
+    ' affected object within the branch and merge again.'
+)
+_REC_CHANGE_MAIN = _l(
+    'Change the conflicting object in the main schema so that the branch\'s change can be applied.'
+)
+_REC_TRY_SQUASH_VALIDATION = _l(
+    'Switch to the Squash merge strategy, which applies only each object\'s final state instead of'
+    ' replaying every intermediate change. This is required when the conflicting value was corrected'
+    ' within the branch after it was first recorded.'
+)
 _REC_REVIEW_LOG = _l('Review the job log for full error details.')
 _REC_TRY_SQUASH_DB = _l(
     'Switch to the Squash merge strategy, which may resolve some database-level conflicts.'
@@ -35,16 +51,60 @@ _REC_TRY_SQUASH_DB = _l(
 __all__ = (
     'annotate_validation_error',
     'build_error_report',
+    'describe_validation_failure',
     'get_entry_message',
     'get_merge_recommendations',
 )
 
 
-def annotate_validation_error(exc, model_class, object_id, content_type_id):
+def describe_validation_failure(exc):
+    """
+    Render a ValidationError or IntegrityError as a single human-readable string, keeping
+    field names where the exception carries them.
+    """
+    if isinstance(exc, ValidationError):
+        if hasattr(exc, 'error_dict'):
+            return '; '.join(
+                ' '.join(str(m) for m in messages) if field == NON_FIELD_ERRORS
+                else f'{field}: {" ".join(str(m) for m in messages)}'
+                for field, messages in exc.message_dict.items()
+            )
+        return ' '.join(str(m) for m in exc.messages)
+    return ' '.join(str(exc).split())
+
+
+def annotate_validation_error(exc, model_class, object_id, content_type_id, branch=None):
     """Attach branch operation context to a ValidationError before re-raising."""
     exc.netbox_branching_model = model_class
     exc.netbox_branching_object_id = object_id
     exc.netbox_branching_content_type_id = content_type_id
+    if branch is not None:
+        exc.netbox_branching_valid_in_branch = _validates_in_branch(branch, model_class, object_id)
+
+
+def _validates_in_branch(branch, model_class, object_id):
+    """
+    Return True if the object still passes model validation inside the branch schema.
+
+    A replayed change is always valid within the branch it came from; when it fails
+    validation against main, the cause is normally data outside the branch's own change
+    set — another object which occupies the same rack unit, IP address, or interface
+    position. Re-validating the object where it lives distinguishes that case (valid in
+    the branch, rejected by main) from data which is simply invalid everywhere, so the
+    two can be reported differently. Returns None when the check cannot be performed;
+    callers treat that as "unknown" and fall back to the generic report. (#632)
+    """
+    from .utilities import activate_branch
+
+    try:
+        instance = model_class.objects.using(branch.connection_name).get(pk=object_id)
+        with activate_branch(branch):
+            instance.full_clean()
+    except ValidationError:
+        return False
+    except Exception:  # noqa: BLE001 — never mask the error being reported
+        return None
+    return True
 
 
 def _get_field_from_constraint(table_name, constraint_name):
@@ -97,6 +157,7 @@ def _analyze_integrity_error(exc, table_model_map):
             'model': table_model_map.get(table_name) if table_name else None,
             'field': field,
             'value': value,
+            'detail': None,
             'object_id': None,
             'content_type_id': None,
         }
@@ -106,6 +167,7 @@ def _analyze_integrity_error(exc, table_model_map):
         'model': None,
         'field': None,
         'value': None,
+        'detail': None,
         'object_id': None,
         'content_type_id': None,
     }
@@ -130,11 +192,21 @@ def _analyze_validation_error(exc):
     elif hasattr(exc, 'error_list') and exc.error_list:
         is_uniqueness = any(e.code in ('unique', 'unique_together') for e in exc.error_list)
 
+    if is_uniqueness:
+        error_type = 'unique_constraint'
+    elif getattr(exc, 'netbox_branching_valid_in_branch', None):
+        # The object validates within the branch and was rejected only by main, so the
+        # cause lies outside the branch's own change set. (#632)
+        error_type = 'validation_conflict'
+    else:
+        error_type = 'validation_error'
+
     return {
-        'type': 'unique_constraint' if is_uniqueness else 'validation_error',
+        'type': error_type,
         'model': model_name,
         'field': first_field,
         'value': None,
+        'detail': ' '.join(str(m) for m in exc.messages) or None,
         'object_id': getattr(exc, 'netbox_branching_object_id', None),
         'content_type_id': getattr(exc, 'netbox_branching_content_type_id', None),
     }
@@ -143,7 +215,7 @@ def _analyze_validation_error(exc):
 def build_error_report(exc):
     """
     Analyze an exception and return a structured report entry dict containing:
-    type, model, field, value, object_id, content_type_id.
+    type, model, field, value, detail, object_id, content_type_id.
     """
     table_model_map = {model._meta.db_table: model._meta.verbose_name for model in apps.get_models()}
     if isinstance(exc, IntegrityError):
@@ -155,6 +227,7 @@ def build_error_report(exc):
         'model': None,
         'field': None,
         'value': None,
+        'detail': None,
         'object_id': None,
         'content_type_id': None,
     }
@@ -166,6 +239,7 @@ def get_entry_message(entry):
     model = entry.get('model', '')
     field = entry.get('field', '')
     value = entry.get('value', '')
+    detail = entry.get('detail', '')
 
     model_str = model.title() if model else ''
     field_str = f'"{field}"' if field else ''
@@ -179,11 +253,21 @@ def get_entry_message(entry):
             }
         return _('Unique constraint violation: an object already exists in the main schema.')
 
+    if error_type == 'validation_conflict':
+        parts = [p for p in [model_str, field_str] if p]
+        if parts:
+            base = _('%(where)s conflicts with data in the main schema.') % {'where': ' '.join(parts)}
+        else:
+            base = _('The change conflicts with data in the main schema.')
+        return f'{base} {detail}' if detail else base
+
     if error_type == 'validation_error':
         parts = [p for p in [model_str, field_str] if p]
         if parts:
-            return _('Validation error on %(where)s.') % {'where': ' '.join(parts)}
-        return _('Validation error.')
+            base = _('Validation error on %(where)s.') % {'where': ' '.join(parts)}
+        else:
+            base = _('Validation error.')
+        return f'{base} {detail}' if detail else base
 
     return _('An unexpected database error occurred.')
 
@@ -204,6 +288,19 @@ def get_merge_recommendations(entry, merge_strategy=None):
         if is_squash:
             return [rename_rec]
         return [rename_rec, _REC_TRY_SQUASH_UNIQUE]
+
+    if error_type == 'validation_conflict':
+        if field:
+            recs = [_REC_SYNC_AND_RESOLVE_WITH_FIELD % {'field': f'"{field}"'}]
+        else:
+            recs = [_REC_SYNC_AND_RESOLVE_GENERIC]
+        if not is_squash:
+            # The iterative strategy replays every intermediate state, so a change which
+            # collides in main keeps colliding even once the branch object has been
+            # corrected; squashing applies only the corrected final state.
+            recs.append(_REC_TRY_SQUASH_VALIDATION)
+        recs.append(_REC_CHANGE_MAIN)
+        return recs
 
     if error_type == 'validation_error':
         if field:
