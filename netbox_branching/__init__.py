@@ -57,6 +57,14 @@ class AppConfig(PluginConfig):
         # Automatically archive branches merged more than this many days ago (via a daily job).
         # Set to an integer number of days to enable automatic archival.
         'auto_archive_days': None,
+
+        # Automatically reset branches left in a transitional status (e.g. "migrating") by a
+        # background job whose worker died before it could complete. Checked hourly.
+        'auto_recover_stuck_branches': True,
+
+        # Seconds added to `job_timeout` before a job which still reports itself as running is
+        # presumed dead. Allows for clock skew and for a worker shutting down gracefully.
+        'stuck_job_grace_period': 300,
     }
 
     def ready(self):
@@ -102,6 +110,14 @@ class AppConfig(PluginConfig):
                 raise ImproperlyConfigured(
                     "netbox_branching: 'auto_archive_days' must be greater than or equal to 1 (if enabled)."
                 )
+
+        # Validate stuck_job_grace_period up front so a misconfigured value cannot cause the
+        # recovery job to either fire prematurely or silently never fire at all.
+        grace_period = get_plugin_config('netbox_branching', 'stuck_job_grace_period')
+        if type(grace_period) is not int or grace_period < 0:
+            raise ImproperlyConfigured(
+                "netbox_branching: 'stuck_job_grace_period' must be a non-negative integer."
+            )
 
         # Register cleanup handler for branch connections (#358)
         # This ensures branch connections are closed when they exceed CONN_MAX_AGE,

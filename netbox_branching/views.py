@@ -68,8 +68,14 @@ class BranchView(generic.ObjectView):
             last_job = None
             last_merge_job = None
 
+        # Surface a branch left in a transitional status by a job which is no longer running (#622)
+        stuck_job, is_stuck = instance.check_stuck()
+
         return {
             'stats': stats,
+            'is_stuck': is_stuck,
+            'stuck_job': stuck_job,
+            'recovery_status': BranchStatusChoices.RECOVERY_STATUS.get(instance.status),
             'latest_change': latest_change,
             'last_job': last_job,
             'last_job_errored': last_job is not None and last_job.status == JobStatusChoices.STATUS_ERRORED,
@@ -531,6 +537,59 @@ class BranchMigrateView(generic.ObjectView):
             'form': form,
             'action_permitted': action_permitted,
         })
+
+
+@register_model_view(Branch, 'recover')
+class BranchRecoverView(generic.ObjectView):
+    """
+    Reset a branch which is stuck in a transitional status because the job responsible for it is no
+    longer running (see issue #622).
+    """
+    queryset = Branch.objects.all()
+    template_name = 'netbox_branching/branch_recover.html'
+
+    def get_required_permission(self):
+        return 'netbox_branching.change_branch'
+
+    def _get_context(self, request, branch, form):
+        job, is_stuck = branch.check_stuck()
+        return {
+            'branch': branch,
+            'form': form,
+            'job': job,
+            'is_stuck': is_stuck,
+            'new_status': BranchStatusChoices.RECOVERY_STATUS.get(branch.status),
+        }
+
+    def get(self, request, **kwargs):
+        branch = self.get_object(**kwargs)
+        if branch.status not in BranchStatusChoices.TRANSITIONAL:
+            messages.error(request, _("This branch is not in a transitional status."))
+            return redirect(branch.get_absolute_url())
+
+        return render(request, self.template_name, self._get_context(request, branch, forms.ConfirmationForm()))
+
+    def post(self, request, **kwargs):
+        branch = self.get_object(**kwargs)
+        if branch.status not in BranchStatusChoices.TRANSITIONAL:
+            messages.error(request, _("This branch is not in a transitional status."))
+            return redirect(branch.get_absolute_url())
+
+        form = forms.ConfirmationForm(request.POST)
+        if form.is_valid():
+            # The operator has explicitly confirmed that the operation is no longer running, so
+            # recover the branch even if a job record still claims otherwise (the record may have
+            # been purged, or its worker may have died in a way RQ cannot report).
+            new_status = branch.force_recover(user=request.user)
+            messages.success(
+                request,
+                _("Branch {branch} has been reset to {status}.").format(
+                    branch=branch, status=dict(BranchStatusChoices).get(new_status, new_status)
+                )
+            )
+            return redirect(branch.get_absolute_url())
+
+        return render(request, self.template_name, self._get_context(request, branch, form))
 
 
 class BranchBulkImportView(generic.BulkImportView):

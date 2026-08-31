@@ -61,6 +61,25 @@ class BranchStatusChoices(ChoiceSet):
         *TRANSITIONAL,
     )
 
+    # The status to which a branch is reset when the background job responsible for a
+    # transitional status is no longer running (e.g. its worker was killed). Each value
+    # mirrors the status that the corresponding branch operation restores itself when it
+    # fails, so recovery leaves the branch exactly where a caught error would have. See #622.
+    RECOVERY_STATUS: ClassVar = {
+        # A partially provisioned schema cannot be resumed; the branch must be deleted or
+        # re-created, which is what the provisioning failure path also does.
+        PROVISIONING: FAILED,
+        SYNCING: READY,
+        # Django applies each migration in its own transaction, so an interrupted migration
+        # leaves the branch consistent but partially migrated: the remaining migrations can
+        # simply be re-applied.
+        MIGRATING: PENDING_MIGRATIONS,
+        # Merges and reverts run inside a single transaction, which the database rolls back
+        # when the connection dies, so the branch is left as it was before the operation.
+        MERGING: READY,
+        REVERTING: MERGED,
+    }
+
 
 class BranchMergeStrategyChoices(ChoiceSet):
     ITERATIVE = 'iterative'

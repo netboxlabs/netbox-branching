@@ -14,6 +14,7 @@ from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ModelViewSet, ViewSet
 
 from netbox_branching import filtersets
+from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
 from netbox_branching.utilities import get_branchable_object_types
@@ -165,6 +166,38 @@ class BranchViewSet(ModelViewSet):
         branch.archive(user=request.user)
         branch.refresh_from_db()
 
+        serializer = self.get_serializer(branch)
+        return Response(serializer.data)
+
+    @extend_schema(
+        methods=['post'],
+        request=serializers.ForceSerializer(),
+        responses={200: serializers.BranchSerializer()},
+    )
+    @action(detail=True, methods=['post'])
+    def recover(self, request, pk):
+        """
+        Reset a branch which is stuck in a transitional status because the job responsible for it is
+        no longer running (e.g. its worker was killed).
+        """
+        if not request.user.has_perm('netbox_branching.change_branch'):
+            raise PermissionDenied("This user does not have permission to modify branches.")
+
+        branch = self.get_object()
+        if branch.status not in BranchStatusChoices.TRANSITIONAL:
+            return HttpResponseBadRequest("Branch is not in a transitional status.")
+
+        # Recover only a branch which is demonstrably stuck, unless the caller explicitly forces it.
+        serializer = serializers.ForceSerializer(data=request.data)
+        force = serializer.validated_data.get('force', False) if serializer.is_valid() else False
+        if force:
+            branch.force_recover(user=request.user)
+        elif not branch.recover(user=request.user):
+            return HttpResponseBadRequest(
+                "A job for this branch still appears to be running. Pass force=true to recover it anyway."
+            )
+
+        branch.refresh_from_db()
         serializer = self.get_serializer(branch)
         return Response(serializer.data)
 

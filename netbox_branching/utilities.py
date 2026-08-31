@@ -6,12 +6,14 @@ from dataclasses import dataclass
 from functools import cached_property
 
 from asgiref.local import Local
+from core.choices import JobStatusChoices
 from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db import connections
 from django.db.models import ForeignKey, ManyToManyField
 from django.http import HttpResponseBadRequest
 from django.urls import reverse
+from django.utils import timezone
 from django.utils.translation import gettext as _
 from netbox.plugins import get_plugin_config
 from netbox.utils import register_request_processor
@@ -28,6 +30,16 @@ from .constants import (
 from .contextvars import active_branch
 
 logger = logging.getLogger(__name__)
+
+# Sentinel returned when RQ has no record of a job at all: the job has been dropped from Redis
+# without its NetBox Job record ever being terminated.
+RQ_JOB_MISSING = 'missing'
+
+# RQ statuses which indicate that a job will not run (or run again)
+RQ_DEAD_STATUSES = ('failed', 'stopped', 'canceled')
+
+# RQ statuses which indicate that a job is waiting for a worker, and so is not abandoned
+RQ_PENDING_STATUSES = ('queued', 'deferred', 'scheduled')
 
 # Thread-local storage for tracking branch connection aliases (matches Django's approach)
 # Note: Aliases are tracked once and never removed, matching Django's pattern where
@@ -52,6 +64,7 @@ __all__ = (
     'get_sql_results',
     'get_tables_to_replicate',
     'is_api_request',
+    'is_job_abandoned',
     'record_applied_change',
     'register_branching_resolver',
     'register_objectchange_field_migrator',
@@ -627,3 +640,62 @@ class BranchActionIndicator:
 
     def __bool__(self):
         return self.permitted
+
+
+def _get_rq_job_status(job):
+    """
+    Return the RQ status of the RQ job backing a NetBox `Job`, the string ``'missing'`` if RQ no
+    longer knows about it, or None if RQ could not be consulted (e.g. Redis is unreachable).
+    """
+    import django_rq
+    from utilities.rqworker import get_queue_for_model
+
+    try:
+        # Fall back to the queue for the job's object type, matching Job.delete()'s handling of
+        # legacy jobs recorded before queue_name was introduced.
+        queue_name = job.queue_name or get_queue_for_model(job.object_type.model if job.object_type else None)
+        rq_job = django_rq.get_queue(queue_name).fetch_job(str(job.job_id))
+    except Exception as e:  # noqa: BLE001 — Redis being unavailable must not break the caller
+        logger.debug(f"Unable to retrieve RQ job for job {job.pk}: {e}")
+        return None
+
+    if rq_job is None:
+        return RQ_JOB_MISSING
+    try:
+        return rq_job.get_status()
+    except Exception as e:  # noqa: BLE001 — get_status() raises if the job vanished mid-call
+        logger.debug(f"Unable to read RQ status for job {job.pk}: {e}")
+        return RQ_JOB_MISSING
+
+
+def is_job_abandoned(job, grace_period=0):
+    """
+    Return True if `job` is recorded as still enqueued or running, but is not in fact being
+    executed by any worker. A worker which is killed outright (e.g. SIGKILL from an OOM killer
+    or a container eviction) has no opportunity to update the job, so its record — and the state
+    of whatever it was operating on — is left frozen indefinitely. See issue #622.
+
+    Args:
+        job: The `Job` to evaluate.
+        grace_period: Seconds to add to the configured `job_timeout` before a running job whose
+                      liveness cannot be confirmed via RQ is presumed dead.
+    """
+    # A job which has already terminated is definitionally not still running.
+    if job.status in JobStatusChoices.TERMINAL_STATE_CHOICES:
+        return True
+
+    rq_status = _get_rq_job_status(job)
+    if rq_status == RQ_JOB_MISSING or rq_status in RQ_DEAD_STATUSES:
+        return True
+    if rq_status in RQ_PENDING_STATUSES:
+        # The job is still waiting for a worker to pick it up.
+        return False
+
+    # Either RQ reports the job as started, or RQ could not be consulted. Fall back to elapsed
+    # time: RQ enforces job_timeout by killing the job, so a job which has outlived its timeout
+    # while its record still reads "running" can only mean that nothing is left to kill it.
+    if job.status != JobStatusChoices.STATUS_RUNNING:
+        return False
+    job_timeout = get_plugin_config('netbox_branching', 'job_timeout') or 0
+    deadline = (job.started or job.created) + datetime.timedelta(seconds=job_timeout + (grace_period or 0))
+    return timezone.now() > deadline

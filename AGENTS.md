@@ -314,7 +314,7 @@ To rehearse a publish without touching production PyPI, run the workflow manuall
 
 - **`DATABASES must be a DynamicSchemaDict instance`** — The host NetBox configuration has not wrapped `DATABASES` with `DynamicSchemaDict`. See the README installation instructions.
 - **`DATABASE_ROUTERS must contain 'netbox_branching.database.BranchAwareRouter'`** — Add the router string to `DATABASE_ROUTERS` in the NetBox configuration.
-- **Branch stuck in a transitional status** — A background job likely failed. Check the job log in the NetBox UI or database. The job timeout is configurable via `job_timeout` (default 3600 s).
+- **Branch stuck in a transitional status** — A background job likely failed, or its worker was killed before it could clear the status (#622). Check the job log in the NetBox UI or database. The hourly `RecoverStuckBranchesJob` resets such branches automatically (disable via `auto_recover_stuck_branches`); the Recover button on the branch view and the `recover/` API action do the same on demand. The job timeout is configurable via `job_timeout` (default 3600 s).
 - **Conflict detected on merge** — `ChangeDiff` found that the same object was modified in both main and the branch since the last sync. Sync the branch first to incorporate main's changes, then re-attempt the merge.
 - **`PENDING_MIGRATIONS` status** — The branch schema is missing Django migrations that have been applied to main. Run `MigrateBranchJob` (or use the Migrate button in the UI) to apply them.
 - **Tests fail with connection errors** — Ensure PostgreSQL and Redis are running and accessible. The test config in `testing/configuration.py` expects both on localhost default ports.

@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 from functools import cached_property, partial
 
-from core.choices import ObjectChangeActionChoices
+from core.choices import JobStatusChoices, ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
 from django.apps import apps
 from django.conf import settings
@@ -58,6 +58,7 @@ from netbox_branching.utilities import (
     activate_branch,
     get_branchable_object_types,
     get_tables_to_replicate,
+    is_job_abandoned,
     record_applied_change,
     supports_branching,
 )
@@ -573,6 +574,109 @@ class Branch(JobsMixin, PrimaryModel):
         return self._can_do_action('archive')
 
     #
+    # Interrupted operation recovery
+    #
+
+    def check_stuck(self):
+        """
+        Return a ``(job, is_stuck)`` tuple describing whether this branch is stuck in a transitional
+        status — that is, whether the job responsible for the status is no longer running. `job` is
+        the Job which owns the status, or None if no such job record exists. See issue #622.
+
+        A branch operation writes its transitional status to the database before it starts and clears
+        it from within the worker process, so a worker which is killed outright (an OOM kill, an
+        evicted container, `kill -9`) leaves the branch in that status permanently. The job which
+        should have cleared it is identified by the status itself; it is considered no longer running
+        if it has already terminated, or if RQ and its elapsed runtime agree that nothing is executing
+        it any more.
+
+        A branch whose operation was invoked directly rather than through the job queue has no job to
+        report on; because a transitional status must otherwise be cleared by a job, such a branch is
+        reported as stuck (with `None` for the job) once no matching job is enqueued for it.
+        """
+        from netbox_branching.jobs import get_job_class_for_status
+
+        if self.status not in BranchStatusChoices.TRANSITIONAL:
+            return None, False
+
+        job_class = get_job_class_for_status(self.status)
+        job = self.jobs.filter(name=job_class.Meta.name).order_by('created').last() if job_class else None
+        if job is None:
+            # No job record survives for this operation (it was purged, or the operation was never
+            # queued), so nothing is going to clear the status.
+            return None, True
+
+        grace_period = get_plugin_config('netbox_branching', 'stuck_job_grace_period') or 0
+        return job, is_job_abandoned(job, grace_period)
+
+    @property
+    def is_stuck(self):
+        """
+        Indicates that the branch is in a transitional status which no running job will ever clear.
+        """
+        _, stuck = self.check_stuck()
+        return stuck
+
+    def recover(self, user=None):
+        """
+        Reset a branch which is stuck in a transitional status, returning the status it was reset to.
+        Returns None if the branch is not stuck. Any orphaned job record is marked as failed so that
+        it no longer appears to be running.
+        """
+        logger = logging.getLogger('netbox_branching.branch.recover')
+
+        job, stuck = self.check_stuck()
+        if not stuck:
+            return None
+
+        return self._reset_status(job, user, logger)
+
+    recover.alters_data = True
+
+    def force_recover(self, user=None):
+        """
+        Reset a branch in a transitional status regardless of whether its job still appears to be
+        running. Intended for the explicit, operator-initiated recovery of a branch whose job records
+        are no longer available; prefer recover() everywhere else.
+        """
+        logger = logging.getLogger('netbox_branching.branch.recover')
+
+        if self.status not in BranchStatusChoices.TRANSITIONAL:
+            return None
+
+        job, _ = self.check_stuck()
+        return self._reset_status(job, user, logger)
+
+    force_recover.alters_data = True
+
+    def _reset_status(self, job, user, logger):
+        """
+        Perform the status reset for recover()/force_recover(). Assumes the branch has already been
+        determined to be in a transitional status.
+        """
+        new_status = BranchStatusChoices.RECOVERY_STATUS[self.status]
+        logger.warning(
+            f"Recovering branch {self} from status '{self.status}': resetting to '{new_status}' "
+            f"(requested by {user or 'system'})"
+        )
+
+        # Terminate the orphaned job record so it no longer reports itself as running. Jobs which
+        # have already terminated are left as they are, to preserve their recorded outcome.
+        if job is not None and job.status not in JobStatusChoices.TERMINAL_STATE_CHOICES:
+            job.terminate(
+                status=JobStatusChoices.STATUS_FAILED,
+                error=str(_(
+                    "The job did not complete. Its worker is no longer running; the branch has been "
+                    "reset to '{status}' so that the operation can be attempted again."
+                )).format(status=new_status)
+            )
+
+        Branch.objects.filter(pk=self.pk).update(status=new_status)
+        self.status = new_status
+
+        return new_status
+
+    #
     # Branch actions
     #
 
@@ -882,6 +986,11 @@ class Branch(JobsMixin, PrimaryModel):
                     logger.info(f"Applying migration {migration}")
             elif action == "apply_success" and migration is not None:
                 self.applied_migrations.append(migration)
+                # Persist after each migration rather than only at the end. A migration is applied
+                # in its own transaction, so one which has succeeded stays applied even if the job
+                # is interrupted; recording it immediately keeps applied_migrations consistent with
+                # the branch schema when the job never reaches its final save(). See issue #622.
+                Branch.objects.filter(pk=self.pk).update(applied_migrations=self.applied_migrations)
 
         # Emit pre-migration signal
         pre_migrate.send(sender=self.__class__, branch=self, user=user)
@@ -923,7 +1032,7 @@ class Branch(JobsMixin, PrimaryModel):
                 if err_message := str(e):
                     logger.error(err_message)
                 # Mark the branch as failed so it cannot be activated in a partially-migrated
-                # state. Persist any migrations already recorded as applied.
+                # state. Migrations already applied have been persisted by the progress callback.
                 Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
                 self.status = BranchStatusChoices.FAILED
                 raise

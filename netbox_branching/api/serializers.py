@@ -19,6 +19,7 @@ __all__ = (
     'CommitSerializer',
     'ConflictResponseSerializer',
     'ConflictSummarySerializer',
+    'ForceSerializer',
 )
 
 
@@ -183,6 +184,10 @@ class ConflictResponseSerializer(serializers.Serializer):
 class CommitSerializer(serializers.Serializer):
     commit = serializers.BooleanField(required=False)
     acknowledge_conflicts = serializers.BooleanField(required=False, default=False)
+
+
+class ForceSerializer(serializers.Serializer):
+    force = serializers.BooleanField(required=False, default=False)
 
 
 class BranchableModelSerializer(serializers.Serializer):
