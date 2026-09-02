@@ -17,7 +17,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, connection, connections, models, transaction
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.operations.special import RunSQL, SeparateDatabaseAndState
 from django.db.models.signals import post_save, pre_delete
@@ -40,6 +40,7 @@ from utilities.serialization import serialize_object
 from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
+from netbox_branching.error_report import describe_validation_failure
 from netbox_branching.merge_strategies import get_merge_strategy
 from netbox_branching.provisioning import (
     build_main_constraint_map,
@@ -590,6 +591,30 @@ class Branch(JobsMixin, PrimaryModel):
     # Branch actions
     #
 
+    def _apply_from_main(self, change, logger, skip_missing=True):
+        """
+        Apply a change from main to this branch's schema, raising an error which identifies
+        the object and the collision if it cannot be applied.
+
+        A change valid in main can still be rejected by the branch when a model's clean()
+        or a database constraint considers objects beyond the one being changed (e.g. a rack
+        unit the branch has already filled). The two objects are independent, so there is no
+        ChangeDiff conflict for it. The sync is aborted rather than continued without the
+        change, as later changes from main may depend on it. (#632)
+        """
+        try:
+            change.apply(self, using=self.connection_name, logger=logger, skip_missing=skip_missing)
+        except (ValidationError, IntegrityError) as e:
+            model_name = change.changed_object_type.model_class()._meta.verbose_name
+            message = (
+                f'Unable to sync {model_name} "{change.object_repr}" from main: it conflicts with data in '
+                f'this branch ({describe_validation_failure(e)}). Change or remove the conflicting object '
+                f'within the branch, then sync again.'
+            )
+            if isinstance(e, ValidationError):
+                raise ValidationError(message) from e
+            raise IntegrityError(message) from e
+
     def _apply_sync_update(self, change, logger, touched_object_keys, sync_buffer):
         """
         Apply a non-DELETE change from main and, when the branch has also touched the
@@ -612,7 +637,7 @@ class Branch(JobsMixin, PrimaryModel):
 
         # If the branch has not touched this object, no merge-time conflict is possible
         if (content_type_id, object_id) not in touched_object_keys:
-            change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+            self._apply_from_main(change, logger)
             return
 
         model_class = change.changed_object_type.model_class()
@@ -624,11 +649,11 @@ class Branch(JobsMixin, PrimaryModel):
             prechange_data = _serialize_for_sync(before)
         except model_class.DoesNotExist:
             # Branch already removed the object; let apply() handle it via skip_missing
-            change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+            self._apply_from_main(change, logger)
             return
 
         # Apply the change from main onto the branch
-        change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+        self._apply_from_main(change, logger)
 
         # Capture the branch's state after applying main's change
         try:

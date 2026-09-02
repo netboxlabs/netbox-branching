@@ -17,6 +17,7 @@ from netbox_branching.constants import PG_UNIQUE_VIOLATION
 from netbox_branching.error_report import (
     annotate_validation_error,
     build_error_report,
+    describe_validation_failure,
     get_entry_message,
     get_merge_recommendations,
 )
@@ -90,6 +91,28 @@ class BuildErrorReportTestCase(SimpleTestCase):
         self.assertEqual(entry['type'], 'validation_error')
         self.assertEqual(entry['field'], 'name')
 
+    def test_validation_error_valid_in_branch_classified_as_conflict(self):
+        """An object valid in the branch but rejected by main is a cross-schema collision (#632)."""
+        exc = ValidationError({'position': [ValidationError('U12 is already occupied', code='invalid')]})
+        exc.netbox_branching_valid_in_branch = True
+        entry = build_error_report(exc)
+        self.assertEqual(entry['type'], 'validation_conflict')
+        self.assertEqual(entry['field'], 'position')
+        self.assertEqual(entry['detail'], 'U12 is already occupied')
+
+    def test_validation_error_invalid_in_branch_stays_a_validation_error(self):
+        """Data which is invalid in the branch too is not a cross-schema conflict."""
+        exc = ValidationError({'position': [ValidationError('U12 is already occupied', code='invalid')]})
+        exc.netbox_branching_valid_in_branch = False
+        entry = build_error_report(exc)
+        self.assertEqual(entry['type'], 'validation_error')
+
+    def test_uniqueness_takes_precedence_over_conflict_classification(self):
+        """A unique violation keeps its own (more specific) type and rename guidance."""
+        exc = ValidationError({'slug': [ValidationError('duplicate', code='unique')]})
+        exc.netbox_branching_valid_in_branch = True
+        self.assertEqual(build_error_report(exc)['type'], 'unique_constraint')
+
     def test_unknown_exception_classified_as_database_error(self):
         entry = build_error_report(RuntimeError('something else'))
         self.assertEqual(entry['type'], 'database_error')
@@ -127,6 +150,19 @@ class GetEntryMessageTestCase(SimpleTestCase):
         msg = get_entry_message({'type': 'validation_error', 'model': 'site', 'field': 'name'})
         self.assertIn('Site', msg)
         self.assertIn('name', msg)
+
+    def test_validation_conflict_message_carries_underlying_reason(self):
+        """The Error column must show why main rejected the change, not just the field."""
+        msg = get_entry_message({
+            'type': 'validation_conflict',
+            'model': 'device',
+            'field': 'position',
+            'detail': 'U12 is already occupied',
+        })
+        self.assertIn('Device', msg)
+        self.assertIn('position', msg)
+        self.assertIn('main schema', msg)
+        self.assertIn('U12 is already occupied', msg)
 
     def test_database_error_returns_generic_message(self):
         msg = get_entry_message({'type': 'database_error'})
@@ -175,6 +211,33 @@ class GetMergeRecommendationsTestCase(SimpleTestCase):
         self.assertEqual(len(recs), 1)
         self.assertIn('name', str(recs[0]))
 
+    def test_validation_conflict_iterative_suggests_sync_squash_and_main(self):
+        recs = get_merge_recommendations(
+            {'type': 'validation_conflict', 'field': 'position'},
+            merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
+        )
+        joined = ' '.join(str(r) for r in recs)
+        self.assertEqual(len(recs), 3)
+        self.assertIn('Sync the branch', joined)
+        self.assertIn('position', joined)
+        self.assertIn('Squash', joined)
+        self.assertIn('main schema', joined)
+
+    def test_validation_conflict_squash_omits_redundant_squash_suggestion(self):
+        recs = get_merge_recommendations(
+            {'type': 'validation_conflict', 'field': 'position'},
+            merge_strategy=BranchMergeStrategyChoices.SQUASH,
+        )
+        self.assertEqual(len(recs), 2)
+        self.assertNotIn('Squash', ' '.join(str(r) for r in recs))
+
+    def test_validation_conflict_without_field_uses_generic_guidance(self):
+        recs = get_merge_recommendations(
+            {'type': 'validation_conflict'},
+            merge_strategy=BranchMergeStrategyChoices.SQUASH,
+        )
+        self.assertIn('Sync the branch', str(recs[0]))
+
     def test_database_error_iterative_suggests_log_review_and_squash(self):
         recs = get_merge_recommendations(
             {'type': 'database_error'},
@@ -188,3 +251,22 @@ class GetMergeRecommendationsTestCase(SimpleTestCase):
             merge_strategy=BranchMergeStrategyChoices.SQUASH,
         )
         self.assertEqual(len(recs), 1)
+
+
+class DescribeValidationFailureTestCase(SimpleTestCase):
+    """Field names must survive into the sync error message, and it must stay on one line."""
+
+    def test_field_errors_are_prefixed_with_the_field_name(self):
+        exc = ValidationError({'position': ['U12 is already occupied']})
+        self.assertEqual(describe_validation_failure(exc), 'position: U12 is already occupied')
+
+    def test_non_field_errors_are_not_prefixed(self):
+        exc = ValidationError('Something is wrong')
+        self.assertEqual(describe_validation_failure(exc), 'Something is wrong')
+
+    def test_integrity_error_is_collapsed_to_one_line(self):
+        exc = IntegrityError('duplicate key value\nDETAIL:  Key (a)=(1) already exists.')
+        self.assertEqual(
+            describe_validation_failure(exc),
+            'duplicate key value DETAIL: Key (a)=(1) already exists.',
+        )

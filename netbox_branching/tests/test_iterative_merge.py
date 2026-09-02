@@ -14,12 +14,14 @@ from dcim.models import (
     Manufacturer,
     ModuleBay,
     ModuleBayTemplate,
+    Rack,
     Region,
     Site,
     VirtualChassis,
 )
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db import connections
 from django.test import RequestFactory, SimpleTestCase, TransactionTestCase
 from django.urls import reverse
@@ -29,6 +31,7 @@ from netbox.context_managers import event_tracking
 from utilities.exceptions import AbortTransaction
 
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
+from netbox_branching.error_report import build_error_report, get_entry_message, get_merge_recommendations
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import DELETED, _deep_merge_dict, _strip_deleted, activate_branch, diff_for_merge
@@ -1334,11 +1337,116 @@ class BaseMergeTests:
             msg='commit=False must not undo the previously merged change',
         )
 
+    # -------------------------------------------------------------------------
+    # Cross-object validation conflicts (#632)
+    # -------------------------------------------------------------------------
+
+    def _setup_rack_slot_collision(self):
+        """
+        Build the #632 scenario: the branch and main each create a different device in the
+        same rack unit. Returns (branch, branch_device_id).
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            rack = Rack.objects.create(name='Rack 1', site=site, u_height=42)
+
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(request):
+            device = Device.objects.create(
+                name='Branch Device', site=site, rack=rack, position=12, face='front',
+                device_type=self.device_type, role=self.device_role,
+            )
+            device_id = device.pk
+
+        with event_tracking(request):
+            Device.objects.create(
+                name='Main Device', site=site, rack=rack, position=12, face='front',
+                device_type=self.device_type, role=self.device_role,
+            )
+
+        return branch, device_id
+
+    def test_merge_cross_object_conflict_is_reported_as_such(self):
+        """
+        The collision produces no ChangeDiff conflict, so it first appears when the branch's
+        change is replayed onto main. Before #632 it was reported as a plain validation error
+        advising the user to fix a value which is valid in the branch.
+        """
+        branch, _ = self._setup_rack_slot_collision()
+
+        self.assertFalse(ChangeDiff.objects.filter(branch=branch, conflicts__isnull=False).exists())
+
+        with self.assertRaises(ValidationError) as ctx:
+            branch.merge(user=self.user, commit=True)
+
+        entry = build_error_report(ctx.exception)
+        self.assertEqual(entry['type'], 'validation_conflict')
+        self.assertEqual(entry['model'], 'device')
+        self.assertEqual(entry['field'], 'position')
+        self.assertIn('U12 is already occupied', entry['detail'])
+
+        # The rendered message carries the underlying reason, not just the field name
+        self.assertIn('U12 is already occupied', get_entry_message(entry))
+
+        # ...and the guidance points at the branch/main collision rather than a bad value
+        recommendations = ' '.join(
+            str(r) for r in get_merge_recommendations(entry, merge_strategy=self.MERGE_STRATEGY)
+        )
+        self.assertIn('Sync the branch', recommendations)
+        self.assertIn('main schema', recommendations)
+
+        # Nothing was written to main and the branch is left usable
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+        self.assertEqual(Device.objects.filter(name='Branch Device').count(), 0)
+
 
 class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
     """Test cases for Branch merge using iterative merge strategy."""
 
     MERGE_STRATEGY = BranchMergeStrategyChoices.ITERATIVE
+
+    def test_cross_object_conflict_resolved_in_branch_still_blocks_iterative_merge(self):
+        """
+        Resolving the collision in the branch unblocks the sync but not an iterative merge,
+        which replays the original create in the contested unit. Hence the squash
+        recommendation; see the squash suite for the passing counterpart.
+        """
+        branch, device_id = self._setup_rack_slot_collision()
+
+        with self.assertRaises(ValidationError):
+            branch.merge(user=self.user, commit=True)
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            device = Device.objects.get(pk=device_id)
+            device.position = 20
+            device.full_clean()
+            device.save()
+
+        branch.sync(user=self.user, commit=True)
+
+        with self.assertRaises(ValidationError):
+            branch.merge(user=self.user, commit=True)
+
+        recommendations = ' '.join(
+            str(r) for r in get_merge_recommendations(
+                {'type': 'validation_conflict', 'field': 'position'},
+                merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
+            )
+        )
+        self.assertIn('Squash', recommendations)
+
+    def _make_request(self):
+        """Build a per-test request for event_tracking()."""
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+        return request
 
 
 class DiffForMergeTests(SimpleTestCase):

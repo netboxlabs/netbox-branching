@@ -97,6 +97,7 @@ Squash is a fallback for situations where iterative fails or produces conflicts 
 | Full audit trail required in main | Iterative |
 | Iterative fails with intermediate state errors | Squash |
 | Duplicate objects created in both main and branch | Squash |
+| A branch object collides with a separate object in main (rack unit, position, address) | Squash |
 | Branch contains many redundant changes to the same object | Either; squash produces a cleaner changelog |
 
 When in doubt, try iterative first. If it fails, squash is typically the right recovery path.
@@ -119,6 +120,26 @@ In the event an object has been modified in both your branch _and_ in main in a 
 The good news is that you will be able to proceed with synchronizing or merging your branch even if conflicts exist, however you will need to acknowledge each such conflict to ensure that overwriting the relevant data in your branch with the data from main is acceptable. Do this by selecting each conflict before continuing with the merge.
 
 Alternatively, if the conflicting changes are problematic, you can go back and make the necessary changes in main to avoid overwriting data within your branch.
+
+### Collisions Between Separate Objects
+
+Conflict detection compares the branch's and main's versions of the **same** object, field by field. Some collisions involve two *different* objects and so are never flagged as conflicts, because neither object has diverged: a device your branch installed in rack unit 12 and a different device installed in the same unit in main, two devices assigned the same position in a virtual chassis, an IP address claimed independently on both sides within one VRF, and so on. These constraints are enforced by each model's validation logic, which considers objects beyond the one being changed.
+
+Neither object is invalid where it was created — they only collide when one schema's change is applied to the other. The symptoms are:
+
+- **Merging fails** with a validation error naming a field (for example `position`) on the branch's object. The merge report classifies this as a conflict with data in the main schema and lists the underlying reason.
+- **Syncing fails** with an error naming the object from main that could not be applied and what it collides with. The sync is aborted rather than partially applied, because later changes from main often depend on earlier ones.
+
+To resolve one:
+
+1. Change or remove the conflicting object **in your branch** (for example, move the branch's device to a free rack unit). Deleting the branch's work is not necessary.
+2. Sync the branch, which now succeeds and brings main's object in.
+3. Merge using the **squash** strategy. The iterative strategy replays every change in the branch, including the original one that claimed the contested value, which main still rejects; squash applies only each object's final state.
+
+Alternatively, change the conflicting object in main so that the branch's change can be applied as recorded.
+
+!!! tip
+    A dry run of the merge surfaces these collisions before any data is written. See [Dry Runs](#dry-runs) below.
 
 ## Dry Runs
 

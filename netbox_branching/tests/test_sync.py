@@ -21,12 +21,14 @@ from dcim.models import (
     Interface,
     Manufacturer,
     Platform,
+    Rack,
     Region,
     Site,
     VirtualChassis,
 )
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
@@ -1222,4 +1224,92 @@ class SyncTestCase(TransactionTestCase):
             self.assertFalse(
                 Site.objects.filter(slug='pending-site-dryrun').exists(),
                 msg="commit=False must not persist the synced change into the branch schema",
+            )
+
+    # -------------------------------------------------------------------------
+    # Cross-object validation conflicts (#632)
+    # -------------------------------------------------------------------------
+
+    def test_sync_cross_object_validation_conflict_reports_object_and_reason(self):
+        """
+        Two devices claiming the same rack unit are independent objects, so no ChangeDiff
+        conflict is recorded and the collision only surfaces on apply. The sync aborts, but
+        the error must name the object from main and the reason; before #632 it raised a
+        bare field-level ValidationError naming neither.
+        """
+        with event_tracking(self.request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            rack = Rack.objects.create(name='Rack 1', site=site, u_height=42)
+
+        branch = self._create_and_provision_branch()
+
+        # The branch puts a device in U12
+        with activate_branch(branch), event_tracking(self.request):
+            Device.objects.create(
+                name='Branch Device', site=site, rack=rack, position=12, face='front',
+                device_type=self.device_type, role=self.device_role,
+            )
+
+        # Main independently puts a different device in the same slot
+        with event_tracking(self.request):
+            Device.objects.create(
+                name='Main Device', site=site, rack=rack, position=12, face='front',
+                device_type=self.device_type, role=self.device_role,
+            )
+
+        # No field-level conflict is recorded: the two devices are separate objects
+        self.assertFalse(ChangeDiff.objects.filter(branch=branch, conflicts__isnull=False).exists())
+
+        with self.assertRaises(ValidationError) as ctx:
+            branch.sync(user=self.user, commit=True)
+
+        message = ' '.join(ctx.exception.messages)
+        self.assertIn('Main Device', message)
+        self.assertIn('U12 is already occupied', message)
+        self.assertIn('sync again', message)
+
+        # The branch is left usable, not stuck in a transitional status
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+    def test_sync_succeeds_once_branch_side_conflict_is_resolved(self):
+        """
+        Moving the branch's own device out of the contested unit is enough to let the sync
+        through, with no change in main and no loss of branch work.
+        """
+        with event_tracking(self.request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            rack = Rack.objects.create(name='Rack 1', site=site, u_height=42)
+
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self.request):
+            device = Device.objects.create(
+                name='Branch Device', site=site, rack=rack, position=12, face='front',
+                device_type=self.device_type, role=self.device_role,
+            )
+            device_id = device.pk
+
+        with event_tracking(self.request):
+            Device.objects.create(
+                name='Main Device', site=site, rack=rack, position=12, face='front',
+                device_type=self.device_type, role=self.device_role,
+            )
+
+        with self.assertRaises(ValidationError):
+            branch.sync(user=self.user, commit=True)
+
+        # Resolve within the branch by moving its own device
+        with activate_branch(branch), event_tracking(self.request):
+            device = Device.objects.get(pk=device_id)
+            device.position = 20
+            device.full_clean()
+            device.save()
+
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertEqual(
+                sorted(Device.objects.values_list('name', 'position')),
+                [('Branch Device', 20), ('Main Device', 12)],
             )

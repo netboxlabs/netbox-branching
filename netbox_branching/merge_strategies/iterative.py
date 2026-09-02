@@ -33,7 +33,9 @@ class IterativeMergeStrategy(MergeStrategy):
                 try:
                     change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
                 except ValidationError as e:
-                    annotate_validation_error(e, model_class, change.changed_object_id, change.changed_object_type_id)
+                    annotate_validation_error(
+                        e, model_class, change.changed_object_id, change.changed_object_type_id, branch=branch
+                    )
                     raise
 
         self._clean(models)

@@ -7,6 +7,7 @@ from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
 from dcim.models import Device, Interface, Location, Region, Site, VirtualChassis
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
 from ipam.models import IPAddress
@@ -997,6 +998,33 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
         self.assertFalse(
             Site.objects.filter(id=site_id).exists(),
             msg='UPDATE+DELETE must collapse to a single DELETE; main row remains',
+        )
+
+    def test_cross_object_conflict_resolved_in_branch_can_be_merged(self):
+        """
+        The escape route from a cross-object collision (#632): move the branch's own device to
+        a free unit, sync, then merge. Squash never replays the create in the contested unit,
+        so the branch's work is preserved.
+        """
+        branch, device_id = self._setup_rack_slot_collision()
+
+        with self.assertRaises(ValidationError):
+            branch.merge(user=self.user, commit=True)
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            device = Device.objects.get(pk=device_id)
+            device.position = 20
+            device.full_clean()
+            device.save()
+
+        branch.sync(user=self.user, commit=True)
+        branch.merge(user=self.user, commit=True)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        self.assertEqual(
+            sorted(Device.objects.values_list('name', 'position')),
+            [('Branch Device', 20), ('Main Device', 12)],
         )
 
     def _make_request(self):

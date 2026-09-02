@@ -36,7 +36,7 @@
     {% else %}
       <div class="alert alert-success">
         <i class="mdi mdi-check-circle"></i>
-        {% blocktrans %}No field-level conflicts found. (Note: Database constraint violations, e.g. duplicate names or slugs, can only be detected during merge.){% endblocktrans %}
+        {% blocktrans %}No field-level conflicts found. (Note: Collisions between two separate objects &mdash; duplicate names or slugs, two devices claiming one rack unit, and so on &mdash; are not field-level conflicts and can only be detected during merge. Run a dry run to check for them.){% endblocktrans %}
       </div>
     {% endif %}
     {% if changes_summary.creates or changes_summary.updates or changes_summary.deletes %}
