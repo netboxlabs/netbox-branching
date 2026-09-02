@@ -75,7 +75,8 @@ jobs:
       - name: Get NetBox ref from PR labels
         id: netbox-ref
         run: |
-          # Check for label like "test-against:develop" or "test-against:v3.7"
+          DEFAULT_REF="main"
+          # Check for label like "test-against:main" or "test-against:v4.7.0"
           LABELS='${{ toJson(github.event.pull_request.labels.*.name) }}'
           echo "Labels: $LABELS"
           # Extract ref from label (format: "test-against:branch-name")
@@ -84,8 +85,8 @@ jobs:
             echo "Found test-against label: $REF"
             echo "ref=$REF" >> $GITHUB_OUTPUT
           else
-            echo "No test-against label found, using main"
-            echo "ref=main" >> $GITHUB_OUTPUT
+            echo "No test-against label found, using $DEFAULT_REF"
+            echo "ref=$DEFAULT_REF" >> $GITHUB_OUTPUT
           fi
       - name: Checkout netbox
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
