@@ -1,6 +1,6 @@
 # Change Log
 
-## v1.2.0-beta1
+## v1.2.0
 
 ### NetBox v4.7 Support ([#617](https://github.com/netboxlabs/netbox-branching/issues/617))
 
