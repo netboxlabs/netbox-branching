@@ -6,7 +6,7 @@
 
 ## Tech Stack
 
-- Python (defer to `pyproject.toml`; currently `>=3.10`)
+- Python (defer to `pyproject.toml`; currently `>=3.12`)
 - NetBox (host app — minimum and maximum versions are pinned in `netbox_branching/__init__.py` `min_version` / `max_version`; `COMPATIBILITY.md` summarises the matrix)
 - Django + Django REST Framework (NetBox's foundations)
 - PostgreSQL (required — branch isolation depends on schema-level separation)
