@@ -21,7 +21,7 @@ from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transac
 from django.db.migrations.executor import MigrationExecutor
 from django.db.migrations.operations.special import RunSQL, SeparateDatabaseAndState
 from django.db.models.signals import post_save, pre_delete
-from django.db.utils import ProgrammingError
+from django.db.utils import DatabaseError, ProgrammingError
 from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
@@ -101,18 +101,32 @@ def _branch_isolated_runsql(branch_schema, main_schema):
     duration of the block. Safe because NetBox runs branch migrations as RQ
     jobs (one per worker process); concurrent ``Branch.migrate()`` calls in
     the same process would race.
+
+    A body needing objects from another schema — extension types and operators, which
+    live wherever the extension was installed — must put that schema on the path itself;
+    NetBox's ltree backfills do so (see ``utilities/mptt_to_ltree.py``). (#617)
     """
+    logger = logging.getLogger('netbox_branching.branch.migrate')
     original = RunSQL.database_forwards
+    isolated_path = branch_schema
+    full_path = f'{branch_schema},{main_schema}'
 
     def database_forwards(self, app_label, schema_editor, from_state, to_state):
         connection = schema_editor.connection
-        with connection.cursor() as cursor:
-            cursor.execute(_SET_SEARCH_PATH, [branch_schema])
+
+        def set_search_path(value):
+            with connection.cursor() as cursor:
+                cursor.execute(_SET_SEARCH_PATH, [value])
+
+        set_search_path(isolated_path)
         try:
             return original(self, app_label, schema_editor, from_state, to_state)
         finally:
-            with connection.cursor() as cursor:
-                cursor.execute(_SET_SEARCH_PATH, [f'{branch_schema},{main_schema}'])
+            try:
+                set_search_path(full_path)
+            except DatabaseError:
+                # Transaction already aborted; don't mask the original failure
+                logger.debug(f'Unable to restore search_path after failed RunSQL in {app_label}')
 
     RunSQL.database_forwards = database_forwards
     try:
@@ -1027,6 +1041,10 @@ class Branch(JobsMixin, PrimaryModel):
                         if migration in migrations_to_run:
                             fake = _fake_for_branch(migration)
                             state = executor.apply_migration(state, migration, fake=fake)
+                            if fake:
+                                # apply_migration() doesn't advance the state when faking, leaving
+                                # later data migrations with stale historical models. (#617)
+                                state = migration.mutate_state(state, preserve=False)
                             migrations_to_run.remove(migration)
             except Exception as e:
                 if err_message := str(e):
@@ -1208,7 +1226,7 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Create the schema & replicate main tables.
 
-        Four phases:
+        Five phases:
           1. Metadata setup — create the schema, the ObjectChange skeleton, the
              django_migrations copy, and the empty (no constraints, no indexes)
              destination tables. The constraint and index maps for main are
@@ -1219,7 +1237,14 @@ class Branch(JobsMixin, PrimaryModel):
              (each one builds its backing index implicitly under the original
              name) and then replay every remaining indexdef against the populated
              branch tables.
-          4. ANALYZE the populated tables so the planner has real statistics
+          4. Replicate triggers — CREATE TABLE ... (LIKE ...) does not carry
+             triggers, so copy every non-internal trigger from main's copied
+             tables onto the branch tables. NetBox 4.7+ maintains ltree
+             path/sort_path columns and denormalized _site/_location/_rack columns
+             via per-table triggers (formerly Python signal handlers); without
+             them, writes inside a branch would leave those columns stale. Done
+             after Phase 2 so the triggers don't fire on the bulk snapshot load.
+          5. ANALYZE the populated tables so the planner has real statistics
              immediately rather than waiting for autovacuum.
 
         On any failure the (possibly partial) schema is dropped and the branch
@@ -1419,7 +1444,15 @@ class Branch(JobsMixin, PrimaryModel):
                 skip_indexes={*SKIP_INDEXES, *constraint_backed_indexes},
             )
 
-            # Phase 4: refresh planner statistics. After the bulk copy the branch
+            # Phase 4: replicate triggers. CREATE TABLE ... (LIKE ...) does not
+            # copy triggers, and NetBox 4.7+ relies on per-table triggers to keep
+            # ltree path/sort_path and denormalized _site/_location/_rack columns
+            # up to date (both were previously maintained in Python). Install them
+            # only after the Phase 2 data copy so they don't fire per row on the
+            # bulk snapshot load, which already carries correct values from main.
+            self._replicate_triggers(schema, main_schema, relevant_tables)
+
+            # Phase 5: refresh planner statistics. After the bulk copy the branch
             # tables have no statistics, so the first queries against the branch
             # (sync, change-diff computation, etc.) would plan against empty-table
             # estimates until autovacuum eventually catches up. ANALYZE is
@@ -1488,6 +1521,84 @@ class Branch(JobsMixin, PrimaryModel):
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.PROVISIONED)
 
     provision.alters_data = True
+
+    def _replicate_triggers(self, schema, main_schema, tables):
+        """
+        Copy user-defined triggers from the main schema's tables onto the branch
+        schema's copies of those tables.
+
+        ``CREATE TABLE ... (LIKE ...)`` does not carry triggers, and since NetBox
+        4.7 several behaviours that used to live in Python signal handlers are
+        implemented as per-table PostgreSQL triggers — ltree path/sort_path
+        maintenance and the denormalized _site/_location/_rack columns. Without
+        replicating them, a write inside a branch (reparenting a Region, moving a
+        Device between sites, etc.) would leave those columns stale.
+
+        The trigger functions are defined in the main schema and address their
+        target table by *unqualified* name, resolving it through ``search_path``
+        at execution time. Recreating a trigger under ``search_path =
+        <branch>,<main>`` therefore binds it to the branch table (searched first)
+        while still reusing the main schema's function (searched second) — so no
+        per-branch functions are created and the trigger operates only on branch
+        data. Internal (constraint/FK-enforcement) triggers are excluded; those
+        are rebuilt by the Phase 3 constraint pass.
+
+        Two consequences of resolving the target through ``search_path``:
+
+        * Any raw SQL which writes a branch table by *schema-qualified* name from a
+          connection whose ``search_path`` is the main schema (as the provisioning
+          copy statements do) would have its triggers read and write main's tables.
+          Such statements are only safe against tables which carry no triggers, or
+          when run on a connection with the branch schema searched first.
+        * NetBox's ltree triggers take a per-tree advisory lock keyed on
+          ``TG_TABLE_NAME``, which carries no schema. A branch and the main schema
+          therefore contend on the same key for the same tree, and because the
+          cross-tree path takes two locks, a branch operation and a main operation
+          touching the same pair of trees in opposite order can deadlock.
+        """
+        logger = logging.getLogger('netbox_branching.branch.provision')
+        with connection.cursor() as cursor:
+            cursor.execute("BEGIN")
+            try:
+                # Fetch trigger definitions with the main schema alone on the
+                # search_path so pg_get_triggerdef emits unqualified table and
+                # function names (both live in the main schema). Emitting them
+                # qualified would rebind the recreated trigger to the main table.
+                cursor.execute(f"SET LOCAL search_path = {quote_ident(main_schema)}")
+                cursor.execute(
+                    """
+                    SELECT c.relname, pg_get_triggerdef(t.oid, true)
+                    FROM pg_trigger t
+                    JOIN pg_class c ON t.tgrelid = c.oid
+                    JOIN pg_namespace n ON c.relnamespace = n.oid
+                    WHERE n.nspname = %s
+                      AND NOT t.tgisinternal
+                      AND c.relname = ANY(%s)
+                    """,
+                    [main_schema, list(tables)],
+                )
+                triggerdefs = cursor.fetchall()
+
+                if triggerdefs:
+                    # Recreate each trigger with the branch schema searched first so
+                    # the unqualified table name binds to the branch copy, while the
+                    # unqualified function name still resolves in the main schema.
+                    cursor.execute(
+                        f"SET LOCAL search_path = {quote_ident(schema)}, {quote_ident(main_schema)}"
+                    )
+                    for table, triggerdef in triggerdefs:
+                        logger.debug(f'Replicating trigger onto {schema}.{table}')
+                        cursor.execute(triggerdef)
+
+                cursor.execute("COMMIT")
+                logger.debug(f'Replicated {len(triggerdefs)} trigger(s) onto schema {schema}')
+            except Exception:
+                try:
+                    cursor.execute("ROLLBACK")
+                except Exception:
+                    # Don't let a broken connection mask the original failure
+                    logger.exception(f'Failed to roll back trigger replication for {schema}')
+                raise
 
     def archive(self, user):
         """

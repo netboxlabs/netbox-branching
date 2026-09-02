@@ -6,7 +6,7 @@
 
 ## Tech Stack
 
-- Python (defer to `pyproject.toml`; currently `>=3.10`)
+- Python (defer to `pyproject.toml`; currently `>=3.12`)
 - NetBox (host app — minimum and maximum versions are pinned in `netbox_branching/__init__.py` `min_version` / `max_version`; `COMPATIBILITY.md` summarises the matrix)
 - Django + Django REST Framework (NetBox's foundations)
 - PostgreSQL (required — branch isolation depends on schema-level separation)
@@ -240,7 +240,7 @@ GitHub Actions workflows in `.github/workflows/`:
 
 - **`lint-tests.yaml`** — Runs on every PR. Two jobs:
   - *Linting*: Python 3.12, runs `ruff check` and `mkdocs build`.
-  - *Tests*: Matrix of Python 3.12, 3.13, 3.14 against a configurable NetBox ref (defaults to `main`). Spins up PostgreSQL + Redis services, installs the plugin, links `testing/configuration.py`, and runs `python netbox/manage.py test netbox_branching.tests --keepdb`.
+  - *Tests*: Matrix of Python 3.12, 3.13, 3.14 against a configurable NetBox ref (defaults to NetBox's `main` branch; override per-PR with a `test-against:<ref>` label or via `workflow_dispatch`). Spins up PostgreSQL + Redis services, installs the plugin, links `testing/configuration.py`, and runs `python netbox/manage.py test netbox_branching.tests --keepdb`.
 - **`release.yaml`** — Driven by pushing a `v*` tag, not by publishing a GitHub release, so pre-releases follow the same automated path as final releases. Builds sdist + wheel with `python -m build`, runs `twine check`, verifies the tag against the version declared in `pyproject.toml`, `AppConfig.version` and the wheel metadata (`scripts/verify_release_tag.py`), verifies the wheel's contents (`scripts/verify_wheel_contents.py`), rebuilds a wheel from the sdist, and smoke-tests a clean `--no-deps` install whose installed tree is held to the same content checks as the wheel. Only then does it publish to PyPI using OIDC trusted publishing and attach the artifacts to the GitHub release, drafting an empty one (marked as a pre-release when PEP 440 says the version is one) if the tag doesn't already have a release. Release notes are never generated — they are written by hand. Also runs — build and verification only, no publish — on pull requests that touch packaging inputs, which catches a version bump applied to only one of the two declaration sites. A `workflow_dispatch` from a `v*` tag publishes to Test PyPI instead, as an opt-in rehearsal.
 - **`claude.yaml`** — Claude Code automation hook; triggers on issue/PR comments mentioning `@claude`.
 
@@ -292,7 +292,7 @@ git tag v1.3.0-beta1 && git push origin v1.3.0-beta1   # or: git tag v1.3.0b1
 
 PyPI receives `1.3.0b1`, which `pip install netboxlabs-netbox-branching` skips unless the user opts in with `--pre` or pins the exact version, and the draft GitHub release is marked as a pre-release automatically.
 
-To rehearse a publish without touching production PyPI, run the workflow manually (`workflow_dispatch`) against the tag; that route publishes to Test PyPI and requires a trusted publisher configured there for this project. Because the Run-workflow button is populated from the default branch, that route is only available once this workflow is on `main`.
+To rehearse a publish without touching production PyPI, run the workflow manually (`workflow_dispatch`) against the tag; that route publishes to Test PyPI and requires a trusted publisher configured there for this project.
 
 ## Conventions and Patterns
 

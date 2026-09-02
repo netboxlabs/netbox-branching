@@ -19,7 +19,7 @@ pushd netbox-docker
 Create a Dockerfile in the root of the repository to include the `netbox-branching` plugin (substitute the desired NetBox and plugin versions):
 
 ```text title="Dockerfile-Plugins"
-FROM netboxcommunity/netbox:v4.6.0
+FROM netboxcommunity/netbox:v4.7.0
 RUN uv pip install netboxlabs-netbox-branching
 ```
 
@@ -30,7 +30,7 @@ Create a `docker-compose.override.yml` file to include the custom image:
 ```yaml title="docker-compose.override.yml"
 services:
   netbox:
-    image: netbox:v4.6.0-plugins
+    image: netbox:v4.7.0-plugins
     pull_policy: never
     ports:
       - "8000:8080"
@@ -51,7 +51,7 @@ services:
     ports:
       - "5432:5432"
   netbox-worker:
-    image: netbox:v4.6.0-plugins
+    image: netbox:v4.7.0-plugins
     pull_policy: never
 ```
 
