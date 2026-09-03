@@ -631,11 +631,16 @@ class Branch(JobsMixin, PrimaryModel):
         _, stuck = self.check_stuck()
         return stuck
 
-    def recover(self, user=None):
+    def recover(self, user=None, retry=False):
         """
         Reset a branch which is stuck in a transitional status, returning the status it was reset to.
         Returns None if the branch is not stuck. Any orphaned job record is marked as failed so that
         it no longer appears to be running.
+
+        Args:
+            retry: Re-enqueue the interrupted operation once the status has been reset, so that the
+                   operator does not have to initiate it again. Honoured only for the statuses in
+                   `BranchStatusChoices.RECOVERY_RETRYABLE`.
         """
         logger = logging.getLogger('netbox_branching.branch.recover')
 
@@ -643,11 +648,11 @@ class Branch(JobsMixin, PrimaryModel):
         if not stuck:
             return None
 
-        return self._reset_status(job, user, logger)
+        return self._reset_status(job, user, logger, retry=retry)
 
     recover.alters_data = True
 
-    def force_recover(self, user=None):
+    def force_recover(self, user=None, retry=False):
         """
         Reset a branch in a transitional status regardless of whether its job still appears to be
         running. Intended for the explicit, operator-initiated recovery of a branch whose job records
@@ -659,18 +664,22 @@ class Branch(JobsMixin, PrimaryModel):
             return None
 
         job, _ = self.check_stuck()
-        return self._reset_status(job, user, logger)
+        return self._reset_status(job, user, logger, retry=retry)
 
     force_recover.alters_data = True
 
-    def _reset_status(self, job, user, logger):
+    def _reset_status(self, job, user, logger, retry=False):
         """
-        Perform the status reset for recover()/force_recover(). Assumes the branch has already been
-        determined to be in a transitional status.
+        Perform the status reset for recover()/force_recover(), optionally re-enqueueing the
+        interrupted operation. Assumes the branch has already been determined to be in a
+        transitional status.
         """
-        new_status = BranchStatusChoices.RECOVERY_STATUS[self.status]
+        from netbox_branching.jobs import get_job_class_for_status
+
+        interrupted_status = self.status
+        new_status = BranchStatusChoices.RECOVERY_STATUS[interrupted_status]
         logger.warning(
-            f"Recovering branch {self} from status '{self.status}': resetting to '{new_status}' "
+            f"Recovering branch {self} from status '{interrupted_status}': resetting to '{new_status}' "
             f"(requested by {user or 'system'})"
         )
 
@@ -687,6 +696,14 @@ class Branch(JobsMixin, PrimaryModel):
 
         Branch.objects.filter(pk=self.pk).update(status=new_status)
         self.status = new_status
+
+        # Pick the interrupted operation back up rather than leaving the operator to re-initiate it
+        # from the reset status. Only the branch-local operations are retried — see RECOVERY_RETRYABLE
+        # for why merges, reverts and provisioning are not.
+        if retry and interrupted_status in BranchStatusChoices.RECOVERY_RETRYABLE:
+            job_class = get_job_class_for_status(interrupted_status)
+            logger.info(f"Re-enqueueing {job_class.Meta.name} for branch {self}")
+            job_class.enqueue(instance=self, user=user)
 
         return new_status
 

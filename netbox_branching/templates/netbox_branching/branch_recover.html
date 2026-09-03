@@ -30,9 +30,9 @@
               <p>
                 {% blocktrans with status=branch.get_status_display %}
                   This branch is in the <strong>{{ status }}</strong> state, which means a background job
-                  should be working on it. Recovering the branch resets its status so that the operation
-                  can be attempted again.
+                  should be working on it.
                 {% endblocktrans %}
+                {{ recovery_description }}
               </p>
               <table class="table table-hover attr-table mb-3">
                 <tr>
@@ -41,7 +41,7 @@
                 </tr>
                 <tr>
                   <th scope="row">{% trans "Will be reset to" %}</th>
-                  <td>{{ new_status|placeholder }}</td>
+                  <td>{{ new_status_display|placeholder }}</td>
                 </tr>
                 <tr>
                   <th scope="row">{% trans "Responsible job" %}</th>
@@ -76,7 +76,7 @@
                   {% endblocktrans %}
                 </div>
               {% endif %}
-              {% render_field form.confirm %}
+              {% if form.retry %}{% render_field form.retry %}{% endif %}
             </div>
             <div class="card-footer text-end">
               <a href="{{ branch.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>

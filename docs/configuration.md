@@ -75,6 +75,16 @@ A branch is only recovered when the job responsible for its status is no longer 
 determined by the job's recorded state, by RQ, and by whether the job has outlived its
 [`job_timeout`](#job_timeout) plus the [`stuck_job_grace_period`](#stuck_job_grace_period).
 
+The hourly job resets the status but never re-runs the interrupted operation, since a worker killed
+by the operation itself would then be killed by it again on every subsequent run. Re-running is
+offered as an opt-in on the on-demand recovery paths instead: the **Recover** page has a *Sync the
+branch* / *Apply the outstanding migrations* checkbox, unticked by default, and the REST API accepts
+`{"retry": true}`. Only syncing and migrating can be re-run this way — both act solely on the
+branch's own schema and take no parameters which the recovery cannot reconstruct. Merges and reverts
+write to main and their dry-run flag is not recorded on the job, so retrying one could commit an
+operation which was only ever meant to be a rehearsal; a partially provisioned schema cannot be
+resumed at all.
+
 ```python
 PLUGINS_CONFIG = {
     'netbox_branching': {

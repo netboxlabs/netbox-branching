@@ -13,13 +13,13 @@ from netbox_branching.models import Branch, BranchEvent, ChangeDiff
 
 __all__ = (
     'BranchEventSerializer',
+    'BranchRecoverSerializer',
     'BranchSerializer',
     'BranchableModelSerializer',
     'ChangeDiffSerializer',
     'CommitSerializer',
     'ConflictResponseSerializer',
     'ConflictSummarySerializer',
-    'ForceSerializer',
 )
 
 
@@ -186,8 +186,9 @@ class CommitSerializer(serializers.Serializer):
     acknowledge_conflicts = serializers.BooleanField(required=False, default=False)
 
 
-class ForceSerializer(serializers.Serializer):
+class BranchRecoverSerializer(serializers.Serializer):
     force = serializers.BooleanField(required=False, default=False)
+    retry = serializers.BooleanField(required=False, default=False)
 
 
 class BranchableModelSerializer(serializers.Serializer):

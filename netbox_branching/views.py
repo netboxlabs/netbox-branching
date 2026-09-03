@@ -553,12 +553,15 @@ class BranchRecoverView(generic.ObjectView):
 
     def _get_context(self, request, branch, form):
         job, is_stuck = branch.check_stuck()
+        new_status = BranchStatusChoices.RECOVERY_STATUS.get(branch.status)
         return {
             'branch': branch,
             'form': form,
             'job': job,
             'is_stuck': is_stuck,
-            'new_status': BranchStatusChoices.RECOVERY_STATUS.get(branch.status),
+            'new_status': new_status,
+            'new_status_display': dict(BranchStatusChoices).get(new_status, new_status),
+            'recovery_description': BranchStatusChoices.RECOVERY_DESCRIPTIONS.get(branch.status),
         }
 
     def get(self, request, **kwargs):
@@ -567,7 +570,9 @@ class BranchRecoverView(generic.ObjectView):
             messages.error(request, _("This branch is not in a transitional status."))
             return redirect(branch.get_absolute_url())
 
-        return render(request, self.template_name, self._get_context(request, branch, forms.ConfirmationForm()))
+        form = forms.RecoverBranchForm(branch)
+
+        return render(request, self.template_name, self._get_context(request, branch, form))
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
@@ -575,18 +580,22 @@ class BranchRecoverView(generic.ObjectView):
             messages.error(request, _("This branch is not in a transitional status."))
             return redirect(branch.get_absolute_url())
 
-        form = forms.ConfirmationForm(request.POST)
+        form = forms.RecoverBranchForm(branch, request.POST)
         if form.is_valid():
+            # Determine this before recovering, since the reset overwrites the branch's status.
+            retry = bool(
+                branch.status in BranchStatusChoices.RECOVERY_RETRYABLE and form.cleaned_data.get('retry')
+            )
             # The operator has explicitly confirmed that the operation is no longer running, so
             # recover the branch even if a job record still claims otherwise (the record may have
             # been purged, or its worker may have died in a way RQ cannot report).
-            new_status = branch.force_recover(user=request.user)
-            messages.success(
-                request,
-                _("Branch {branch} has been reset to {status}.").format(
-                    branch=branch, status=dict(BranchStatusChoices).get(new_status, new_status)
-                )
-            )
+            new_status = branch.force_recover(user=request.user, retry=retry)
+            status_label = dict(BranchStatusChoices).get(new_status, new_status)
+            if retry:
+                message = _("Branch {branch} has been reset to {status} and the operation re-queued.")
+            else:
+                message = _("Branch {branch} has been reset to {status}.")
+            messages.success(request, message.format(branch=branch, status=status_label))
             return redirect(branch.get_absolute_url())
 
         return render(request, self.template_name, self._get_context(request, branch, form))

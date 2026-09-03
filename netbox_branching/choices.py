@@ -80,6 +80,34 @@ class BranchStatusChoices(ChoiceSet):
         REVERTING: MERGED,
     }
 
+    # What recovery does for each transitional status, and the state the interrupted operation
+    # leaves the branch's data in. Shown on the recovery confirmation form so that the operator
+    # can see what is and is not lost before resetting the status. See #622.
+    RECOVERY_DESCRIPTIONS: ClassVar = {
+        PROVISIONING: _(
+            'The partial schema cannot be resumed; the branch will be marked as failed. Delete it and '
+            'create a new one.'
+        ),
+        SYNCING: _('The interrupted sync was rolled back; the branch can be synced again.'),
+        MIGRATING: _('The outstanding migrations can be applied after recovery.'),
+        MERGING: _('The interrupted merge was rolled back; nothing reached main and it can be merged again.'),
+        REVERTING: _('The interrupted revert was rolled back; the changes are still in main and can be reverted.'),
+    }
+
+    # Transitional statuses whose interrupted operation can simply be re-run once the branch has
+    # been reset, sparing the operator from re-initiating it by hand. Both are confined to the
+    # branch's own schema and take no parameters which recovery cannot reconstruct.
+    #
+    # Merging and reverting are deliberately excluded: they write to the main schema, and the
+    # `commit` flag which distinguishes a dry run from a real run is handed to RQ rather than
+    # stored on the Job, so it dies with the worker. Retrying one would risk committing an
+    # operation which was only ever meant to be a dry run. Provisioning is excluded because a
+    # partially created schema cannot be resumed at all. See #622.
+    RECOVERY_RETRYABLE: ClassVar = (
+        SYNCING,
+        MIGRATING,
+    )
+
 
 class BranchMergeStrategyChoices(ChoiceSet):
     ITERATIVE = 'iterative'

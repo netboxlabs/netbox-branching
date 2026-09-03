@@ -171,7 +171,7 @@ class BranchViewSet(ModelViewSet):
 
     @extend_schema(
         methods=['post'],
-        request=serializers.ForceSerializer(),
+        request=serializers.BranchRecoverSerializer(),
         responses={200: serializers.BranchSerializer()},
     )
     @action(detail=True, methods=['post'])
@@ -188,11 +188,14 @@ class BranchViewSet(ModelViewSet):
             return HttpResponseBadRequest("Branch is not in a transitional status.")
 
         # Recover only a branch which is demonstrably stuck, unless the caller explicitly forces it.
-        serializer = serializers.ForceSerializer(data=request.data)
-        force = serializer.validated_data.get('force', False) if serializer.is_valid() else False
-        if force:
-            branch.force_recover(user=request.user)
-        elif not branch.recover(user=request.user):
+        serializer = serializers.BranchRecoverSerializer(data=request.data)
+        params = serializer.validated_data if serializer.is_valid() else {}
+        # Re-running the interrupted operation is opt-in over the API, where there is no confirmation
+        # step; the UI offers it as a checked-by-default option instead.
+        retry = bool(params.get('retry', False))
+        if params.get('force', False):
+            branch.force_recover(user=request.user, retry=retry)
+        elif not branch.recover(user=request.user, retry=retry):
             return HttpResponseBadRequest(
                 "A job for this branch still appears to be running. Pass force=true to recover it anyway."
             )

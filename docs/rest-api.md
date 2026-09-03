@@ -148,6 +148,8 @@ http://netbox:8000/api/plugins/branching/branches/2/recover/
 
 The request is rejected with a `400` response if the branch is not in a transitional status, or if a job for the branch still appears to be running. Pass `{"force": true}` to recover the branch regardless — do so only when you are certain the operation has stopped, as resetting the status of a branch which is still being worked on may allow a second, conflicting operation to be started against it.
 
+Pass `{"retry": true}` to re-run the interrupted operation once the status has been reset, rather than leaving the branch for someone to act on again. This is honoured only for branches stuck in `syncing` or `migrating`: both operate solely on the branch's own schema and take no parameters which the recovery cannot reconstruct. It is ignored for `merging` and `reverting`, which write to main and whose dry-run flag is not recorded on the job, and for `provisioning`, which cannot be resumed. The web UI offers the same option, unticked by default, on its recovery page.
+
 ## Additional Endpoints
 
 The plugin also exposes the following read-only endpoints:
