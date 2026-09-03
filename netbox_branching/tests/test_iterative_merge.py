@@ -1326,12 +1326,16 @@ class BaseMergeTests:
 
         # In branch: map the existing front port to the existing rear port
         with activate_branch(branch), event_tracking(request):
-            PortMapping.objects.create(
+            mapping = PortMapping.objects.create(
                 front_port=FrontPort.objects.get(id=front_port_id),
                 rear_port=RearPort.objects.get(id=rear_port_id),
                 front_port_position=3,
                 rear_port_position=4,
             )
+            mapping_id = mapping.id
+
+        # The mapping must be change-logged for the merge to be able to replay it
+        self._assert_object_changes(branch, PortMapping, mapping_id, 1, ['create'])
 
         # Main is still unmapped prior to the merge
         self.assertEqual(PortMapping.objects.filter(front_port_id=front_port_id).count(), 0)
@@ -1355,13 +1359,14 @@ class BaseMergeTests:
             role=self.device_role,
         )
         front_port, rear_port = self._create_ports(device)
-        PortMapping.objects.create(
+        mapping = PortMapping.objects.create(
             front_port=front_port,
             rear_port=rear_port,
             front_port_position=1,
             rear_port_position=1,
         )
         front_port_id = front_port.id
+        mapping_id = mapping.id
 
         branch = self._create_and_provision_branch()
 
@@ -1372,6 +1377,9 @@ class BaseMergeTests:
         # In branch: remove the mapping
         with activate_branch(branch), event_tracking(request):
             PortMapping.objects.get(front_port_id=front_port_id).delete()
+
+        # The deletion must be change-logged for the merge to be able to replay it
+        self._assert_object_changes(branch, PortMapping, mapping_id, 1, ['delete'])
 
         # Main still has the mapping prior to the merge
         self.assertEqual(PortMapping.objects.filter(front_port_id=front_port_id).count(), 1)
