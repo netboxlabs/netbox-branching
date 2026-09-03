@@ -175,20 +175,14 @@ class ObjectChange(ObjectChange_):
             # instance, which bypasses DeserializedObject's M2M handling, so — exactly as the
             # MPTT create path above does — reassign the M2M data explicitly. (#531, #610)
             #
-            # Every other model (including NetBox 4.7+ ltree models, whose path/sort_path
-            # columns are recomputed server-side by triggers) is restored the same way:
-            # through the model's own save(), with M2M data reapplied afterward. This must
-            # NOT go through DeserializedObject.save() -- that calls Model.save_base(...,
-            # raw=True) directly, which per Django's own docs "bypasses any model-defined
-            # save" and skips auto_now/auto_now_add population. Both are relied on
-            # elsewhere: a model can exclude an auto_now field from serialize_object() to
-            # keep it out of change-log diffs (NetBox core does this for ConfigContext's
-            # cache fields) and count on save() to repopulate it on any real save, and a
-            # model's save() override can perform side effects a restore still needs to
-            # run (netbox_custom_objects.CustomObjectTypeField.save() applies the schema
-            # DDL that (re)creates a field's physical column). A raw save_base() silently
-            # skips both, leaving excluded NOT NULL auto_now fields unpopulated and any
-            # such side effects un-run.
+            # Every other model is restored the same way: through the model's own save(),
+            # with M2M data reapplied afterward. Must NOT go through DeserializedObject.save()
+            # -- it calls Model.save_base(..., raw=True), which bypasses any model-defined
+            # save() and skips auto_now/auto_now_add population. Both are relied on
+            # elsewhere (e.g. an auto_now field excluded from serialize_object() to keep it
+            # out of change-log diffs, or a save() override with side effects a restore
+            # still needs), so a raw save_base() can leave excluded NOT NULL fields
+            # unpopulated or skip those side effects entirely.
             if isinstance(instance, MPTTModel):
                 clear_mptt_fields(instance)
                 instance.save(using=using, force_insert=True)

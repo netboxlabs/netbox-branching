@@ -1045,15 +1045,12 @@ class BaseMergeTests:
 
     def test_revert_restore_calls_model_save_not_raw_save_base(self):
         """
-        Restoring a deleted non-MPTT object during revert() must go through the
-        object's own save() method -- not DeserializedObject.save(), which calls
-        Model.save_base(..., raw=True) directly, bypassing any model-defined
-        save() override and auto_now/auto_now_add population. Neither is exercised
-        by NetBox core's own Site model, so this spies on Site.save() directly
-        rather than relying on an observable side effect; the more concrete,
-        production-shaped regression (an excluded auto_now field causing a NOT
-        NULL violation, and a save() override that applies schema DDL) is covered
-        in netbox_custom_objects' own test suite, which depends on this fix.
+        Restoring a deleted object during revert() must call the object's own
+        save(), not bypass it via DeserializedObject.save(). Site has no
+        auto_now/save()-override side effect to observe, so this spies on
+        Site.save() directly; the production-shaped regression (an excluded
+        auto_now field, a save() override applying schema DDL) is covered in
+        netbox_custom_objects' own test suite.
         """
         request = RequestFactory().get(reverse('home'))
         request.id = uuid.uuid4()
