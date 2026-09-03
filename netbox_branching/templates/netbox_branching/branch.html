@@ -46,7 +46,8 @@
           {% else %}
             {% blocktrans %}No job record remains for the operation which left the branch in this state.{% endblocktrans %}
           {% endif %}
-          {% blocktrans with status=recovery_status %}Recover the branch to reset it to "{{ status }}" and retry the operation.{% endblocktrans %}
+          {% blocktrans with status=recovery_status_display %}Recover the branch to reset it to "{{ status }}".{% endblocktrans %}
+          {{ recovery_description }}
         </div>
       </div>
       {% branch_recover_button object %}

@@ -683,6 +683,16 @@ class Branch(JobsMixin, PrimaryModel):
             f"(requested by {user or 'system'})"
         )
 
+        # Claim the reset before acting on it. The conditional update succeeds for exactly one
+        # caller, so two concurrent recoveries of the same branch — two API calls with force=true,
+        # or the watchdog racing an operator — cannot each terminate the job and enqueue a retry,
+        # leaving two sync or migrate jobs running against the same branch.
+        claimed = Branch.objects.filter(pk=self.pk, status=interrupted_status).update(status=new_status)
+        self.status = new_status
+        if not claimed:
+            logger.info(f"Branch {self} was already recovered by another caller; nothing further to do")
+            return new_status
+
         # Terminate the orphaned job record so it no longer reports itself as running. Jobs which
         # have already terminated are left as they are, to preserve their recorded outcome.
         if job is not None and job.status not in JobStatusChoices.TERMINAL_STATE_CHOICES:
@@ -690,12 +700,9 @@ class Branch(JobsMixin, PrimaryModel):
                 status=JobStatusChoices.STATUS_FAILED,
                 error=str(_(
                     "The job did not complete. Its worker is no longer running; the branch has been "
-                    "reset to '{status}' so that the operation can be attempted again."
+                    "reset to '{status}'."
                 )).format(status=new_status)
             )
-
-        Branch.objects.filter(pk=self.pk).update(status=new_status)
-        self.status = new_status
 
         # Pick the interrupted operation back up rather than leaving the operator to re-initiate it
         # from the reset status. Only the branch-local operations are retried — see RECOVERY_RETRYABLE

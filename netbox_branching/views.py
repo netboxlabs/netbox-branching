@@ -70,12 +70,15 @@ class BranchView(generic.ObjectView):
 
         # Surface a branch left in a transitional status by a job which is no longer running (#622)
         stuck_job, is_stuck = instance.check_stuck()
+        recovery_status = BranchStatusChoices.RECOVERY_STATUS.get(instance.status)
 
         return {
             'stats': stats,
             'is_stuck': is_stuck,
             'stuck_job': stuck_job,
-            'recovery_status': BranchStatusChoices.RECOVERY_STATUS.get(instance.status),
+            'recovery_status': recovery_status,
+            'recovery_status_display': dict(BranchStatusChoices).get(recovery_status, recovery_status),
+            'recovery_description': BranchStatusChoices.RECOVERY_DESCRIPTIONS.get(instance.status),
             'latest_change': latest_change,
             'last_job': last_job,
             'last_job_errored': last_job is not None and last_job.status == JobStatusChoices.STATUS_ERRORED,
