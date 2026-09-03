@@ -92,13 +92,28 @@ class ObjectChange(ObjectChange_):
             # and route it through the "move existing node" path, which forces an UPDATE
             # with update_fields that matches zero rows and raises NotUpdated. Applying a
             # CREATE change is always an INSERT, so force_insert is correct here. (#610)
+            #
+            # A model with its own deserialize_object() hook defines its own save()
+            # contract on the returned wrapper (e.g. netbox_custom_objects' models use
+            # this to run their real save() and reapply M2M data themselves, working
+            # around the same DeserializedObject.save() hazard described below) -- trust
+            # it rather than reaching into a wrapper shape it doesn't guarantee.
+            #
+            # Otherwise (the plain deserialize_object() utility), every model is created
+            # through the model's own save(), with M2M data reapplied afterward. Must NOT
+            # go through DeserializedObject.save() -- see the comment on the equivalent
+            # undo() path below for why.
             if isinstance(instance.object, MPTTModel):
                 clear_mptt_fields(instance.object)
                 instance.object.save(using=using, force_insert=True)
                 for accessor_name, object_list in (instance.m2m_data or {}).items():
                     getattr(instance.object, accessor_name).set(object_list)
-            else:
+            elif hasattr(model, 'deserialize_object'):
                 instance.save(using=using)
+            else:
+                instance.object.save(using=using)
+                for accessor_name, object_list in (instance.m2m_data or {}).items():
+                    getattr(instance.object, accessor_name).set(object_list)
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:

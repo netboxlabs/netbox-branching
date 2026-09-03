@@ -1078,6 +1078,32 @@ class BaseMergeTests:
         )
         self.assertTrue(Site.objects.filter(id=site_id).exists())
 
+    def test_merge_apply_create_calls_model_save_not_raw_save_base(self):
+        """
+        Creating a new object during merge() must call the object's own save(),
+        not bypass it via DeserializedObject.save() -- the same hazard as
+        ObjectChange.undo(), on ObjectChange.apply()'s CREATE path.
+        """
+        branch = self._create_and_provision_branch()
+
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with activate_branch(branch), event_tracking(request):
+            site = Site.objects.create(name='Test Site', slug='test-site')
+            site_id = site.id
+
+        original_save = Site.save
+        with unittest.mock.patch.object(Site, 'save', autospec=True, side_effect=original_save) as mock_save:
+            branch.merge(user=self.user, commit=True)
+
+        self.assertTrue(
+            mock_save.called,
+            "Creating an object during merge must call the model's own save(), not bypass it",
+        )
+        self.assertTrue(Site.objects.filter(id=site_id).exists())
+
     def test_merge_many_to_many_tags(self):
         """
         Test adding and removing many-to-many relationships (tags on site).
