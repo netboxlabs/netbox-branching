@@ -1,7 +1,7 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
-from netbox_branching.choices import BranchMergeStrategyChoices
+from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
 
 __all__ = (
@@ -12,6 +12,7 @@ __all__ = (
     'ConfirmationForm',
     'DescriptiveRadioSelect',
     'MigrateBranchForm',
+    'RecoverBranchForm',
 )
 
 
@@ -119,6 +120,39 @@ class MigrateBranchForm(forms.Form):
             'All migrations will be applied in order. <strong>Migrations cannot be reversed once applied.</strong>'
         )
     )
+
+
+# How the retry option is described for each operation which can be re-run on recovery.
+RECOVERY_RETRY_LABELS = {
+    BranchStatusChoices.SYNCING: _('Sync the branch after resetting'),
+    BranchStatusChoices.MIGRATING: _('Apply the outstanding migrations after resetting'),
+}
+
+
+class RecoverBranchForm(forms.Form):
+    """
+    Options for resetting a branch stuck in a transitional status (#622). Submitting the form is
+    itself the confirmation, so the only field offered is whether to pick the interrupted operation
+    back up once the status has been reset — and that is offered only for the operations which can
+    be re-run safely (see BranchStatusChoices.RECOVERY_RETRYABLE). For every other status the form
+    has no fields at all.
+
+    Re-running is off by default: the worker may well have died because of the operation itself, in
+    which case running it again unprompted would simply repeat the failure.
+    """
+    retry = forms.BooleanField(
+        required=False,
+        initial=False
+    )
+
+    def __init__(self, branch, *args, **kwargs):
+        self.branch = branch
+        super().__init__(*args, **kwargs)
+
+        if branch.status in BranchStatusChoices.RECOVERY_RETRYABLE:
+            self.fields['retry'].label = RECOVERY_RETRY_LABELS[branch.status]
+        else:
+            del self.fields['retry']
 
 
 class BulkMigrateBranchForm(forms.Form):

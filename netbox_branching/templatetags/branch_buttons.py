@@ -4,6 +4,7 @@ __all__ = (
     'branch_archive_button',
     'branch_merge_button',
     'branch_migrate_button',
+    'branch_recover_button',
     'branch_revert_button',
     'branch_sync_button',
 )
@@ -45,6 +46,14 @@ def branch_archive_button(context, branch):
 
 @register.inclusion_tag('netbox_branching/buttons/branch_migrate.html', takes_context=True)
 def branch_migrate_button(context, branch):
+    return {
+        'branch': branch,
+        'perms': context.get('perms'),
+    }
+
+
+@register.inclusion_tag('netbox_branching/buttons/branch_recover.html', takes_context=True)
+def branch_recover_button(context, branch):
     return {
         'branch': branch,
         'perms': context.get('perms'),

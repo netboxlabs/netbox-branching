@@ -33,6 +33,26 @@
 {% endblock %}
 
 {% block content %}
+  {% if is_stuck %}
+    <div class="alert alert-warning d-flex justify-content-between align-items-center" role="alert">
+      <i class="mdi mdi-alert fs-1 text-warning"></i>
+      <div class="flex-grow-1 ms-3">
+        <h4 class="alert-title text-warning mb-0">
+          {% blocktrans with status=object.get_status_display %}Branch is stuck in the {{ status }} state{% endblocktrans %}
+        </h4>
+        <div>
+          {% if stuck_job %}
+            {% blocktrans with url=stuck_job.get_absolute_url name=stuck_job.name %}The <a href="{{ url }}" class="alert-link">{{ name }}</a> job is no longer running; its worker most likely terminated before it could finish.{% endblocktrans %}
+          {% else %}
+            {% blocktrans %}No job record remains for the operation which left the branch in this state.{% endblocktrans %}
+          {% endif %}
+          {% blocktrans with status=recovery_status_display %}Recover the branch to reset it to "{{ status }}".{% endblocktrans %}
+          {{ recovery_description }}
+        </div>
+      </div>
+      {% branch_recover_button object %}
+    </div>
+  {% endif %}
   {% if last_job_errored %}
     <div class="alert alert-danger d-flex justify-content-between align-items-start" role="alert">
       <div>

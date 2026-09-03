@@ -47,6 +47,72 @@ PLUGINS_CONFIG = {
 
 ---
 
+## `auto_recover_stuck_branches`
+
+Default: `True`
+
+Whether to automatically recover branches which have been left in a transitional status
+(`Provisioning`, `Syncing`, `Migrating`, `Merging` or `Reverting`) by a background job which never
+finished.
+
+A branch operation records its transitional status in the database before it starts and clears it
+again from inside the worker process, on success or on error. A worker which is killed outright —
+an out-of-memory kill, an evicted container, `kill -9` — runs neither path, so the branch keeps
+that status indefinitely: its actions are disabled in the UI and the job continues to be listed as
+running. When this parameter is enabled, an hourly background job resets any such branch to the
+status its operation would have restored had it failed cleanly, and marks the orphaned job as
+failed:
+
+| Interrupted status | Reset to |
+|---|---|
+| Provisioning | Failed |
+| Syncing | Ready |
+| Migrating | Pending Migrations |
+| Merging | Ready |
+| Reverting | Merged |
+
+A branch is only recovered when the job responsible for its status is no longer running — as
+determined by the job's recorded state, by RQ, and by whether the job has outlived its
+[`job_timeout`](#job_timeout) plus the [`stuck_job_grace_period`](#stuck_job_grace_period).
+
+The hourly job resets the status but never re-runs the interrupted operation, since a worker killed
+by the operation itself would then be killed by it again on every subsequent run. Re-running is
+offered as an opt-in on the on-demand recovery paths instead: the **Recover** page has a *Sync the
+branch* / *Apply the outstanding migrations* checkbox, unticked by default, and the REST API accepts
+`{"retry": true}`. Only syncing and migrating can be re-run this way — both act solely on the
+branch's own schema and take no parameters which the recovery cannot reconstruct. Merges and reverts
+write to main and their dry-run flag is not recorded on the job, so retrying one could commit an
+operation which was only ever meant to be a rehearsal; a partially provisioned schema cannot be
+resumed at all.
+
+```python
+PLUGINS_CONFIG = {
+    'netbox_branching': {
+        'auto_recover_stuck_branches': False,
+    }
+}
+```
+
+!!! note
+    Disabling this parameter does not remove the ability to recover a branch: the **Recover** button
+    on the branch view and the `/api/plugins/branching/branches/<id>/recover/` REST API endpoint
+    remain available to users with permission to modify branches.
+
+!!! note
+    The hourly job depends on NetBox's system job scheduler, which can stop rescheduling a recurring
+    job whose scheduled execution was missed — for example after Redis is flushed or restored from a
+    backup, leaving the job's database record marked as scheduled for a time in the past
+    ([netbox#22714](https://github.com/netbox-community/netbox/issues/22714)). The **Recover** button
+    and the REST API endpoint evaluate the branch at request time and do not rely on the scheduler,
+    so they continue to work even when the periodic job is dormant. Deleting the stale scheduled job
+    and restarting the worker restores the schedule.
+
+!!! warning
+    A branch which was interrupted while provisioning is reset to `Failed` rather than being
+    re-provisioned, because its schema may be incomplete. Delete the branch and create it again.
+
+---
+
 ## `exempt_models`
 
 Default: `[]` (empty list)
@@ -199,6 +265,32 @@ PLUGINS_CONFIG = {
     }
 }
 ```
+
+---
+
+## `stuck_job_grace_period`
+
+Default: `300` (5 minutes)
+
+The number of seconds added to [`job_timeout`](#job_timeout) before a branch job which still reports
+itself as running is presumed to have died with its worker. RQ terminates a job which exceeds its
+timeout, so a job that has outlived `job_timeout` while its record still reads "running" can only
+mean that no worker remains to terminate it; the grace period allows for clock skew and for a worker
+shutting down gracefully.
+
+This value is only consulted when RQ cannot confirm the job's state directly — for example when
+Redis is unreachable, or when RQ still lists the job as started because no other worker has run its
+maintenance tasks yet.
+
+```python
+PLUGINS_CONFIG = {
+    'netbox_branching': {
+        'stuck_job_grace_period': 600,
+    }
+}
+```
+
+See [`auto_recover_stuck_branches`](#auto_recover_stuck_branches).
 
 ---
 
