@@ -29,23 +29,16 @@ __all__ = (
 
 
 def _snapshot_changelog_timestamps(instance):
-    """Capture created/last_updated before a real save() can overwrite them.
-    See _restore_changelog_timestamps() for why. Returns None for a model with
-    no such fields, which _restore_changelog_timestamps() treats as a no-op."""
+    """Capture created/last_updated before a real save() overwrites them via
+    auto_now/auto_now_add. None for a model without these fields."""
     if not isinstance(instance, ChangeLoggingMixin):
         return None
     return instance.created, instance.last_updated
 
 
 def _restore_changelog_timestamps(instance, snapshot, using):
-    """
-    A real (non-raw) save() re-triggers Django's auto_now/auto_now_add handling for
-    created/last_updated, overwriting whatever the change-log payload captured (or
-    leaving them unset, per ObjectChange.diff_exclude_fields) with the current time.
-    Write the pre-save() values back with a targeted column update -- bypassing
-    save() again -- so calling the model's own save() (needed for side effects like
-    schema DDL) doesn't corrupt NetBox's own change-log timestamps.
-    """
+    """Write a _snapshot_changelog_timestamps() snapshot back after a real
+    save(), via a targeted update() rather than another save()."""
     if snapshot is None:
         return
     created, last_updated = snapshot
@@ -122,22 +115,14 @@ class ObjectChange(ObjectChange_):
             # with update_fields that matches zero rows and raises NotUpdated. Applying a
             # CREATE change is always an INSERT, so force_insert is correct here. (#610)
             #
-            # A model with its own deserialize_object() hook defines its own save()
-            # contract on the returned wrapper (e.g. netbox_custom_objects' models use
-            # this to run their real save() and reapply M2M data themselves, working
-            # around the same DeserializedObject.save() hazard described below) -- trust
-            # it rather than reaching into a wrapper shape it doesn't guarantee.
+            # A model with its own deserialize_object() hook (e.g. netbox_custom_objects')
+            # defines its own save()/M2M contract on the returned wrapper -- trust it
+            # rather than reaching into a wrapper shape it doesn't guarantee.
             #
-            # Otherwise (the plain deserialize_object() utility), every model is created
-            # through the model's own save(), with M2M data reapplied afterward. Must NOT
-            # go through DeserializedObject.save() -- see the comment on the equivalent
-            # undo() path below for why.
-            #
-            # Either real save() also re-triggers auto_now/auto_now_add on created/
-            # last_updated, discarding whatever the change-log payload captured (or left
-            # unset, per diff_exclude_fields) in favor of the current time. Restore the
-            # pre-save() values afterward so a real save() can run without corrupting
-            # NetBox's own change-log timestamps.
+            # Otherwise, every model is created through its own save(), with M2M data
+            # and change-log timestamps reapplied afterward (see the comment on the
+            # equivalent undo() path below for why: DeserializedObject.save() bypasses
+            # both, and real save() bypasses timestamps the other way).
             if isinstance(instance.object, MPTTModel):
                 timestamps = _snapshot_changelog_timestamps(instance.object)
                 clear_mptt_fields(instance.object)
@@ -230,17 +215,13 @@ class ObjectChange(ObjectChange_):
             # MPTT create path above does — reassign the M2M data explicitly. (#531, #610)
             #
             # Every other model is restored the same way: through the model's own save(),
-            # with M2M data reapplied afterward. Must NOT go through DeserializedObject.save()
-            # -- it calls Model.save_base(..., raw=True), which bypasses any model-defined
-            # save() and skips auto_now/auto_now_add population. Both are relied on
-            # elsewhere (e.g. an auto_now field excluded from serialize_object() to keep it
-            # out of change-log diffs, or a save() override with side effects a restore
-            # still needs), so a raw save_base() can leave excluded NOT NULL fields
-            # unpopulated or skip those side effects entirely.
-            #
-            # Either real save() also re-triggers auto_now/auto_now_add on created/
-            # last_updated -- restore the pre-save() values afterward; see
-            # _restore_changelog_timestamps().
+            # with M2M data and change-log timestamps reapplied afterward. Must NOT go
+            # through DeserializedObject.save() -- it calls Model.save_base(..., raw=True),
+            # bypassing any model-defined save() (e.g. schema DDL a save() override applies)
+            # and skipping auto_now/auto_now_add. But a real save() on an adding instance
+            # re-triggers auto_now/auto_now_add itself, overwriting created/last_updated
+            # with the current time instead of what the change-log payload captured (or
+            # left unset) -- hence the explicit snapshot/restore around it.
             if isinstance(instance, MPTTModel):
                 timestamps = _snapshot_changelog_timestamps(instance)
                 clear_mptt_fields(instance)

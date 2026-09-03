@@ -1014,10 +1014,8 @@ class BaseMergeTests:
         self.assertEqual(set(restored.first().tags.all()), {tag1, tag2})
 
     def test_merge_revert_restores_deleted_non_mptt_object(self):
-        """
-        Deleting a plain (non-MPTT) object in a branch and then reverting the merge
-        must restore it, including its M2M relationships (e.g. tags).
-        """
+        """Deleting a non-MPTT object in a branch and reverting the merge
+        must restore it, including M2M relationships (tags)."""
         tag1 = Tag.objects.create(name='Tag 1', slug='tag-1')
         tag2 = Tag.objects.create(name='Tag 2', slug='tag-2')
 
@@ -1044,14 +1042,10 @@ class BaseMergeTests:
         self.assertEqual(set(restored.first().tags.all()), {tag1, tag2})
 
     def test_revert_restore_calls_model_save_not_raw_save_base(self):
-        """
-        Restoring a deleted object during revert() must call the object's own
-        save(), not bypass it via DeserializedObject.save(). Site has no
-        auto_now/save()-override side effect to observe, so this spies on
-        Site.save() directly; the production-shaped regression (an excluded
-        auto_now field, a save() override applying schema DDL) is covered in
-        netbox_custom_objects' own test suite.
-        """
+        """Restore must call the object's own save(), not bypass it via
+        DeserializedObject.save(). Site has no save()-override side effect to
+        observe, so this spies on Site.save() directly; the production-shaped
+        regression is covered in netbox_custom_objects' own test suite."""
         request = RequestFactory().get(reverse('home'))
         request.id = uuid.uuid4()
         request.user = self.user
@@ -1079,15 +1073,9 @@ class BaseMergeTests:
         self.assertTrue(Site.objects.filter(id=site_id).exists())
 
     def test_merge_create_preserves_created_timestamp(self):
-        """
-        Merging a branch-created object must not stamp `created` with the merge
-        time. apply()'s CREATE path now uses a real (non-raw) save() so that
-        save() overrides run (see test_merge_apply_create_calls_model_save_not_
-        raw_save_base above) -- but a real save() on an adding instance also
-        re-triggers auto_now_add, which would silently discard the branch's
-        actual creation time in favor of whatever moment the merge happens to
-        run. #648 restores it explicitly after save().
-        """
+        """A real save() (needed for save() overrides) also re-triggers
+        auto_now_add, which would otherwise stamp `created` with merge time
+        instead of the branch's actual creation time."""
         import time
 
         branch = self._create_and_provision_branch()
@@ -1112,18 +1100,12 @@ class BaseMergeTests:
         self.assertLess(abs((site.created - created_in_branch).total_seconds()), 0.01)
 
     def test_revert_restore_does_not_stamp_created_with_revert_time(self):
-        """
-        Reverting a branch-deleted object must not stamp `created` with the
-        revert time, for the same reason as test_merge_create_preserves_
-        created_timestamp above, on undo()'s restore path.
-
-        Note this doesn't assert the *original* created value is restored:
-        ObjectChange.diff_exclude_fields() (core, pre-existing) strips
-        created/last_updated from prechange_data_clean, which is what undo()'s
-        restore path deserializes from -- so the original timestamp isn't
-        available to restore in the first place. What matters here is that a
-        real save() doesn't inject a *wrong*, revert-time value in its place.
-        """
+        """Same hazard as test_merge_create_preserves_created_timestamp, on
+        undo()'s restore path. Asserts None rather than the original created
+        value: ObjectChange.diff_exclude_fields() (core, pre-existing) strips
+        created/last_updated from prechange_data_clean before undo() ever sees
+        it, so the original timestamp isn't recoverable here regardless -- what
+        this guards is that a real save() doesn't inject a wrong one instead."""
         import time
 
         request = RequestFactory().get(reverse('home'))
