@@ -1078,6 +1078,76 @@ class BaseMergeTests:
         )
         self.assertTrue(Site.objects.filter(id=site_id).exists())
 
+    def test_merge_create_preserves_created_timestamp(self):
+        """
+        Merging a branch-created object must not stamp `created` with the merge
+        time. apply()'s CREATE path now uses a real (non-raw) save() so that
+        save() overrides run (see test_merge_apply_create_calls_model_save_not_
+        raw_save_base above) -- but a real save() on an adding instance also
+        re-triggers auto_now_add, which would silently discard the branch's
+        actual creation time in favor of whatever moment the merge happens to
+        run. #648 restores it explicitly after save().
+        """
+        import time
+
+        branch = self._create_and_provision_branch()
+
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with activate_branch(branch), event_tracking(request):
+            site = Site.objects.create(name='Test Site', slug='test-site')
+            site_id = site.id
+            created_in_branch = site.created
+
+        # Merge strictly after creation so a stamped-with-merge-time value
+        # would be detectably different from created_in_branch.
+        time.sleep(1.5)
+        branch.merge(user=self.user, commit=True)
+
+        site = Site.objects.get(id=site_id)
+        # Sub-millisecond tolerance for the change-log's JSON round trip
+        # (millisecond precision), which is unrelated to what's under test here.
+        self.assertLess(abs((site.created - created_in_branch).total_seconds()), 0.01)
+
+    def test_revert_restore_does_not_stamp_created_with_revert_time(self):
+        """
+        Reverting a branch-deleted object must not stamp `created` with the
+        revert time, for the same reason as test_merge_create_preserves_
+        created_timestamp above, on undo()'s restore path.
+
+        Note this doesn't assert the *original* created value is restored:
+        ObjectChange.diff_exclude_fields() (core, pre-existing) strips
+        created/last_updated from prechange_data_clean, which is what undo()'s
+        restore path deserializes from -- so the original timestamp isn't
+        available to restore in the first place. What matters here is that a
+        real save() doesn't inject a *wrong*, revert-time value in its place.
+        """
+        import time
+
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+        site_id = site.id
+
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(request):
+            Site.objects.get(id=site_id).delete()
+
+        branch.merge(user=self.user, commit=True)
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+        time.sleep(1.5)
+        branch.revert(user=self.user, commit=True)
+
+        site = Site.objects.get(id=site_id)
+        self.assertIsNone(site.created)
+
     def test_merge_apply_create_calls_model_save_not_raw_save_base(self):
         """
         Creating a new object during merge() must call the object's own save(),
