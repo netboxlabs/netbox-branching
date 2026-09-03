@@ -176,17 +176,28 @@ class ObjectChange(ObjectChange_):
             # MPTT create path above does — reassign the M2M data explicitly. (#531, #610)
             #
             # Every other model (including NetBox 4.7+ ltree models, whose path/sort_path
-            # columns are recomputed server-side by triggers) is restored through
-            # DeserializedObject.save(), which persists the object and re-establishes its
-            # M2M relationships. Saving the raw instance here instead would silently drop
-            # M2M data (e.g. tags on a reverted ModuleBay).
+            # columns are recomputed server-side by triggers) is restored the same way:
+            # through the model's own save(), with M2M data reapplied afterward. This must
+            # NOT go through DeserializedObject.save() -- that calls Model.save_base(...,
+            # raw=True) directly, which per Django's own docs "bypasses any model-defined
+            # save" and skips auto_now/auto_now_add population. Both are relied on
+            # elsewhere: a model can exclude an auto_now field from serialize_object() to
+            # keep it out of change-log diffs (NetBox core does this for ConfigContext's
+            # cache fields) and count on save() to repopulate it on any real save, and a
+            # model's save() override can perform side effects a restore still needs to
+            # run (netbox_custom_objects.CustomObjectTypeField.save() applies the schema
+            # DDL that (re)creates a field's physical column). A raw save_base() silently
+            # skips both, leaving excluded NOT NULL auto_now fields unpopulated and any
+            # such side effects un-run.
             if isinstance(instance, MPTTModel):
                 clear_mptt_fields(instance)
                 instance.save(using=using, force_insert=True)
                 for accessor_name, object_list in (deserialized.m2m_data or {}).items():
                     getattr(instance, accessor_name).set(object_list)
             else:
-                deserialized.save(using=using)
+                instance.save(using=using)
+                for accessor_name, object_list in (deserialized.m2m_data or {}).items():
+                    getattr(instance, accessor_name).set(object_list)
 
     undo.alters_data = True
 
