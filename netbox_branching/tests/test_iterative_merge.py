@@ -1239,13 +1239,13 @@ class BaseMergeTests:
         # A successful cable connection creates two CablePath records (one per endpoint)
         self.assertEqual(CablePath.objects.count(), 2, 'Cable paths not populated after merge')
 
-    def _create_ports(self, device, suffix=''):
+    def _create_ports(self, device):
         """Helper to create a front/rear port pair on a device, with no mapping between them."""
         rear_port = RearPort.objects.create(
-            device=device, name=f'rear{suffix}', type='8p8c', positions=4
+            device=device, name='rear', type='8p8c', positions=4
         )
         front_port = FrontPort.objects.create(
-            device=device, name=f'front{suffix}', type='8p8c', positions=4
+            device=device, name='front', type='8p8c', positions=4
         )
         return front_port, rear_port
 
@@ -1288,6 +1288,9 @@ class BaseMergeTests:
 
         # The mapping must be change-logged for the merge to be able to replay it
         self._assert_object_changes(branch, PortMapping, mapping_id, 1, ['create'])
+
+        # Main is still unmapped prior to the merge
+        self.assertEqual(PortMapping.objects.filter(front_port_id=front_port_id).count(), 0)
 
         branch.merge(user=self.user, commit=True)
 
