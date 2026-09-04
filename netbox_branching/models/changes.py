@@ -29,14 +29,6 @@ __all__ = (
 )
 
 
-def _snapshot_changelog_timestamps(instance):
-    """Capture created/last_updated before a real save() overwrites them via
-    auto_now/auto_now_add. None for a model without these fields."""
-    if not isinstance(instance, ChangeLoggingMixin):
-        return None
-    return instance.created, instance.last_updated
-
-
 def _prechange_changelog_timestamps(instance, payload):
     """Read created/last_updated from a raw (un-cleaned) ObjectChange payload.
     diff_exclude_fields() strips both from the *_clean view used for diffing
@@ -130,32 +122,13 @@ class ObjectChange(ObjectChange_):
             # and route it through the "move existing node" path, which forces an UPDATE
             # with update_fields that matches zero rows and raises NotUpdated. Applying a
             # CREATE change is always an INSERT, so force_insert is correct here. (#610)
-            #
-            # `instance.m2m_data` is Django's own DeserializedObject attribute -- its
-            # absence means the model's deserialize_object() hook returns a
-            # self-managing wrapper (e.g. netbox_custom_objects') with its own
-            # save()/M2M contract, so trust it rather than reaching into a shape it
-            # doesn't guarantee. Its presence means a plain DeserializedObject, whether
-            # from the generic deserialize_object() utility or from a hook that (like
-            # Cable's) only pre-populates extra attributes before returning one -- both
-            # need the same raw-save-bypass fix as the MPTT branch: must NOT go through
-            # DeserializedObject.save() (bypasses model-defined save() and
-            # auto_now/auto_now_add), but a real save() on an adding instance
-            # re-triggers auto_now/auto_now_add itself, so restore created/last_updated
-            # afterward too.
-            timestamps = _snapshot_changelog_timestamps(instance.object)
             if isinstance(instance.object, MPTTModel):
                 clear_mptt_fields(instance.object)
                 instance.object.save(using=using, force_insert=True)
                 for accessor_name, object_list in (instance.m2m_data or {}).items():
                     getattr(instance.object, accessor_name).set(object_list)
-            elif hasattr(instance, 'm2m_data'):
-                instance.object.save(using=using)
-                for accessor_name, object_list in (instance.m2m_data or {}).items():
-                    getattr(instance.object, accessor_name).set(object_list)
             else:
                 instance.save(using=using)
-            _restore_changelog_timestamps(instance.object, timestamps, using)
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:

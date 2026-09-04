@@ -1072,41 +1072,13 @@ class BaseMergeTests:
         )
         self.assertTrue(Site.objects.filter(id=site_id).exists())
 
-    def test_merge_create_preserves_created_timestamp(self):
-        """A real save() (needed for save() overrides) also re-triggers
-        auto_now_add, which would otherwise stamp `created` with merge time
-        instead of the branch's actual creation time."""
-        import time
-
-        branch = self._create_and_provision_branch()
-
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-
-        with activate_branch(branch), event_tracking(request):
-            site = Site.objects.create(name='Test Site', slug='test-site')
-            site_id = site.id
-            created_in_branch = site.created
-
-        # Merge strictly after creation so a stamped-with-merge-time value
-        # would be detectably different from created_in_branch.
-        time.sleep(1.5)
-        branch.merge(user=self.user, commit=True)
-
-        site = Site.objects.get(id=site_id)
-        # Sub-millisecond tolerance for the change-log's JSON round trip
-        # (millisecond precision), which is unrelated to what's under test here.
-        self.assertLess(abs((site.created - created_in_branch).total_seconds()), 0.01)
-
     def test_revert_restore_recovers_original_created_timestamp(self):
-        """Same hazard as test_merge_create_preserves_created_timestamp, on
-        undo()'s restore path: a real save() re-triggers auto_now_add, which
-        would stamp `created` with revert time instead of the object's actual
-        original creation time. The deserialized instance never has `created`
-        set in the first place -- diff_exclude_fields() strips it from
-        prechange_data_clean -- so the fix sources it from the un-cleaned
-        prechange_data instead, which still has it."""
+        """undo()'s restore path calls a real save(), which re-triggers
+        auto_now_add and would stamp `created` with revert time instead of the
+        object's actual original creation time. The deserialized instance
+        never has `created` set in the first place -- diff_exclude_fields()
+        strips it from prechange_data_clean -- so the fix sources it from the
+        un-cleaned prechange_data instead, which still has it."""
         import time
 
         request = RequestFactory().get(reverse('home'))
@@ -1131,79 +1103,6 @@ class BaseMergeTests:
 
         site = Site.objects.get(id=site_id)
         self.assertLess(abs((site.created - original_created).total_seconds()), 0.01)
-
-    def test_merge_cable_created_in_branch_has_terminations(self):
-        """
-        Cable.deserialize_object() (core) is a case flagged in review: it exists
-        for reasons unrelated to this PR's fix (popping a_terminations/
-        b_terminations before deserializing) and returns a plain
-        DeserializedObject, not a self-managing wrapper like
-        netbox_custom_objects' -- so hasattr(model, 'deserialize_object') alone
-        can't distinguish it from that case, which is why the dispatch keys off
-        hasattr(instance, 'm2m_data') instead (see the comment in apply()).
-
-        CableTermination/CablePath creation don't depend on Cable.save() firing
-        correctly during replay either way, since those are independently
-        change-tracked via their own ObjectChange records from the original
-        branch-side save() -- this doesn't regress either way -- but the
-        dispatch fix is still the right one on its own terms.
-        """
-        site = Site.objects.create(name='Cable Site', slug='cable-site')
-        device_a = Device.objects.create(
-            name='Cable Device A', site=site, device_type=self.device_type, role=self.device_role,
-        )
-        device_b = Device.objects.create(
-            name='Cable Device B', site=site, device_type=self.device_type, role=self.device_role,
-        )
-        interface_a = Interface.objects.create(device=device_a, name='eth0', type='1000base-t')
-        interface_b = Interface.objects.create(device=device_b, name='eth0', type='1000base-t')
-        interface_a_id, interface_b_id = interface_a.id, interface_b.id
-
-        branch = self._create_and_provision_branch()
-
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-
-        with activate_branch(branch), event_tracking(request):
-            cable = Cable(
-                a_terminations=[Interface.objects.get(id=interface_a_id)],
-                b_terminations=[Interface.objects.get(id=interface_b_id)],
-            )
-            cable.save()
-            cable_id = cable.id
-
-        branch.merge(user=self.user, commit=True)
-
-        self.assertTrue(Cable.objects.filter(id=cable_id).exists())
-        self.assertEqual(Interface.objects.get(id=interface_a_id).cable_id, cable_id)
-        self.assertEqual(Interface.objects.get(id=interface_b_id).cable_id, cable_id)
-
-    def test_merge_apply_create_calls_model_save_not_raw_save_base(self):
-        """
-        Creating a new object during merge() must call the object's own save(),
-        not bypass it via DeserializedObject.save() -- the same hazard as
-        ObjectChange.undo(), on ObjectChange.apply()'s CREATE path.
-        """
-        branch = self._create_and_provision_branch()
-
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-
-        with activate_branch(branch), event_tracking(request):
-            site = Site.objects.create(name='Test Site', slug='test-site')
-            site_id = site.id
-
-        original_save = Site.save
-        with unittest.mock.patch.object(Site, 'save', autospec=True, side_effect=original_save) as mock_save:
-            branch.merge(user=self.user, commit=True)
-
-        self.assertTrue(
-            mock_save.called,
-            "Creating an object during merge must call the model's own save(), not bypass it",
-        )
-        self.assertTrue(Site.objects.filter(id=site_id).exists())
 
     def test_merge_many_to_many_tags(self):
         """
