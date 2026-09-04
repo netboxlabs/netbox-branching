@@ -7,8 +7,10 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.fields import ArrayField
 from django.db import DEFAULT_DB_ALIAS, models
 from django.urls import reverse
+from django.utils.dateparse import parse_datetime
 from django.utils.translation import gettext_lazy as _
 from mptt.models import MPTTModel
+from netbox.models.features import ChangeLoggingMixin
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import deserialize_object
 
@@ -25,6 +27,34 @@ __all__ = (
     'ChangeDiff',
     'ObjectChange',
 )
+
+
+def _prechange_changelog_timestamps(instance, payload):
+    """Read created/last_updated from a raw (un-cleaned) ObjectChange payload.
+    diff_exclude_fields() strips both from the *_clean view used for diffing
+    and deserializing, so a deserialized instance never has them regardless of
+    what the change actually recorded -- but the raw JSON payload still does.
+    None for a model without these fields."""
+    if not isinstance(instance, ChangeLoggingMixin):
+        return None
+    payload = payload or {}
+    return (
+        parse_datetime(payload['created']) if payload.get('created') else None,
+        parse_datetime(payload['last_updated']) if payload.get('last_updated') else None,
+    )
+
+
+def _restore_changelog_timestamps(instance, snapshot, using):
+    """Write a timestamp snapshot back after a real save(), via a targeted
+    update() rather than another save()."""
+    if snapshot is None:
+        return
+    created, last_updated = snapshot
+    type(instance)._base_manager.using(using).filter(pk=instance.pk).update(
+        created=created, last_updated=last_updated,
+    )
+    instance.created = created
+    instance.last_updated = last_updated
 
 
 class ObjectChange(ObjectChange_):
@@ -175,18 +205,27 @@ class ObjectChange(ObjectChange_):
             # instance, which bypasses DeserializedObject's M2M handling, so — exactly as the
             # MPTT create path above does — reassign the M2M data explicitly. (#531, #610)
             #
-            # Every other model (including NetBox 4.7+ ltree models, whose path/sort_path
-            # columns are recomputed server-side by triggers) is restored through
-            # DeserializedObject.save(), which persists the object and re-establishes its
-            # M2M relationships. Saving the raw instance here instead would silently drop
-            # M2M data (e.g. tags on a reverted ModuleBay).
+            # Every other model is restored the same way: through the model's own save(),
+            # with M2M data and change-log timestamps reapplied afterward. Must NOT go
+            # through DeserializedObject.save() -- it calls Model.save_base(..., raw=True),
+            # bypassing any model-defined save() (e.g. schema DDL a save() override applies)
+            # and skipping auto_now/auto_now_add. But a real save() on an adding instance
+            # re-triggers auto_now/auto_now_add itself, overwriting created/last_updated
+            # with the current time -- restore the *original* values afterward, sourced
+            # from the raw prechange_data (diff_exclude_fields() strips them from
+            # prechange_data_clean, which is what `instance` was deserialized from, so
+            # they're never set on it in the first place).
+            timestamps = _prechange_changelog_timestamps(instance, self.prechange_data)
             if isinstance(instance, MPTTModel):
                 clear_mptt_fields(instance)
                 instance.save(using=using, force_insert=True)
                 for accessor_name, object_list in (deserialized.m2m_data or {}).items():
                     getattr(instance, accessor_name).set(object_list)
             else:
-                deserialized.save(using=using)
+                instance.save(using=using)
+                for accessor_name, object_list in (deserialized.m2m_data or {}).items():
+                    getattr(instance, accessor_name).set(object_list)
+            _restore_changelog_timestamps(instance, timestamps, using)
 
     undo.alters_data = True
 

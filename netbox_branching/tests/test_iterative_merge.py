@@ -2,6 +2,7 @@
 Tests for Branch merge functionality with common base class and iterative merge strategy.
 """
 import unittest
+import unittest.mock
 import uuid
 
 from dcim.models import (
@@ -1011,6 +1012,97 @@ class BaseMergeTests:
         self.assertEqual(restored.count(), 1)
         self.assertEqual(restored.first().name, deleted_bay_name)
         self.assertEqual(set(restored.first().tags.all()), {tag1, tag2})
+
+    def test_merge_revert_restores_deleted_non_mptt_object(self):
+        """Deleting a non-MPTT object in a branch and reverting the merge
+        must restore it, including M2M relationships (tags)."""
+        tag1 = Tag.objects.create(name='Tag 1', slug='tag-1')
+        tag2 = Tag.objects.create(name='Tag 2', slug='tag-2')
+
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            site.tags.add(tag1, tag2)
+        site_id = site.id
+
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(request):
+            Site.objects.get(id=site_id).delete()
+
+        branch.merge(user=self.user, commit=True)
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+        branch.revert(user=self.user, commit=True)
+        restored = Site.objects.filter(id=site_id)
+        self.assertEqual(restored.count(), 1)
+        self.assertEqual(set(restored.first().tags.all()), {tag1, tag2})
+
+    def test_revert_restore_calls_model_save_not_raw_save_base(self):
+        """Restore must call the object's own save(), not bypass it via
+        DeserializedObject.save(). Site has no save()-override side effect to
+        observe, so this spies on Site.save() directly; the production-shaped
+        regression is covered in netbox_custom_objects' own test suite."""
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+        site_id = site.id
+
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(request):
+            Site.objects.get(id=site_id).delete()
+
+        branch.merge(user=self.user, commit=True)
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+        original_save = Site.save
+        with unittest.mock.patch.object(Site, 'save', autospec=True, side_effect=original_save) as mock_save:
+            branch.revert(user=self.user, commit=True)
+
+        self.assertTrue(
+            mock_save.called,
+            "Restoring a deleted object must call the model's own save(), not bypass it",
+        )
+        self.assertTrue(Site.objects.filter(id=site_id).exists())
+
+    def test_revert_restore_recovers_original_created_timestamp(self):
+        """undo()'s restore path calls a real save(), which re-triggers
+        auto_now_add and would stamp `created` with revert time instead of the
+        object's actual original creation time. The deserialized instance
+        never has `created` set in the first place -- diff_exclude_fields()
+        strips it from prechange_data_clean -- so the fix sources it from the
+        un-cleaned prechange_data instead, which still has it."""
+        import time
+
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+        site_id = site.id
+        original_created = site.created
+
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(request):
+            Site.objects.get(id=site_id).delete()
+
+        branch.merge(user=self.user, commit=True)
+        self.assertFalse(Site.objects.filter(id=site_id).exists())
+
+        time.sleep(1.5)
+        branch.revert(user=self.user, commit=True)
+
+        site = Site.objects.get(id=site_id)
+        self.assertLess(abs((site.created - original_created).total_seconds()), 0.01)
 
     def test_merge_many_to_many_tags(self):
         """
