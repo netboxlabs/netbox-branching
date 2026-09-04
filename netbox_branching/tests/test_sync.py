@@ -18,9 +18,12 @@ from dcim.models import (
     Device,
     DeviceRole,
     DeviceType,
+    FrontPort,
     Interface,
     Manufacturer,
     Platform,
+    PortMapping,
+    RearPort,
     Region,
     Site,
     VirtualChassis,
@@ -1103,6 +1106,59 @@ class SyncTestCase(TransactionTestCase):
 
         branch.refresh_from_db()
         self.assertGreater(branch.last_sync, initial_last_sync)
+
+    # -------------------------------------------------------------------------
+    # Front/rear port mapping scenario
+    # -------------------------------------------------------------------------
+
+    def test_sync_front_rear_port_mapping_from_main(self):
+        """
+        Test that a front/rear port mapping created in main after provisioning is pulled
+        into the branch on sync.
+
+        The association lives in the dcim.PortMapping junction model, which only became
+        change-logged in NetBox 4.6.6. Before that it emitted no ObjectChange, so sync —
+        which replays ObjectChange records only — never saw it. Being listed in
+        INCLUDE_MODELS replicates the table at provisioning time, which does not help for
+        rows created afterwards.
+        Refs: #611
+        """
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        device = Device.objects.create(
+            name='Device A',
+            site=site,
+            device_type=self.device_type,
+            role=self.device_role,
+        )
+
+        branch = self._create_and_provision_branch()
+
+        # In main, after provisioning: create a front/rear port pair and map them
+        with event_tracking(self.request):
+            rear_port = RearPort.objects.create(device=device, name='rear', type='8p8c', positions=4)
+            front_port = FrontPort.objects.create(device=device, name='front', type='8p8c', positions=4)
+            PortMapping.objects.create(
+                front_port=front_port,
+                rear_port=rear_port,
+                front_port_position=2,
+                rear_port_position=3,
+            )
+            front_port_id = front_port.id
+            rear_port_id = rear_port.id
+
+        # The branch has not seen any of this yet
+        with activate_branch(branch):
+            self.assertEqual(PortMapping.objects.filter(front_port_id=front_port_id).count(), 0)
+
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertTrue(FrontPort.objects.filter(id=front_port_id).exists())
+            mappings = PortMapping.objects.filter(front_port_id=front_port_id)
+            self.assertEqual(mappings.count(), 1, 'Port mapping created in main was not synced into branch (#611)')
+            synced_mapping = mappings.first()
+            self.assertEqual(synced_mapping.rear_port_id, rear_port_id)
+            self.assertEqual(synced_mapping.rear_port_position, 3)
 
     # -------------------------------------------------------------------------
     # Double-delete scenario

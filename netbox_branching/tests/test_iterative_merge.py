@@ -10,10 +10,13 @@ from dcim.models import (
     Device,
     DeviceRole,
     DeviceType,
+    FrontPort,
     Interface,
     Manufacturer,
     ModuleBay,
     ModuleBayTemplate,
+    PortMapping,
+    RearPort,
     Region,
     Site,
     VirtualChassis,
@@ -1235,6 +1238,161 @@ class BaseMergeTests:
         # Verify cable paths were recalculated — not left empty after merge (#150 regression)
         # A successful cable connection creates two CablePath records (one per endpoint)
         self.assertEqual(CablePath.objects.count(), 2, 'Cable paths not populated after merge')
+
+    def _create_ports(self, device):
+        """Helper to create a front/rear port pair on a device, with no mapping between them."""
+        rear_port = RearPort.objects.create(
+            device=device, name='rear', type='8p8c', positions=4
+        )
+        front_port = FrontPort.objects.create(
+            device=device, name='front', type='8p8c', positions=4
+        )
+        return front_port, rear_port
+
+    def test_merge_front_rear_port_mapping(self):
+        """
+        Test that a front/rear port mapping created in a branch survives the merge.
+
+        The association lives in the dcim.PortMapping junction model, which only became
+        change-logged in NetBox 4.6.6. Before that it emitted no ObjectChange and merge —
+        which replays ObjectChange records only — silently dropped the mapping.
+        Refs: #611
+        """
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        device = Device.objects.create(
+            name='Device A',
+            site=site,
+            device_type=self.device_type,
+            role=self.device_role,
+        )
+        device_id = device.id
+
+        branch = self._create_and_provision_branch()
+
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In branch: create both ports and the mapping between them
+        with activate_branch(branch), event_tracking(request):
+            front_port, rear_port = self._create_ports(Device.objects.get(id=device_id))
+            mapping = PortMapping.objects.create(
+                front_port=front_port,
+                rear_port=rear_port,
+                front_port_position=1,
+                rear_port_position=2,
+            )
+            front_port_id = front_port.id
+            rear_port_id = rear_port.id
+            mapping_id = mapping.id
+
+        # The mapping must be change-logged for the merge to be able to replay it
+        self._assert_object_changes(branch, PortMapping, mapping_id, 1, ['create'])
+
+        # Main is still unmapped prior to the merge
+        self.assertEqual(PortMapping.objects.filter(front_port_id=front_port_id).count(), 0)
+
+        branch.merge(user=self.user, commit=True)
+
+        # Ports and the mapping between them must all land in main
+        self.assertTrue(FrontPort.objects.filter(id=front_port_id).exists())
+        self.assertTrue(RearPort.objects.filter(id=rear_port_id).exists())
+        mappings = PortMapping.objects.filter(front_port_id=front_port_id)
+        self.assertEqual(mappings.count(), 1, 'Front/rear port mapping was dropped on merge (#611)')
+        merged_mapping = mappings.first()
+        self.assertEqual(merged_mapping.rear_port_id, rear_port_id)
+        self.assertEqual(merged_mapping.front_port_position, 1)
+        self.assertEqual(merged_mapping.rear_port_position, 2)
+
+    def test_merge_port_mapping_on_existing_ports(self):
+        """
+        Test merging a mapping added in a branch between ports which already exist in main.
+        Only the PortMapping row is new, so the merge has nothing else to carry it along with.
+        Refs: #611
+        """
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        device = Device.objects.create(
+            name='Device A',
+            site=site,
+            device_type=self.device_type,
+            role=self.device_role,
+        )
+        front_port, rear_port = self._create_ports(device)
+        front_port_id = front_port.id
+        rear_port_id = rear_port.id
+
+        branch = self._create_and_provision_branch()
+
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In branch: map the existing front port to the existing rear port
+        with activate_branch(branch), event_tracking(request):
+            mapping = PortMapping.objects.create(
+                front_port=FrontPort.objects.get(id=front_port_id),
+                rear_port=RearPort.objects.get(id=rear_port_id),
+                front_port_position=3,
+                rear_port_position=4,
+            )
+            mapping_id = mapping.id
+
+        # The mapping must be change-logged for the merge to be able to replay it
+        self._assert_object_changes(branch, PortMapping, mapping_id, 1, ['create'])
+
+        # Main is still unmapped prior to the merge
+        self.assertEqual(PortMapping.objects.filter(front_port_id=front_port_id).count(), 0)
+
+        branch.merge(user=self.user, commit=True)
+
+        mappings = PortMapping.objects.filter(front_port_id=front_port_id)
+        self.assertEqual(mappings.count(), 1, 'Port mapping added in branch was dropped on merge (#611)')
+        self.assertEqual(mappings.first().rear_port_position, 4)
+
+    def test_merge_port_mapping_deletion(self):
+        """
+        Test that deleting a front/rear port mapping in a branch removes it from main on merge.
+        Refs: #611
+        """
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        device = Device.objects.create(
+            name='Device A',
+            site=site,
+            device_type=self.device_type,
+            role=self.device_role,
+        )
+        front_port, rear_port = self._create_ports(device)
+        mapping = PortMapping.objects.create(
+            front_port=front_port,
+            rear_port=rear_port,
+            front_port_position=1,
+            rear_port_position=1,
+        )
+        front_port_id = front_port.id
+        mapping_id = mapping.id
+
+        branch = self._create_and_provision_branch()
+
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # In branch: remove the mapping
+        with activate_branch(branch), event_tracking(request):
+            PortMapping.objects.get(front_port_id=front_port_id).delete()
+
+        # The deletion must be change-logged for the merge to be able to replay it
+        self._assert_object_changes(branch, PortMapping, mapping_id, 1, ['delete'])
+
+        # Main still has the mapping prior to the merge
+        self.assertEqual(PortMapping.objects.filter(front_port_id=front_port_id).count(), 1)
+
+        branch.merge(user=self.user, commit=True)
+
+        self.assertEqual(
+            PortMapping.objects.filter(front_port_id=front_port_id).count(), 0,
+            'Port mapping deleted in branch was not removed from main on merge (#611)'
+        )
 
     def test_merge_delete_after_main_delete(self):
         """
