@@ -7,6 +7,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.fields import ArrayField
 from django.db import DEFAULT_DB_ALIAS, models
 from django.urls import reverse
+from django.utils.dateparse import parse_datetime
 from django.utils.translation import gettext_lazy as _
 from mptt.models import MPTTModel
 from netbox.models.features import ChangeLoggingMixin
@@ -36,9 +37,24 @@ def _snapshot_changelog_timestamps(instance):
     return instance.created, instance.last_updated
 
 
+def _prechange_changelog_timestamps(instance, payload):
+    """Read created/last_updated from a raw (un-cleaned) ObjectChange payload.
+    diff_exclude_fields() strips both from the *_clean view used for diffing
+    and deserializing, so a deserialized instance never has them regardless of
+    what the change actually recorded -- but the raw JSON payload still does.
+    None for a model without these fields."""
+    if not isinstance(instance, ChangeLoggingMixin):
+        return None
+    payload = payload or {}
+    return (
+        parse_datetime(payload['created']) if payload.get('created') else None,
+        parse_datetime(payload['last_updated']) if payload.get('last_updated') else None,
+    )
+
+
 def _restore_changelog_timestamps(instance, snapshot, using):
-    """Write a _snapshot_changelog_timestamps() snapshot back after a real
-    save(), via a targeted update() rather than another save()."""
+    """Write a timestamp snapshot back after a real save(), via a targeted
+    update() rather than another save()."""
     if snapshot is None:
         return
     created, last_updated = snapshot
@@ -115,29 +131,31 @@ class ObjectChange(ObjectChange_):
             # with update_fields that matches zero rows and raises NotUpdated. Applying a
             # CREATE change is always an INSERT, so force_insert is correct here. (#610)
             #
-            # A model with its own deserialize_object() hook (e.g. netbox_custom_objects')
-            # defines its own save()/M2M contract on the returned wrapper -- trust it
-            # rather than reaching into a wrapper shape it doesn't guarantee.
-            #
-            # Otherwise, every model is created through its own save(), with M2M data
-            # and change-log timestamps reapplied afterward (see the comment on the
-            # equivalent undo() path below for why: DeserializedObject.save() bypasses
-            # both, and real save() bypasses timestamps the other way).
+            # `instance.m2m_data` is Django's own DeserializedObject attribute -- its
+            # absence means the model's deserialize_object() hook returns a
+            # self-managing wrapper (e.g. netbox_custom_objects') with its own
+            # save()/M2M contract, so trust it rather than reaching into a shape it
+            # doesn't guarantee. Its presence means a plain DeserializedObject, whether
+            # from the generic deserialize_object() utility or from a hook that (like
+            # Cable's) only pre-populates extra attributes before returning one -- both
+            # need the same raw-save-bypass fix as the MPTT branch: must NOT go through
+            # DeserializedObject.save() (bypasses model-defined save() and
+            # auto_now/auto_now_add), but a real save() on an adding instance
+            # re-triggers auto_now/auto_now_add itself, so restore created/last_updated
+            # afterward too.
+            timestamps = _snapshot_changelog_timestamps(instance.object)
             if isinstance(instance.object, MPTTModel):
-                timestamps = _snapshot_changelog_timestamps(instance.object)
                 clear_mptt_fields(instance.object)
                 instance.object.save(using=using, force_insert=True)
                 for accessor_name, object_list in (instance.m2m_data or {}).items():
                     getattr(instance.object, accessor_name).set(object_list)
-                _restore_changelog_timestamps(instance.object, timestamps, using)
-            elif hasattr(model, 'deserialize_object'):
-                instance.save(using=using)
-            else:
-                timestamps = _snapshot_changelog_timestamps(instance.object)
+            elif hasattr(instance, 'm2m_data'):
                 instance.object.save(using=using)
                 for accessor_name, object_list in (instance.m2m_data or {}).items():
                     getattr(instance.object, accessor_name).set(object_list)
-                _restore_changelog_timestamps(instance.object, timestamps, using)
+            else:
+                instance.save(using=using)
+            _restore_changelog_timestamps(instance.object, timestamps, using)
 
         # Modifying an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
@@ -220,21 +238,21 @@ class ObjectChange(ObjectChange_):
             # bypassing any model-defined save() (e.g. schema DDL a save() override applies)
             # and skipping auto_now/auto_now_add. But a real save() on an adding instance
             # re-triggers auto_now/auto_now_add itself, overwriting created/last_updated
-            # with the current time instead of what the change-log payload captured (or
-            # left unset) -- hence the explicit snapshot/restore around it.
+            # with the current time -- restore the *original* values afterward, sourced
+            # from the raw prechange_data (diff_exclude_fields() strips them from
+            # prechange_data_clean, which is what `instance` was deserialized from, so
+            # they're never set on it in the first place).
+            timestamps = _prechange_changelog_timestamps(instance, self.prechange_data)
             if isinstance(instance, MPTTModel):
-                timestamps = _snapshot_changelog_timestamps(instance)
                 clear_mptt_fields(instance)
                 instance.save(using=using, force_insert=True)
                 for accessor_name, object_list in (deserialized.m2m_data or {}).items():
                     getattr(instance, accessor_name).set(object_list)
-                _restore_changelog_timestamps(instance, timestamps, using)
             else:
-                timestamps = _snapshot_changelog_timestamps(instance)
                 instance.save(using=using)
                 for accessor_name, object_list in (deserialized.m2m_data or {}).items():
                     getattr(instance, accessor_name).set(object_list)
-                _restore_changelog_timestamps(instance, timestamps, using)
+            _restore_changelog_timestamps(instance, timestamps, using)
 
     undo.alters_data = True
 
