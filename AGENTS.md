@@ -2,7 +2,7 @@
 
 ## Repository Overview
 
-`netbox-branching` is a NetBox plugin that adds git-like branching to the network source-of-truth platform. Each branch is an isolated PostgreSQL schema copy of the database; users make changes within a branch and merge back to the main schema. It is owned by NetBox Labs and runs inside NetBox as a Django app (`netbox_branching`, mounted at `/branching/`). Requires PostgreSQL (schema isolation), Redis (background jobs), and NetBox 4.4.1+. The currently supported NetBox version range is in `COMPATIBILITY.md` (4.4.1 – 4.6.x at the time of writing).
+`netbox-branching` is a NetBox plugin that adds git-like branching to the network source-of-truth platform. Each branch is an isolated PostgreSQL schema copy of the database; users make changes within a branch and merge back to the main schema. It is owned by NetBox Labs and runs inside NetBox as a Django app (`netbox_branching`, mounted at `/branching/`). Requires PostgreSQL (schema isolation), Redis (background jobs), and NetBox 4.7.0+. The supported NetBox version range is declared by `min_version` / `max_version` in `netbox_branching/__init__.py` and summarised per release in `COMPATIBILITY.md`; check those rather than relying on a version quoted here.
 
 ## Tech Stack
 

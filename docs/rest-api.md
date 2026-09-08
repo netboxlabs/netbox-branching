@@ -85,6 +85,7 @@ Several REST API endpoints are provided to handle the lifecycle actions associat
 | `/api/plugins/branching/branches/<id>/merge/`    | POST   | Merge a branch into main                          |
 | `/api/plugins/branching/branches/<id>/revert/`   | POST   | Revert a previously merged branch                 |
 | `/api/plugins/branching/branches/<id>/archive/`  | POST   | Archive a merged branch (deprovisions its schema) |
+| `/api/plugins/branching/branches/<id>/recover/`  | POST   | Reset a branch stuck in a transitional status      |
 
 To synchronize updates from main into a branch, send a `POST` request to the desired branch's `sync/` endpoint.
 
@@ -134,6 +135,20 @@ If successful, this will return data about the background job that has been enqu
 This same pattern can be followed to merge and revert branches via their respective API endpoints, listed above.
 
 The `archive/` endpoint differs slightly: it does not enqueue a background job, but rather archives the branch synchronously and returns the updated branch representation. The branch must be in the `merged` state for this action to succeed.
+
+The `recover/` endpoint likewise acts synchronously and returns the updated branch representation. It resets a branch which is stuck in a transitional status (`provisioning`, `syncing`, `migrating`, `merging` or `reverting`) because the background job responsible for it is no longer running — typically because its worker was killed. See [`auto_recover_stuck_branches`](./configuration.md#auto_recover_stuck_branches) for the status each operation is reset to.
+
+```no-highlight title="Request"
+curl -X POST \
+-H "Authorization: Token $TOKEN" \
+-H "Content-Type: application/json" \
+-H "Accept: application/json; indent=4" \
+http://netbox:8000/api/plugins/branching/branches/2/recover/
+```
+
+The request is rejected with a `400` response if the branch is not in a transitional status, or if a job for the branch still appears to be running. Pass `{"force": true}` to recover the branch regardless — do so only when you are certain the operation has stopped, as resetting the status of a branch which is still being worked on may allow a second, conflicting operation to be started against it.
+
+Pass `{"retry": true}` to re-run the interrupted operation once the status has been reset, rather than leaving the branch for someone to act on again. This is honoured only for branches stuck in `syncing` or `migrating`: both operate solely on the branch's own schema and take no parameters which the recovery cannot reconstruct. It is ignored for `merging` and `reverting`, which write to main and whose dry-run flag is not recorded on the job, and for `provisioning`, which cannot be resumed. The web UI offers the same option, unticked by default, on its recovery page.
 
 ## Additional Endpoints
 

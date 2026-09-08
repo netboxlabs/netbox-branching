@@ -1,0 +1,7 @@
+{% load i18n %}
+
+{% if perms.netbox_branching.change_branch %}
+  <a href="{% url 'plugins:netbox_branching:branch_recover' pk=branch.pk %}" class="btn btn-warning">
+    <i class="mdi mdi-lifebuoy"></i> {% trans "Recover" %}
+  </a>
+{% endif %}

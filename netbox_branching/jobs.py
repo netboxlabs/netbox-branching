@@ -26,6 +26,7 @@ __all__ = (
     'MergeBranchJob',
     'MigrateBranchJob',
     'ProvisionBranchJob',
+    'RecoverStuckBranchesJob',
     'RevertBranchJob',
     'SyncBranchJob',
 )
@@ -70,7 +71,13 @@ class BranchJobRunner(JobRunner):
     a JobTimeoutException. NetBox's JobRunner.enqueue() does not consult any per-class timeout, so the
     configured `job_timeout` must be passed through to RQ at enqueue time. Injecting it here ensures
     every branch job honours the setting regardless of which call site enqueues it.
+
+    Subclasses declare the transitional branch status they are responsible for via `branch_status`,
+    which lets a stuck branch be traced back to the job which should be clearing it (see #622).
     """
+    # The transitional Branch status maintained while this job runs
+    branch_status = None
+
     @classmethod
     def enqueue(cls, *args, **kwargs):
         # Use `.get() is None` rather than setdefault so an explicit job_timeout=None
@@ -86,6 +93,8 @@ class ProvisionBranchJob(BranchJobRunner):
     """
     Provision a Branch in the database.
     """
+    branch_status = BranchStatusChoices.PROVISIONING
+
     class Meta:
         name = 'Provision branch'
 
@@ -104,6 +113,8 @@ class SyncBranchJob(BranchJobRunner):
     """
     Sync changes from main into a Branch.
     """
+    branch_status = BranchStatusChoices.SYNCING
+
     class Meta:
         name = 'Sync branch'
 
@@ -127,6 +138,8 @@ class MergeBranchJob(BranchJobRunner):
     """
     Merge changes from a Branch into main.
     """
+    branch_status = BranchStatusChoices.MERGING
+
     class Meta:
         name = 'Merge branch'
 
@@ -213,6 +226,8 @@ class RevertBranchJob(BranchJobRunner):
     """
     Revert changes from a merged Branch.
     """
+    branch_status = BranchStatusChoices.REVERTING
+
     class Meta:
         name = 'Revert branch'
 
@@ -234,6 +249,8 @@ class MigrateBranchJob(BranchJobRunner):
     """
     Apply any outstanding database migrations from the main schema to the Branch.
     """
+    branch_status = BranchStatusChoices.MIGRATING
+
     class Meta:
         name = 'Migrate branch'
 
@@ -251,6 +268,17 @@ class MigrateBranchJob(BranchJobRunner):
                 branch.migrate(user=self.job.user)
             except AbortTransaction:
                 logger.info("Dry run completed; rolling back changes")
+
+
+def get_job_class_for_status(status):
+    """
+    Return the branch job class responsible for the given transitional branch status, or None if
+    the status is not one maintained by a background job.
+    """
+    for cls in (ProvisionBranchJob, SyncBranchJob, MergeBranchJob, RevertBranchJob, MigrateBranchJob):
+        if cls.branch_status == status:
+            return cls
+    return None
 
 
 @system_job(interval=JobIntervalChoices.INTERVAL_DAILY)
@@ -297,3 +325,49 @@ class AutoArchiveBranchJob(JobRunner):
                 branch.archive(user=self.job.user)
             except Exception as e:  # noqa: BLE001 — isolate failures so one branch can't abort the batch
                 self.logger.error(f"Failed to archive branch {branch}: {e}")
+
+
+@system_job(interval=JobIntervalChoices.INTERVAL_HOURLY)
+class RecoverStuckBranchesJob(JobRunner):
+    """
+    Reset branches which are stuck in a transitional status (provisioning, syncing, migrating,
+    merging or reverting) because the job responsible for the operation is no longer running.
+
+    A branch operation records its transitional status in the database before it begins, and clears
+    it again from within the worker process — on success or in an exception handler. A worker which
+    is killed outright (an OOM kill, a container eviction, `kill -9`) runs neither path, so the
+    branch is left in a transitional status forever: every action button in the UI is disabled and
+    the only recourse is to update the row by hand. This hourly job closes that gap. See issue #622.
+
+    Recovery is skipped entirely when `auto_recover_stuck_branches` is disabled; branches can still
+    be recovered on demand from the branch view or the REST API.
+    """
+    class Meta:
+        name = 'Recover stuck branches'
+
+    def run(self, *args, **kwargs):
+        # Import here to avoid a circular import at module load time (models imports jobs).
+        from .models import Branch
+
+        if not get_plugin_config('netbox_branching', 'auto_recover_stuck_branches'):
+            self.logger.info("Automatic recovery of stuck branches is disabled; nothing to do.")
+            return
+
+        branches = Branch.objects.filter(status__in=BranchStatusChoices.TRANSITIONAL)
+        self.logger.info(f"Found {len(branches)} branch(es) in a transitional status.")
+
+        recovered = 0
+        for branch in branches:
+            try:
+                if new_status := branch.recover(user=self.job.user):
+                    recovered += 1
+                    self.logger.warning(
+                        f"Recovered branch {branch}: no job was running for it; "
+                        f"status reset to '{new_status}'."
+                    )
+                else:
+                    self.logger.debug(f"Branch {branch} is still being worked on; leaving it alone.")
+            except Exception as e:  # noqa: BLE001 — isolate failures so one branch can't abort the batch
+                self.logger.error(f"Failed to recover branch {branch}: {e}")
+
+        self.logger.info(f"Recovered {recovered} stuck branch(es).")

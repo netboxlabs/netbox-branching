@@ -1,0 +1,93 @@
+{% extends 'generic/_base.html' %}
+{% load form_helpers %}
+{% load helpers %}
+{% load i18n %}
+
+{% block title %}
+  {% blocktrans %}Recover Branch {{ branch }}{% endblocktrans %}
+{% endblock %}
+
+{% block tabs %}
+  <ul class="nav nav-tabs">
+    <li class="nav-item" role="presentation">
+      <button class="nav-link active" id="action-form-tab" data-bs-toggle="tab" data-bs-target="#action-form" type="button" role="tab" aria-controls="action-form" aria-selected="true">
+        {% trans "Recover" %}
+      </button>
+    </li>
+  </ul>
+{% endblock tabs %}
+
+{% block content %}
+  {# Form tab #}
+  <div class="tab-pane show active" id="action-form" role="tabpanel" aria-labelledby="action-form-tab">
+    <form action="" method="post" enctype="multipart/form-data">
+      {% csrf_token %}
+      <div class="row">
+        <div class="col col-md-8 offset-md-2">
+          <div class="card">
+            <h2 class="card-header">{% trans "Recover Branch" %}</h2>
+            <div class="card-body">
+              <p>
+                {% blocktrans with status=branch.get_status_display %}
+                  This branch is in the <strong>{{ status }}</strong> state, which means a background job
+                  should be working on it.
+                {% endblocktrans %}
+                {{ recovery_description }}
+              </p>
+              <table class="table table-hover attr-table mb-3">
+                <tr>
+                  <th scope="row">{% trans "Current status" %}</th>
+                  <td>{% badge branch.get_status_display bg_color=branch.get_status_color %}</td>
+                </tr>
+                <tr>
+                  <th scope="row">{% trans "Will be reset to" %}</th>
+                  <td>{{ new_status_display|placeholder }}</td>
+                </tr>
+                <tr>
+                  <th scope="row">{% trans "Responsible job" %}</th>
+                  <td>
+                    {% if job %}
+                      <a href="{{ job.get_absolute_url }}">{{ job.name }}</a>
+                      ({% badge job.get_status_display bg_color=job.get_status_color %})
+                      {% if job.started %}
+                        <div class="text-muted">{% trans "Started" %} {{ job.started }}</div>
+                      {% endif %}
+                    {% else %}
+                      <span class="text-muted">{% trans "No job record found" %}</span>
+                    {% endif %}
+                  </td>
+                </tr>
+              </table>
+              {% if is_stuck %}
+                <div class="alert alert-warning">
+                  <i class="mdi mdi-alert"></i>
+                  {% blocktrans %}
+                    No running job was found for this branch. Its worker most likely terminated before it
+                    could finish, so the branch will remain in its current state until it is recovered.
+                  {% endblocktrans %}
+                </div>
+              {% else %}
+                <div class="alert alert-danger">
+                  <i class="mdi mdi-alert-circle"></i>
+                  {% blocktrans %}
+                    A job for this branch still appears to be running. Recover it only if you are certain
+                    that the operation has stopped — resetting the status of a branch which is still being
+                    worked on may allow a second, conflicting operation to be started against it.
+                  {% endblocktrans %}
+                </div>
+              {% endif %}
+              {% if form.retry %}{% render_field form.retry %}{% endif %}
+            </div>
+            <div class="card-footer text-end">
+              <a href="{{ branch.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
+              <button type="submit" name="_update" class="btn btn-primary">
+                {% trans "Recover" %}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </form>
+  </div>
+  {# /Form tab #}
+{% endblock content %}
