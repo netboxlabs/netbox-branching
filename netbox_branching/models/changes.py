@@ -219,12 +219,10 @@ class ObjectChange(ObjectChange_):
             if isinstance(instance, MPTTModel):
                 clear_mptt_fields(instance)
                 instance.save(using=using, force_insert=True)
-                for accessor_name, object_list in (deserialized.m2m_data or {}).items():
-                    getattr(instance, accessor_name).set(object_list)
             else:
                 instance.save(using=using)
-                for accessor_name, object_list in (deserialized.m2m_data or {}).items():
-                    getattr(instance, accessor_name).set(object_list)
+            for accessor_name, object_list in (deserialized.m2m_data or {}).items():
+                getattr(instance, accessor_name).set(object_list)
             _restore_changelog_timestamps(instance, timestamps, using)
 
     undo.alters_data = True
