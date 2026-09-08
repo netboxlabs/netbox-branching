@@ -647,12 +647,16 @@ def _get_rq_job_status(job):
     Return the RQ status of the RQ job backing a NetBox `Job`, the string ``'missing'`` if RQ no
     longer knows about it, or None if RQ could not be consulted (e.g. Redis is unreachable).
     """
+    # Both imports must stay nested: this module is imported by AppConfig, and so by NetBox's
+    # settings module while it is still executing, whereas django_rq reads Django settings at
+    # import time (and utilities.rqworker imports django_rq). Hoisting either one pulls that read
+    # into a window where django.conf.settings is only half-built.
     import django_rq
     from utilities.rqworker import get_queue_for_model
 
     try:
         # Fall back to the queue for the job's object type, matching Job.delete()'s handling of
-        # legacy jobs recorded before queue_name was introduced.
+        # legacy jobs recorded before Job.queue_name was introduced (NetBox 4.5.2).
         queue_name = job.queue_name or get_queue_for_model(job.object_type.model if job.object_type else None)
         rq_job = django_rq.get_queue(queue_name).fetch_job(str(job.job_id))
     except Exception as e:  # noqa: BLE001 — Redis being unavailable must not break the caller

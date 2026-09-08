@@ -23,6 +23,7 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import patch
 
+import django_rq
 from core.choices import JobStatusChoices
 from core.models import Job
 from django.contrib.auth import get_user_model
@@ -31,7 +32,11 @@ from django.db import connections
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
+from netbox.constants import RQ_QUEUE_DEFAULT
+from rq.job import Job as RQJob
+from rq.job import JobStatus
 from users.models import Token
+from utilities.rqworker import get_queue_for_model
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.jobs import (
@@ -44,7 +49,12 @@ from netbox_branching.jobs import (
     get_job_class_for_status,
 )
 from netbox_branching.models import Branch
-from netbox_branching.utilities import RQ_JOB_MISSING, _get_tracked_branch_aliases, is_job_abandoned
+from netbox_branching.utilities import (
+    RQ_JOB_MISSING,
+    _get_rq_job_status,
+    _get_tracked_branch_aliases,
+    is_job_abandoned,
+)
 
 User = get_user_model()
 
@@ -59,9 +69,16 @@ RECOVERY_CONFIG = {
 }
 
 
-def make_job(branch, name, status=JobStatusChoices.STATUS_RUNNING, started_ago=timedelta(minutes=5)):
+def make_job(
+    branch,
+    name,
+    status=JobStatusChoices.STATUS_RUNNING,
+    started_ago=timedelta(minutes=5),
+    queue_name=RQ_QUEUE_DEFAULT,
+):
     """
-    Create a Job record attached to `branch`, as a branch operation would.
+    Create a Job record attached to `branch`, as a branch operation would. `queue_name` is the queue
+    NetBox records at enqueue time; pass '' to model a job recorded before that field existed.
     """
     return Job.objects.create(
         object_type=ContentType.objects.get_for_model(Branch),
@@ -70,6 +87,7 @@ def make_job(branch, name, status=JobStatusChoices.STATUS_RUNNING, started_ago=t
         status=status,
         started=timezone.now() - started_ago if status != JobStatusChoices.STATUS_PENDING else None,
         job_id=uuid.uuid4(),
+        queue_name=queue_name,
     )
 
 
@@ -164,6 +182,71 @@ class IsJobAbandonedTestCase(BranchConnectionCleanupMixin, TestCase):
         job.refresh_from_db()
         with patch('netbox_branching.utilities._get_rq_job_status', return_value=None):
             self.assertFalse(is_job_abandoned(job, grace_period=300))
+
+
+class GetRQJobStatusTestCase(BranchConnectionCleanupMixin, TestCase):
+    """
+    The one lookup in the recovery path which cannot be covered by patching itself. Every failure
+    `_get_rq_job_status()` can meet is deliberately swallowed, so that an unreachable Redis reports
+    "no answer" instead of breaking the caller — which also means a NetBox API that moved underneath
+    it (`Job.queue_name` arrived in NetBox 4.5.2) would raise inside that same try block and be
+    indistinguishable from Redis being down, quietly reducing recovery to its elapsed-time fallback.
+    These exercise it unpatched, against the Redis the suite already requires.
+
+    Jobs are registered in Redis directly rather than enqueued: nothing here should ever be picked
+    up and run by a worker servicing the same queue.
+    """
+
+    def setUp(self):
+        self.branch = make_branch('RQ Status', BranchStatusChoices.MIGRATING)
+        self.rq_jobs = []
+
+    def tearDown(self):
+        for rq_job in self.rq_jobs:
+            rq_job.delete()
+        super().tearDown()
+
+    def register_with_rq(self, job, status):
+        """
+        Record `job` in Redis under the status RQ would report for it, without enqueueing it.
+        """
+        queue = django_rq.get_queue(job.queue_name)
+        rq_job = RQJob.create(
+            'time.sleep', args=(0,), connection=queue.connection, id=str(job.job_id), origin=queue.name
+        )
+        rq_job.save()
+        rq_job.set_status(status)
+        self.rq_jobs.append(rq_job)
+        return rq_job
+
+    def test_reads_the_status_reported_by_rq(self):
+        job = make_job(self.branch, MigrateBranchJob.Meta.name)
+        self.register_with_rq(job, JobStatus.STARTED)
+        self.assertEqual(_get_rq_job_status(job), JobStatus.STARTED)
+
+    def test_job_absent_from_rq_reports_missing(self):
+        # 'missing', not None: the queue was reached and does not know the job.
+        job = make_job(self.branch, MigrateBranchJob.Meta.name)
+        self.assertEqual(_get_rq_job_status(job), RQ_JOB_MISSING)
+
+    def test_the_queue_recorded_on_the_job_is_the_one_consulted(self):
+        job = make_job(self.branch, MigrateBranchJob.Meta.name, queue_name='low')
+        with patch('django_rq.get_queue', wraps=django_rq.get_queue) as get_queue:
+            self.assertEqual(_get_rq_job_status(job), RQ_JOB_MISSING)
+        get_queue.assert_called_once_with('low')
+
+    def test_legacy_job_without_a_queue_name_falls_back_to_its_object_type(self):
+        # Jobs recorded before NetBox 4.5.2 have no queue_name; Job.delete() derives one this way.
+        job = make_job(self.branch, MigrateBranchJob.Meta.name, queue_name='')
+        with patch('django_rq.get_queue', wraps=django_rq.get_queue) as get_queue:
+            self.assertEqual(_get_rq_job_status(job), RQ_JOB_MISSING)
+        get_queue.assert_called_once_with(get_queue_for_model('branch'))
+
+    def test_unreachable_rq_gives_no_answer(self):
+        # None leaves is_job_abandoned() to fall back to elapsed time rather than presume a verdict.
+        job = make_job(self.branch, MigrateBranchJob.Meta.name)
+        with patch('django_rq.get_queue', side_effect=Exception('Redis is unreachable')):
+            self.assertIsNone(_get_rq_job_status(job))
 
 
 class JobClassLookupTestCase(BranchConnectionCleanupMixin, TestCase):

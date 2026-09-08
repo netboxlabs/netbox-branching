@@ -190,8 +190,9 @@ class BranchViewSet(ModelViewSet):
         # Recover only a branch which is demonstrably stuck, unless the caller explicitly forces it.
         serializer = serializers.BranchRecoverSerializer(data=request.data)
         params = serializer.validated_data if serializer.is_valid() else {}
-        # Re-running the interrupted operation is opt-in over the API, where there is no confirmation
-        # step; the UI offers it as a checked-by-default option instead.
+        # Re-running the interrupted operation is opt-in here exactly as it is in the UI, whose
+        # recovery form offers it unticked: the worker may have died because of the operation
+        # itself, in which case repeating it unprompted would only repeat the failure.
         retry = bool(params.get('retry', False))
         if params.get('force', False):
             branch.force_recover(user=request.user, retry=retry)

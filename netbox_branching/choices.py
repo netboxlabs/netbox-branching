@@ -62,9 +62,11 @@ class BranchStatusChoices(ChoiceSet):
     )
 
     # The status to which a branch is reset when the background job responsible for a
-    # transitional status is no longer running (e.g. its worker was killed). Each value
-    # mirrors the status that the corresponding branch operation restores itself when it
-    # fails, so recovery leaves the branch exactly where a caught error would have. See #622.
+    # transitional status is no longer running (e.g. its worker was killed). An interruption is
+    # not the same thing as a failure: a caught error means the operation itself went wrong,
+    # whereas a killed worker says nothing about the work already committed. For four of these
+    # the two coincide, and the value matches what the operation's own failure handler sets;
+    # migrating is the exception, for the reason given on that entry. See #622.
     RECOVERY_STATUS: ClassVar = {
         # A partially provisioned schema cannot be resumed; the branch must be deleted or
         # re-created, which is what the provisioning failure path also does.
@@ -72,7 +74,10 @@ class BranchStatusChoices(ChoiceSet):
         SYNCING: READY,
         # Django applies each migration in its own transaction, so an interrupted migration
         # leaves the branch consistent but partially migrated: the remaining migrations can
-        # simply be re-applied.
+        # simply be re-applied. Deliberately unlike Branch.migrate()'s own failure handler,
+        # which marks the branch FAILED: a migration which raised may have left the schema in
+        # a state Django cannot account for, and must not be activated, whereas one whose
+        # worker was killed committed everything it finished and rolled back the rest.
         MIGRATING: PENDING_MIGRATIONS,
         # Merges and reverts run inside a single transaction, which the database rolls back
         # when the connection dies, so the branch is left as it was before the operation.
