@@ -1,5 +1,14 @@
 # Change Log
 
+## v1.2.1
+
+### Bug Fixes
+
+* [#622](https://github.com/netboxlabs/netbox-branching/issues/622) - Recover branches left in a transitional status when a background worker dies
+* [#650](https://github.com/netboxlabs/netbox-branching/issues/650) - Ensure `ObjectChange.undo()` calls the model's `save()` method when restoring non-MPTT objects
+
+---
+
 ## v1.2.0
 
 ### NetBox v4.7 Support ([#617](https://github.com/netboxlabs/netbox-branching/issues/617))
