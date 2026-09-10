@@ -5,6 +5,7 @@ import unittest
 import unittest.mock
 import uuid
 
+from dcim.choices import DeviceFaceChoices
 from dcim.models import (
     Cable,
     CablePath,
@@ -17,6 +18,7 @@ from dcim.models import (
     ModuleBay,
     ModuleBayTemplate,
     PortMapping,
+    Rack,
     RearPort,
     Region,
     Site,
@@ -24,6 +26,7 @@ from dcim.models import (
 )
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db import connections
 from django.test import RequestFactory, SimpleTestCase, TransactionTestCase
 from django.urls import reverse
@@ -33,6 +36,7 @@ from netbox.context_managers import event_tracking
 from utilities.exceptions import AbortTransaction
 
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
+from netbox_branching.error_report import build_error_report, get_entry_message, get_merge_recommendations
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import DELETED, _deep_merge_dict, _strip_deleted, activate_branch, diff_for_merge
@@ -1583,6 +1587,184 @@ class BaseMergeTests:
             Site.objects.filter(pk=site.pk).exists(),
             msg='commit=False must not undo the previously merged change',
         )
+
+    def _rack_collision_branch(self):
+        """
+        Build the #632 scenario: a branch device and a main device independently claiming rack
+        unit 12. Returns (branch, branch_device).
+        """
+        site = Site.objects.create(name='Collision Site', slug='collision-site')
+        rack = Rack.objects.create(site=site, name='Collision Rack', u_height=42)
+
+        branch = self._create_and_provision_branch()
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with activate_branch(branch), event_tracking(request):
+            branch_device = Device.objects.create(
+                name='Branch Device',
+                site=site,
+                rack=rack,
+                device_type=self.device_type,
+                role=self.device_role,
+                position=12,
+                face=DeviceFaceChoices.FACE_FRONT,
+            )
+
+        # Main independently takes the same slot
+        Device.objects.create(
+            name='Main Device',
+            site=site,
+            rack=rack,
+            device_type=self.device_type,
+            role=self.device_role,
+            position=12,
+            face=DeviceFaceChoices.FACE_FRONT,
+        )
+
+        return branch, branch_device
+
+    def test_merge_rack_position_collision_reports_main_collision(self):
+        """
+        A merge blocked by main's occupancy of the rack unit is reported as a collision with
+        main, not as an invalid value in the branch. (#632)
+        """
+        branch, branch_device = self._rack_collision_branch()
+
+        # No conflict is detectable up front: different objects, so nothing diverges
+        self.assertFalse(
+            ChangeDiff.objects.filter(branch=branch).exclude(conflicts=None).exists(),
+            msg='the collision is between two distinct objects, so no ChangeDiff conflict exists',
+        )
+
+        with self.assertRaises(ValidationError) as ctx:
+            branch.merge(user=self.user, commit=True)
+
+        entry = build_error_report(ctx.exception)
+        self.assertEqual(entry['type'], 'main_collision')
+        self.assertEqual(entry['model'], 'device')
+        self.assertEqual(entry['field'], 'position')
+        self.assertEqual(entry['object_id'], branch_device.pk)
+        self.assertEqual(entry['value'], '12.0')
+        self.assertIn('already occupied', entry['detail'])
+
+        message = get_entry_message(entry)
+        self.assertIn('main schema', message)
+        self.assertIn('already occupied', message)
+
+        recommendations = [
+            str(r) for r in get_merge_recommendations(entry, merge_strategy=self.MERGE_STRATEGY)
+        ]
+        self.assertEqual(len(recommendations), 2)
+        joined = ' '.join(recommendations)
+        self.assertIn('main schema', joined)
+        self.assertIn('position', joined)
+        # The branch-side route needs squash unless we are already on it
+        if self.MERGE_STRATEGY == BranchMergeStrategyChoices.SQUASH:
+            self.assertNotIn('Squash', joined)
+        else:
+            self.assertIn('Squash', recommendations[1])
+
+        # The branch survives the failed merge and can be retried
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+    def test_branch_side_fix_needs_squash_under_iterative(self):
+        """
+        Moving the branch device out of the contested slot only works under squash: iterative
+        re-applies the original CREATE at the colliding position before reaching the UPDATE
+        that moved it. (#632)
+        """
+        branch, branch_device = self._rack_collision_branch()
+
+        with self.assertRaises(ValidationError):
+            branch.merge(user=self.user, commit=True)
+
+        # Apply the remedy: move the branch device to a free slot
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+        with activate_branch(branch), event_tracking(request):
+            device = Device.objects.get(pk=branch_device.pk)
+            device.position = 21
+            device.save()
+
+        if self.MERGE_STRATEGY == BranchMergeStrategyChoices.SQUASH:
+            branch.merge(user=self.user, commit=True)
+            self.assertEqual(Device.objects.get(pk=branch_device.pk).position, 21)
+            return
+
+        with self.assertRaises(ValidationError) as ctx:
+            branch.merge(user=self.user, commit=True)
+
+        entry = build_error_report(ctx.exception)
+        self.assertEqual(entry['type'], 'main_collision')
+        # Branch object is at 21 now, but the replayed change still carries the original 12
+        self.assertEqual(entry['value'], '21.0')
+        self.assertIn('U12', entry['detail'])
+        self.assertIn(
+            'Squash',
+            str(get_merge_recommendations(entry, merge_strategy=self.MERGE_STRATEGY)[1]),
+            msg='the branch-side remedy is useless under iterative unless it names squash',
+        )
+
+    def test_unrelated_branch_invalidity_is_not_reported_as_collision(self):
+        """
+        The probe requires the branch object to validate cleanly, not merely to pass on the
+        field that blocked the merge: clean() raises on its first problem, so an unrelated
+        failure in the branch leaves us unable to say the merge-blocking check would have
+        passed there. Such an object is reported as a plain validation error. (#632)
+        """
+        branch, branch_device = self._rack_collision_branch()
+
+        # Break the branch copy on a different field than the one the merge trips on
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+        with activate_branch(branch), event_tracking(request):
+            device = Device.objects.get(pk=branch_device.pk)
+            device.face = ''
+            device.save()
+
+        with self.assertRaises(ValidationError) as ctx:
+            branch.merge(user=self.user, commit=True)
+
+        self.assertEqual(build_error_report(ctx.exception)['type'], 'validation_error')
+
+    def test_merge_invalid_branch_value_is_not_reported_as_collision(self):
+        """
+        Control: a value that is invalid in the branch too keeps its plain validation_error
+        classification.
+        """
+        site = Site.objects.create(name='Invalid Site', slug='invalid-site')
+        rack = Rack.objects.create(site=site, name='Invalid Rack', u_height=42)
+
+        branch = self._create_and_provision_branch()
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # objects.create() skips full_clean(), so an invalid object can still reach the branch
+        with activate_branch(branch), event_tracking(request):
+            Device.objects.create(
+                name='Faceless Device',
+                site=site,
+                rack=rack,
+                device_type=self.device_type,
+                role=self.device_role,
+                position=12,
+                face='',
+            )
+
+        with self.assertRaises(ValidationError) as ctx:
+            branch.merge(user=self.user, commit=True)
+
+        entry = build_error_report(ctx.exception)
+        self.assertEqual(entry['type'], 'validation_error')
+        self.assertEqual(entry['field'], 'face')
+        self.assertIsNone(entry['detail'])
+        self.assertIn('face', str(get_merge_recommendations(entry, merge_strategy=self.MERGE_STRATEGY)[0]))
 
 
 class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
