@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
+
 from netbox.plugins import PluginConfig, get_plugin_config
 from netbox.utils import register_model_feature
 
@@ -22,7 +23,7 @@ class AppConfig(PluginConfig):
     middleware = (
         'netbox_branching.middleware.BranchMiddleware',
     )
-    default_settings = {  # noqa: RUF012
+    default_settings = {
         # The maximum number of working branches (excludes merged & archived branches)
         'max_working_branches': None,
 

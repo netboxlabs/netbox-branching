@@ -24,20 +24,18 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import django_rq
-from core.choices import JobStatusChoices
-from core.models import Job
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
-from netbox.constants import RQ_QUEUE_DEFAULT
 from rq.job import Job as RQJob
 from rq.job import JobStatus
-from users.models import Token
-from utilities.rqworker import get_queue_for_model
 
+from core.choices import JobStatusChoices
+from core.models import Job
+from netbox.constants import RQ_QUEUE_DEFAULT
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.jobs import (
     MergeBranchJob,
@@ -55,6 +53,8 @@ from netbox_branching.utilities import (
     _get_tracked_branch_aliases,
     is_job_abandoned,
 )
+from users.models import Token
+from utilities.rqworker import get_queue_for_model
 
 User = get_user_model()
 

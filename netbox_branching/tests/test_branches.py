@@ -5,10 +5,9 @@ from django.core.exceptions import ValidationError
 from django.db import connection
 from django.test import SimpleTestCase, TransactionTestCase, override_settings
 from django.utils import timezone
+
 from extras.validators import CustomValidator
 from netbox.plugins import get_plugin_config
-from utilities.exceptions import AbortRequest
-
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.forms import BranchForm
@@ -16,6 +15,7 @@ from netbox_branching.models import Branch
 from netbox_branching.provisioning import quote_ident
 from netbox_branching.signals import post_deprovision, pre_deprovision
 from netbox_branching.utilities import BranchActionIndicator, get_tables_to_replicate
+from utilities.exceptions import AbortRequest
 
 from .utils import fetchall, fetchone
 

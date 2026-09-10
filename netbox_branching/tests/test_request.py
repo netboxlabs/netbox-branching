@@ -1,10 +1,10 @@
 from django.test import override_settings
 from django.urls import reverse
-from utilities.testing import TestCase
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
 from netbox_branching.models import Branch
+from utilities.testing import TestCase
 
 
 class RequestTestCase(TestCase):
@@ -130,6 +130,6 @@ class RequestTestCase(TestCase):
         """
         response = self.client.get(
             reverse('api-root'),
-            HTTP_X_NETBOX_BRANCH='nonexist',
+            headers={"x-netbox-branch": 'nonexist'}
         )
         self.assertEqual(response.status_code, 400)

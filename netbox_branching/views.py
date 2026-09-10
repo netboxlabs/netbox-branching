@@ -1,14 +1,15 @@
 from collections import defaultdict
 
-from core.choices import JobStatusChoices, ObjectChangeActionChoices
-from core.filtersets import ObjectChangeFilterSet
-from core.models import ObjectChange
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Count, Min, Q
 from django.shortcuts import redirect, render
 from django.utils.translation import gettext_lazy as _
+
+from core.choices import JobStatusChoices, ObjectChangeActionChoices
+from core.filtersets import ObjectChangeFilterSet
+from core.models import ObjectChange
 from netbox.views import generic
 from netbox.views.generic.base import BaseMultiObjectView
 from utilities.views import GetReturnURLMixin, ViewTab, register_model_view
@@ -119,7 +120,7 @@ class BranchDiffView(generic.ObjectChildrenView):
     child_model = ChangeDiff
     filterset = filtersets.ChangeDiffFilterSet
     table = tables.ChangeDiffTable
-    actions = {}  # noqa: RUF012
+    actions = {}
     tab = ViewTab(
         label=_('Diff'),
         badge=_get_diff_count,
@@ -176,7 +177,7 @@ class BranchChangesBehindView(GroupedChangesViewMixin, generic.ObjectChildrenVie
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
-    actions = {}  # noqa: RUF012
+    actions = {}
     tab = ViewTab(
         label=_('Changes Behind'),
         badge=lambda obj: obj.get_unsynced_changes().count(),
@@ -192,7 +193,7 @@ class BranchChangesAheadView(GroupedChangesViewMixin, generic.ObjectChildrenView
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
-    actions = {}  # noqa: RUF012
+    actions = {}
     tab = ViewTab(
         label=_('Changes Ahead'),
         badge=lambda obj: obj.get_unmerged_changes().count(),
@@ -272,7 +273,7 @@ class BranchChangesMergedView(GroupedChangesViewMixin, generic.ObjectChildrenVie
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
-    actions = {}  # noqa: RUF012
+    actions = {}
     tab = ViewTab(
         label=_('Changes Merged'),
         badge=lambda obj: obj.get_merged_changes().count(),

@@ -1,4 +1,5 @@
 from django.contrib.contenttypes.models import ContentType
+
 from netbox.plugins import PluginTemplateExtension
 
 from .choices import BranchStatusChoices

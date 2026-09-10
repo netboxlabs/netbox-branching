@@ -9,8 +9,6 @@ from contextlib import contextmanager
 from datetime import timedelta
 from functools import cached_property, partial
 
-from core.choices import JobStatusChoices, ObjectChangeActionChoices
-from core.models import ObjectChange as ObjectChange_
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -26,17 +24,16 @@ from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from psycopg.pq import TransactionStatus
+from rq.timeouts import JobTimeoutException
+
+from core.choices import JobStatusChoices, ObjectChangeActionChoices
+from core.models import ObjectChange as ObjectChange_
 from netbox.config import get_config
 from netbox.context import current_request
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
-from psycopg.pq import TransactionStatus
-from rq.timeouts import JobTimeoutException
-from utilities.exceptions import AbortRequest, AbortTransaction
-from utilities.querysets import RestrictedQuerySet
-from utilities.serialization import serialize_object
-
 from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
@@ -62,6 +59,9 @@ from netbox_branching.utilities import (
     record_applied_change,
     supports_branching,
 )
+from utilities.exceptions import AbortRequest, AbortTransaction
+from utilities.querysets import RestrictedQuerySet
+from utilities.serialization import serialize_object
 
 from .changes import ChangeDiff, ObjectChange
 

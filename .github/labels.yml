@@ -1,0 +1,168 @@
+---
+# Canonical NetBox Labs replicable issue label set.
+#
+# Source: netbox-community/netbox GitHub issue labels (collected
+# 2026-05-21); trimmed to plugin-relevant labels and supplemented
+# with the NBL-specific `test-against:feature` label used by
+# `.github/workflows/test.yml`.
+#
+# Excluded from upstream NetBox core: `type: translation`,
+# `plugin candidate`, `beta`, `netbox`, and all `topic:*` labels
+# (those describe NetBox-core domains rather than per-plugin
+# concerns).
+#
+# Description edits applied on top of NetBox-core wording:
+#   complexity: high      typo fix
+#   severity: medium      typo fix + adverb grammar
+#   status: needs owner   rewritten (original phrasing
+#                         did not parse)
+#   status: declined      parenthetical demoted to semicolon
+#                         clause for clarity
+#   status: duplicate     extended to cover pull requests
+#   test-against:feature  expanded from a terse jargon phrase
+#                         to explain intent (NBL-specific label)
+#   type: feature         rewritten for concision (was
+#                         'Introduction of new functionality...')
+#   type: deprecation     rewritten for concision (dropped
+#                         'Designation of' framing)
+#   status: deferred      dropped redundant 'in the future'
+#
+# The per-plugin `app: <shortname>` label is created separately
+# by the maintainer; see docs/post-copy-checklist.md in the
+# scaffold repo: https://github.com/netboxlabs/netbox-plugin-scaffold
+#
+# Apply with the procedure documented in
+# docs/post-copy-checklist.md (single `gh label clone` from
+# https://github.com/netboxlabs/netbox-plugin-scaffold).
+
+- name: 'type: bug'
+  color: 'd93f0b'
+  description: >-
+    A confirmed report of unexpected behavior in the application
+
+- name: 'type: deprecation'
+  color: 'f7ee6f'
+  description: 'A feature or behavior that will be removed in a future release'
+
+- name: 'type: documentation'
+  color: 'c5def5'
+  description: 'A change or addition to the documentation'
+
+- name: 'type: feature'
+  color: '1d76db'
+  description: 'A new feature or capability'
+
+- name: 'type: housekeeping'
+  color: 'f26f18'
+  description: >-
+    Changes to the application which do not directly impact the
+    end user
+
+- name: 'type: performance'
+  color: '881885'
+  description: 'A concern regarding application performance'
+
+- name: 'type: removal'
+  color: '223929'
+  description: 'The removal of a deprecated feature or resource'
+
+- name: 'status: accepted'
+  color: '0e8a16'
+  description: 'This issue has been accepted for implementation'
+
+- name: 'status: backlog'
+  color: '7caef8'
+  description: 'Awaiting selection for work'
+
+- name: 'status: blocked'
+  color: '006b75'
+  description: >-
+    Another issue or external requirement is preventing
+    implementation
+
+- name: 'status: declined'
+  color: 'cbca3b'
+  description: >-
+    A proposed feature that has been considered and declined;
+    duplicate requests will be closed
+
+- name: 'status: deferred'
+  color: 'bd5742'
+  description: 'An issue that has been set aside for potential reconsideration'
+
+- name: 'status: duplicate'
+  color: 'cccccc'
+  description: 'This issue or pull request already exists'
+
+- name: 'status: needs owner'
+  color: 'ccfc53'
+  description: >-
+    Tentatively accepted; awaiting a volunteer to commit to
+    implementing it
+
+- name: 'status: needs triage'
+  color: '2cedd4'
+  description: 'This issue is awaiting triage by a maintainer'
+
+- name: 'status: revisions needed'
+  color: 'e67e22'
+  description: >-
+    This issue requires additional information to be actionable
+
+- name: 'status: under review'
+  color: 'fbca04'
+  description: >-
+    Further discussion is needed to determine this issue's
+    scope and/or implementation
+
+- name: 'severity: high'
+  color: 'e03c32'
+  description: >-
+    Completely breaks certain functions, or substantially
+    degrades performance application-wide
+
+- name: 'severity: medium'
+  color: 'ffd301'
+  description: >-
+    Results in substantially degraded or broken functionality
+    for specific workflows
+
+- name: 'severity: low'
+  color: '006b3d'
+  description: >-
+    Does not significantly disrupt application functionality,
+    or a workaround is available
+
+- name: 'complexity: high'
+  color: 'e03c32'
+  description: >-
+    Expected to require a large amount of time and effort to
+    implement relative to other tasks
+
+- name: 'complexity: medium'
+  color: 'ffd301'
+  description: >-
+    Requires a substantial but not unusual amount of effort to
+    implement
+
+- name: 'complexity: low'
+  color: '006b3d'
+  description: 'Requires minimal effort to implement'
+
+- name: 'breaking change'
+  color: 'f8fc0a'
+  description: >-
+    This change modifies or removes some previously documented
+    functionality
+
+- name: 'pending closure'
+  color: 'e391f2'
+  description: >-
+    Requires immediate attention to avoid being closed for
+    inactivity
+
+- name: 'test-against:feature'
+  color: '6a99d5'
+  description: >-
+    CI: run the test matrix against the upstream NetBox
+    development branch (early-warning canary)

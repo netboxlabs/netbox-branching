@@ -2,6 +2,7 @@ from typing import ClassVar
 
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import pgettext_lazy
+
 from utilities.choices import ChoiceSet
 
 

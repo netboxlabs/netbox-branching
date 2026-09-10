@@ -1,6 +1,9 @@
+---
 site_name: NetBox Branching
-repo_name: netboxlabs/nbl-netbox-branching
-repo_url: https://github.com/netboxlabs/nbl-netbox-branching
+site_description: A git-like branching implementation for NetBox
+repo_name: netboxlabs/netbox-branching
+repo_url: https://github.com/netboxlabs/netbox-branching
+
 theme:
   name: material
   icon:
@@ -19,38 +22,42 @@ theme:
       toggle:
         icon: material/lightbulb
         name: Switch to Light Mode
+
 plugins:
   - search:
       lang: en
+
 markdown_extensions:
-    - admonition
-    - attr_list
-    - footnotes
-    - pymdownx.emoji:
-        emoji_index: !!python/name:material.extensions.emoji.twemoji
-        emoji_generator: !!python/name:material.extensions.emoji.to_svg
-    - pymdownx.superfences:
-        custom_fences:
-          - name: mermaid
-            class: mermaid
-            format: !!python/name:pymdownx.superfences.fence_code_format
-    - pymdownx.tabbed:
-        alternate_style: true
+  - admonition
+  - attr_list
+  - footnotes
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+
 nav:
-    - Introduction: 'index.md'
-    - Using Branches:
-        - Creating a Branch: 'using-branches/creating-a-branch.md'
-        - Syncing & Merging: 'using-branches/syncing-merging.md'
-        - Reverting a Branch: 'using-branches/reverting-a-branch.md'
-    - Best Practices: 'best-practices.md'
-    - Plugin Development: 'plugin-development.md'
-    - NetBox Docker: 'netbox-docker.md'
-    - REST API: 'rest-api.md'
-    - Configuration: 'configuration.md'
-    - Event Rules: 'event-rules.md'
-    - Data Model:
-        - Branch: 'models/branch.md'
-        - BranchEvent: 'models/branchevent.md'
-        - ChangeDiff: 'models/changediff.md'
-        - ObjectChange: 'models/objectchange.md'
-    - Change Log: 'changelog.md'
+  - Introduction: 'index.md'
+  - Using Branches:
+      - Creating a Branch: 'using-branches/creating-a-branch.md'
+      - Syncing & Merging: 'using-branches/syncing-merging.md'
+      - Reverting a Branch: 'using-branches/reverting-a-branch.md'
+  - Best Practices: 'best-practices.md'
+  - Plugin Development: 'plugin-development.md'
+  - Releasing: 'development/releasing.md'
+  - NetBox Docker: 'netbox-docker.md'
+  - REST API: 'rest-api.md'
+  - Configuration: 'configuration.md'
+  - Event Rules: 'event-rules.md'
+  - Data Model:
+      - Branch: 'models/branch.md'
+      - BranchEvent: 'models/branchevent.md'
+      - ChangeDiff: 'models/changediff.md'
+      - ObjectChange: 'models/objectchange.md'
+  - Change Log: 'changelog.md'

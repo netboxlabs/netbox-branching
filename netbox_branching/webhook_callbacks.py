@@ -1,5 +1,4 @@
 from extras.webhooks import register_webhook_callback
-
 from netbox_branching.utilities import get_active_branch
 
 

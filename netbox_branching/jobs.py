@@ -3,14 +3,15 @@ from collections import defaultdict
 from contextlib import contextmanager
 from datetime import timedelta
 
-from core.choices import JobIntervalChoices, ObjectChangeActionChoices
-from core.signals import handle_changed_object, handle_deleted_object
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db.models import Case, IntegerField, Max, When
 from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.utils import timezone
+
+from core.choices import JobIntervalChoices, ObjectChangeActionChoices
+from core.signals import handle_changed_object, handle_deleted_object
 from netbox.jobs import JobRunner, system_job
 from netbox.plugins import get_plugin_config
 from netbox.signals import post_clean
@@ -323,7 +324,7 @@ class AutoArchiveBranchJob(JobRunner):
                     f"Archiving branch {branch} (merged {branch.merged_time:%Y-%m-%d %H:%M:%S})."
                 )
                 branch.archive(user=self.job.user)
-            except Exception as e:  # noqa: BLE001 — isolate failures so one branch can't abort the batch
+            except Exception as e:
                 self.logger.error(f"Failed to archive branch {branch}: {e}")
 
 
@@ -367,7 +368,7 @@ class RecoverStuckBranchesJob(JobRunner):
                     )
                 else:
                     self.logger.debug(f"Branch {branch} is still being worked on; leaving it alone.")
-            except Exception as e:  # noqa: BLE001 — isolate failures so one branch can't abort the batch
+            except Exception as e:
                 self.logger.error(f"Failed to recover branch {branch}: {e}")
 
         self.logger.info(f"Recovered {recovered} stuck branch(es).")

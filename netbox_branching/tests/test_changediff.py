@@ -1,16 +1,16 @@
 import uuid
 from datetime import timedelta
 
-from core.choices import ObjectChangeActionChoices
-from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections, transaction
 from django.db.models.signals import post_save
 from django.test import RequestFactory, SimpleTestCase, TestCase, TransactionTestCase
 from django.urls import reverse
-from netbox.context_managers import event_tracking
 
+from core.choices import ObjectChangeActionChoices
+from dcim.models import Site
+from netbox.context_managers import event_tracking
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
@@ -27,7 +27,7 @@ def make_diff(**kwargs):
     return ChangeDiff(
         original=kwargs.get('original', DATA_A),
         modified=kwargs.get('modified', DATA_B),
-        current=kwargs.get('current', None),
+        current=kwargs.get('current'),
     )
 
 

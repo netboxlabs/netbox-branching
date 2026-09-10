@@ -3,15 +3,15 @@ Tests for Branch merge functionality with ObjectChange collapsing using squash m
 """
 import uuid
 
-from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
-from dcim.models import Device, Interface, Location, Region, Site, VirtualChassis
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
+
+from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
+from dcim.models import Device, Interface, Location, Region, Site, VirtualChassis
 from ipam.models import IPAddress
 from netbox.context_managers import event_tracking
-
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.utilities import activate_branch
 

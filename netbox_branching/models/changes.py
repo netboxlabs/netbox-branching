@@ -1,8 +1,6 @@
 import logging
 from functools import cached_property
 
-from core.choices import ObjectChangeActionChoices
-from core.models import ObjectChange as ObjectChange_
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.fields import ArrayField
 from django.db import DEFAULT_DB_ALIAS, models
@@ -10,10 +8,10 @@ from django.urls import reverse
 from django.utils.dateparse import parse_datetime
 from django.utils.translation import gettext_lazy as _
 from mptt.models import MPTTModel
-from netbox.models.features import ChangeLoggingMixin
-from utilities.querysets import RestrictedQuerySet
-from utilities.serialization import deserialize_object
 
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectChange as ObjectChange_
+from netbox.models.features import ChangeLoggingMixin
 from netbox_branching.utilities import (
     clear_mptt_fields,
     diff_for_merge,
@@ -21,6 +19,8 @@ from netbox_branching.utilities import (
     resolve_objectchange_field_migration,
     update_object,
 )
+from utilities.querysets import RestrictedQuerySet
+from utilities.serialization import deserialize_object
 
 __all__ = (
     'AppliedChange',

@@ -1,3 +1,4 @@
+import contextlib
 import time
 
 from django.apps import apps
@@ -25,10 +26,8 @@ class BranchConnectionLifecycleTestCase(TransactionTestCase):
     def tearDown(self):
         """Clean up branches and restore CONN_MAX_AGE."""
         for branch in self.branches:
-            try:
+            with contextlib.suppress(Exception):
                 connections[branch.connection_name].close()
-            except Exception:
-                pass
             Branch.objects.filter(pk=branch.pk).delete()
         settings.DATABASES['default']['CONN_MAX_AGE'] = self.original_max_age
 

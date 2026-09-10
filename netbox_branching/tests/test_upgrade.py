@@ -22,23 +22,23 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.signals import handle_changed_object, handle_deleted_object
-from dcim.models import Manufacturer
 from django.contrib.auth import get_user_model
 from django.db import connection, connections
 from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
+
+from core.signals import handle_changed_object, handle_deleted_object
+from dcim.models import Manufacturer
 from netbox.context_managers import event_tracking
 from netbox.signals import post_clean
-from utilities.exceptions import AbortTransaction
-
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.contextvars import active_branch as active_branch_var
 from netbox_branching.jobs import MigrateBranchJob
 from netbox_branching.models import Branch
 from netbox_branching.signal_receivers import validate_branching_operations
 from netbox_branching.tests.utils import provision_branch
+from utilities.exceptions import AbortTransaction
 
 User = get_user_model()
 

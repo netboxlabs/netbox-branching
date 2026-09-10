@@ -5,6 +5,12 @@ import unittest
 import unittest.mock
 import uuid
 
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
+from django.db import connections
+from django.test import RequestFactory, SimpleTestCase, TransactionTestCase
+from django.urls import reverse
+
 from dcim.models import (
     Cable,
     CablePath,
@@ -22,20 +28,14 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
-from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
-from django.db import connections
-from django.test import RequestFactory, SimpleTestCase, TransactionTestCase
-from django.urls import reverse
 from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomField, Tag
 from netbox.context_managers import event_tracking
-from utilities.exceptions import AbortTransaction
-
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import DELETED, _deep_merge_dict, _strip_deleted, activate_branch, diff_for_merge
+from utilities.exceptions import AbortTransaction
 
 User = get_user_model()
 

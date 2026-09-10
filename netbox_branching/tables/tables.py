@@ -1,11 +1,11 @@
 import django_tables2 as tables
-from core.models import ObjectChange
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
-from netbox.tables import BaseTable, NetBoxTable, columns
-from utilities.templatetags.builtins.filters import placeholder
 
+from core.models import ObjectChange
+from netbox.tables import BaseTable, NetBoxTable, columns
 from netbox_branching.models import Branch, ChangeDiff
+from utilities.templatetags.builtins.filters import placeholder
 
 from .columns import ConflictsColumn, DiffColumn
 

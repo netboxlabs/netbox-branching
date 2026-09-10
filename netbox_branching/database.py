@@ -1,6 +1,7 @@
 import warnings
 
 from django.db import DEFAULT_DB_ALIAS
+
 from netbox.registry import registry
 
 from .contextvars import active_branch

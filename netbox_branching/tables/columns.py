@@ -1,6 +1,7 @@
 import django_tables2 as tables
-from core.tables import ObjectChangeTable
 from django.utils.translation import gettext_lazy as _
+
+from core.tables import ObjectChangeTable
 from utilities.tables import register_table_column
 
 __all__ = (

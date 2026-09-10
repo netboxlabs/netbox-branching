@@ -7,11 +7,11 @@ logic with no DB access, so the tests run as SimpleTestCase.
 """
 from types import SimpleNamespace
 
-from dcim.models import Site
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.test import SimpleTestCase
 
+from dcim.models import Site
 from netbox_branching.choices import BranchMergeStrategyChoices
 from netbox_branching.constants import PG_UNIQUE_VIOLATION
 from netbox_branching.error_report import (

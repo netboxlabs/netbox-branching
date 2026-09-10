@@ -1,8 +1,7 @@
 from netbox.forms import NetBoxModelForm
+from netbox_branching.models import Branch
 from utilities.forms.fields import CommentField
 from utilities.forms.rendering import FieldSet
-
-from netbox_branching.models import Branch
 
 __all__ = (
     'BranchForm',

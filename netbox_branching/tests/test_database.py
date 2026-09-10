@@ -12,9 +12,9 @@ These are exercised indirectly by every branching test, but failures there
 surface as confusing routing errors. The tests here pin down the contracts of
 each primitive in isolation so regressions can be diagnosed quickly.
 """
-from dcim.models import Site
 from django.test import TestCase, override_settings
 
+from dcim.models import Site
 from netbox_branching.contextvars import active_branch
 from netbox_branching.database import BranchAwareRouter
 from netbox_branching.models import Branch

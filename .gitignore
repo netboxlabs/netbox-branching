@@ -1,13 +1,77 @@
-*.pyc
-*.egg-info
+# Python
 __pycache__/
-.claude/settings.local.json
-.idea/
+*.py[cod]
+*$py.class
+*.so
+.Python
 
-# Build output
+# Distribution / packaging
 build/
 dist/
-sdist-wheel/
+*.egg-info/
+*.egg
+.eggs/
+MANIFEST
+pip-wheel-metadata/
 
-# mkdocs build output
+# Virtual environments
+venv/
+.venv/
+env/
+.env/
+.python-version
+
+# Environment / secrets
+.env
+.envrc
+*.env
+configuration_local.py
+local_settings.py
+local_requirements.txt
+
+# Django / NetBox
+*.sqlite3
+*.sqlite
+db.sqlite3-journal
+media/
+staticfiles/
+collected_static/
+netbox.log
+netbox.pid
+
+# Testing / type-checking caches
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Documentation builds
+docs/_build/
 site/
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# uv
+/uv.lock
+
+# Copier
+# Note: `.copier-answers.yml` is committed by convention so `copier update`
+# works on the generated repo. Do not add it to this ignore list.
+
+# Local agent state
+.claude/settings.local.json
+
+# Release workflow scratch output
+sdist-wheel/

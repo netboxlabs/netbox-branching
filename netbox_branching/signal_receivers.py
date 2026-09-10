@@ -1,8 +1,6 @@
 import logging
 from functools import partial
 
-from core.choices import ObjectChangeActionChoices
-from core.models import ObjectChange, ObjectType
 from django.conf import settings
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
@@ -10,14 +8,16 @@ from django.db import DEFAULT_DB_ALIAS, DatabaseError, connections, transaction
 from django.db.models.signals import post_migrate, post_save, pre_delete
 from django.dispatch import receiver
 from django.utils.translation import gettext_lazy as _
+
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectChange, ObjectType
 from extras.events import process_event_rules
 from extras.models import EventRule
 from netbox.context import current_request
 from netbox.signals import post_clean
+from netbox_branching import signals
 from utilities.exceptions import AbortRequest
 from utilities.serialization import serialize_object
-
-from netbox_branching import signals
 
 from .choices import BranchStatusChoices
 from .constants import INCLUDE_MODELS

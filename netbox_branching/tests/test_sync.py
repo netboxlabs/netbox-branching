@@ -11,6 +11,12 @@ applied iteratively in chronological order.
 """
 import uuid
 
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
+from django.db import connections
+from django.test import RequestFactory, TransactionTestCase
+from django.urls import reverse
+
 from core.models import ObjectChange as CoreObjectChange
 from dcim.models import (
     Cable,
@@ -28,19 +34,13 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
-from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
-from django.db import connections
-from django.test import RequestFactory, TransactionTestCase
-from django.urls import reverse
 from extras.models import Tag
 from netbox.context_managers import event_tracking
-from utilities.exceptions import AbortTransaction
-
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
+from utilities.exceptions import AbortTransaction
 
 User = get_user_model()
 

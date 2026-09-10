@@ -3,6 +3,7 @@ Iterative merge strategy implementation.
 """
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS
+
 from netbox.context_managers import event_tracking
 
 from ..error_report import annotate_validation_error

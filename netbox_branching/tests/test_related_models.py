@@ -15,6 +15,12 @@ longer applicable to any supported NetBox version.
 """
 import uuid
 
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
+from django.db import connections
+from django.test import RequestFactory, TransactionTestCase
+from django.urls import reverse
+
 from dcim.choices import PortTypeChoices
 from dcim.models import (
     Cable,
@@ -30,16 +36,10 @@ from dcim.models import (
     RearPortTemplate,
     Site,
 )
-from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
-from django.db import connections
-from django.test import RequestFactory, TransactionTestCase
-from django.urls import reverse
 from extras.models import Tag, TaggedItem
 from extras.models.search import CachedValue
 from netbox.context import current_request
 from netbox.context_managers import event_tracking
-
 from netbox_branching.contextvars import active_branch as active_branch_var
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch

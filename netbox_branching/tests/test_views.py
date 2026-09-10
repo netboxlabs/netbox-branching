@@ -1,9 +1,6 @@
 import uuid
 from unittest.mock import patch
 
-from core.choices import ObjectChangeActionChoices
-from core.models import ObjectChange
-from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.messages import get_messages
@@ -12,26 +9,26 @@ from django.db import connections
 from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django_rq import get_queue
-from netbox.context import current_request
-from utilities.testing import ViewTestCases, create_tags
 
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectChange
+from dcim.models import Site
+from netbox.context import current_request
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tables import ChangesGroupedTable, ChangesTable
+from netbox_branching.tests.plugin_testing import PluginTestCases
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
 from netbox_branching.views import BaseBranchActionView, GroupedChangesViewMixin
+from utilities.testing import create_tags
 
 User = get_user_model()
 
 
-class BranchTestCase(ViewTestCases.PrimaryObjectViewTestCase):
+class BranchTestCase(PluginTestCases.PrimaryObjectViewTestCase):
     model = Branch
-
-    def _get_base_url(self):
-        viewname = super()._get_base_url()
-        return f'plugins:{viewname}'
 
     @classmethod
     def setUpTestData(cls):

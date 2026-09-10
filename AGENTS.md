@@ -12,7 +12,8 @@
 - PostgreSQL (required — branch isolation depends on schema-level separation)
 - Redis (required — background jobs use NetBox's job queue)
 - Django's built-in test runner (`django.test.TestCase`-based, run via `manage.py test`)
-- ruff for lint + format (config in `ruff.toml`)
+- ruff for lint + format, plus djlint, codespell, yamllint and django-upgrade, all driven by
+  pre-commit (`.pre-commit-config.yaml`; tool config lives in `pyproject.toml`)
 - mkdocs + mkdocs-material for user-facing docs
 
 Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
@@ -88,19 +89,26 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 │       └── test_views.py
 ├── docs/                      — mkdocs site.
 │   ├── models/                — Per-model documentation.
-│   └── using-branches/        — User guides.
+│   ├── using-branches/        — User guides.
+│   └── development/           — Maintainer guides (releasing).
 ├── testing/
 │   └── configuration.py       — NetBox config used by the test workflow.
 ├── scripts/                   — Packaging verification scripts run by release.yaml.
 │   ├── verify_release_tag.py  — Tag ↔ pyproject ↔ AppConfig ↔ wheel version consistency.
 │   └── verify_wheel_contents.py — Wheel ships templates/migrations, not tests or bytecode.
-├── .github/workflows/         — lint-tests.yaml, release.yaml, claude.yaml.
+├── .github/
+│   ├── workflows/             — test.yml, release.yaml, claude-review.yml, no-blank-issue.yml.
+│   ├── ISSUE_TEMPLATE/        — Issue forms.
+│   ├── labels.yml             — Canonical NBL issue label set (applied with `gh label clone`).
+│   └── pull_request_template.md
+├── .copier-answers.yml        — Scaffold tracking; see "Scaffold" below. Never hand-edit.
+├── .pre-commit-config.yaml    — Lint/format hook stack.
+├── .yamllint                  — YAML lint rules for the yamllint hook.
 ├── AGENTS.md                  — This file.
 ├── CLAUDE.md                  — Shim that pulls in this file.
 ├── COMPATIBILITY.md           — Plugin → NetBox version matrix.
 ├── mkdocs.yml
-├── pyproject.toml             — Plugin metadata + dependencies.
-└── ruff.toml                  — Lint config.
+└── pyproject.toml             — Plugin metadata, dependencies, and all tool config.
 ```
 
 ## Architecture
@@ -184,10 +192,13 @@ There is no Justfile/Makefile in this repo; commands are raw. Run them inside a 
 
 | Command | What it does |
 |---|---|
-| `pip install -e '.[dev,test]'` (from this repo) | Install the plugin in editable mode with dev + test extras |
+| `pip install -e '.[dev,test,docs]'` (from this repo) | Install the plugin in editable mode with all extras |
+| `pre-commit install` | Install the git hooks (one time) |
+| `pre-commit run --all-files` | Run the full lint/format stack |
 | `python netbox/manage.py test netbox_branching.tests --keepdb` | Run the full test suite |
 | `python netbox/manage.py test netbox_branching.tests.test_branches --keepdb` | Run a single test module |
-| `ruff check` | Lint |
+| `ruff check` | Lint only (also runs via pre-commit) |
+| `ruff format` | Format only (also runs via pre-commit) |
 | `python netbox/manage.py makemigrations netbox_branching` | Generate Django migrations after model changes |
 | `python netbox/manage.py migrate` | Apply migrations |
 | `python netbox/manage.py runserver` | Start NetBox locally with the plugin loaded |
@@ -197,12 +208,12 @@ There is no Justfile/Makefile in this repo; commands are raw. Run them inside a 
 
 ## Development
 
-NetBox plugins must run inside a NetBox checkout. The reproducible setup mirrors what CI does (`.github/workflows/lint-tests.yaml`):
+NetBox plugins must run inside a NetBox checkout. The reproducible setup mirrors what CI does (`.github/workflows/test.yml`):
 
 1. Clone NetBox alongside this repo: `git clone https://github.com/netbox-community/netbox.git`
 2. Symlink this repo's `testing/configuration.py` into NetBox: `ln -s "$PWD/nbl-netbox-branching/testing/configuration.py" netbox/netbox/netbox/configuration.py`
 3. Install NetBox's requirements: `pip install -r netbox/requirements.txt`
-4. Install this plugin in editable mode: `pip install -e '.[dev,test]'`
+4. Install this plugin in editable mode: `pip install -e '.[dev,test,docs]'`
 5. Provision PostgreSQL (`netbox` / `netbox` / `netbox`) and Redis on localhost (default ports)
 6. Run migrations and start the dev server
 
@@ -213,6 +224,9 @@ After model changes, generate a migration with `python netbox/manage.py makemigr
 ## Testing
 
 - Tests use `django.test.TestCase`, **not** pytest. Suites live in `netbox_branching/tests/`.
+- `tests/plugin_testing.py` provides plugin-namespace-aware bases (`PluginTestCases`,
+  `PluginAPIViewTestCases`) that route `reverse()` through `plugins:` / `plugins-api:`.
+  Use these instead of re-implementing `_get_base_url()` per test case.
 - Run via NetBox's test runner: `python netbox/manage.py test netbox_branching.tests --keepdb`. The `--keepdb` flag preserves the test database and branch schemas between runs, which is important for speed.
 - The runner uses NetBox's settings and creates a real PostgreSQL test database — branch schema provisioning and teardown happen against a real database. Do not mock the database.
 - Test modules:
@@ -238,11 +252,38 @@ After model changes, generate a migration with `python netbox/manage.py makemigr
 
 GitHub Actions workflows in `.github/workflows/`:
 
-- **`lint-tests.yaml`** — Runs on every PR. Two jobs:
-  - *Linting*: Python 3.12, runs `ruff check` and `mkdocs build`.
-  - *Tests*: Matrix of Python 3.12, 3.13, 3.14 against a configurable NetBox ref (defaults to NetBox's `main` branch; override per-PR with a `test-against:<ref>` label or via `workflow_dispatch`). Spins up PostgreSQL + Redis services, installs the plugin, links `testing/configuration.py`, and runs `python netbox/manage.py test netbox_branching.tests --keepdb`.
+- **`test.yml`** — Runs on every PR. Two jobs, the second gated on the first:
+  - *Lint*: Python 3.12, runs the full `pre-commit` stack (which includes `mkdocs build`).
+  - *Test*: Matrix of Python 3.12, 3.13, 3.14 against both the declared minimum NetBox version and `main`. Spins up PostgreSQL + Redis services, installs the plugin editable, loads `testing/configuration.py` via `NETBOX_CONFIGURATION` + `PYTHONPATH` (no symlink), and runs `python netbox/manage.py test netbox_branching.tests --keepdb`. The `main` leg can be pointed at another ref with a `test-against:<ref>` PR label or a `workflow_dispatch` input. One leg additionally collects coverage. The suite is not run with `--parallel`.
 - **`release.yaml`** — Driven by pushing a `v*` tag, not by publishing a GitHub release, so pre-releases follow the same automated path as final releases. Builds sdist + wheel with `python -m build`, runs `twine check`, verifies the tag against the version declared in `pyproject.toml`, `AppConfig.version` and the wheel metadata (`scripts/verify_release_tag.py`), verifies the wheel's contents (`scripts/verify_wheel_contents.py`), rebuilds a wheel from the sdist, and smoke-tests a clean `--no-deps` install whose installed tree is held to the same content checks as the wheel. Only then does it publish to PyPI using OIDC trusted publishing and attach the artifacts to the GitHub release, drafting an empty one (marked as a pre-release when PEP 440 says the version is one) if the tag doesn't already have a release. Release notes are never generated — they are written by hand. Also runs — build and verification only, no publish — on pull requests that touch packaging inputs, which catches a version bump applied to only one of the two declaration sites. A `workflow_dispatch` from a `v*` tag publishes to Test PyPI instead, as an opt-in rehearsal.
-- **`claude.yaml`** — Claude Code automation hook; triggers on issue/PR comments mentioning `@claude`.
+- **`claude-review.yml`** — Claude Code automation hook; triggers on issue/PR comments mentioning `@claude`.
+
+## Scaffold
+
+This repo is tracked against [`netbox-plugin-scaffold`](https://github.com/netboxlabs/netbox-plugin-scaffold)
+via `.copier-answers.yml`. Pull scaffold improvements with:
+
+```
+copier update --trust
+```
+
+`.copier-answers.yml` is generated — change the answers by re-running Copier, not by editing it.
+
+The scaffold targets *private* plugins, so a few surfaces are deliberately divergent and any
+`copier update` that touches them must be resolved in this repo's favour:
+
+| Surface | Why it diverges |
+|---|---|
+| `.github/workflows/release.yaml` | The scaffold publishes to internal CodeArtifact. This plugin publishes to public PyPI via OIDC trusted publishing, with the tag/wheel verification in `scripts/`. Reject the scaffold's `release.yml` outright. |
+| `docs/development/releasing.md` | Documents the PyPI flow above, not CodeArtifact. |
+| `pyproject.toml` `[project].name` | Must stay `netboxlabs-netbox-branching`; the scaffold derives it from `repo_slug`. |
+| `pyproject.toml` `[tool.setuptools]` | Kept as-is because `scripts/verify_wheel_contents.py` asserts against this exact packaging shape. |
+| `testing/configuration.py` | Maintained by hand for this plugin's `DynamicSchemaDict` / `BranchAwareRouter` requirements. |
+| `docs/changelog.md` | This repo's change log; the scaffold ships `docs/releases.md`. |
+| `.yamllint` | The scaffold ships the `yamllint` hook but renders no config, so this one is adapted from the scaffold's own root config. |
+
+The scaffold's `ui/` and `graphql/` stub packages are intentionally absent — this plugin has
+neither surface. A `copier update` will offer to add them; decline.
 
 ## Common Tasks
 
@@ -273,11 +314,15 @@ GitHub Actions workflows in `.github/workflows/`:
 
 1. Update `min_version` / `max_version` in `netbox_branching/__init__.py`.
 2. Update `COMPATIBILITY.md`.
-3. Adjust the NetBox `ref` (or matrix) in `.github/workflows/lint-tests.yaml`.
+3. Adjust the NetBox refs in the `.github/workflows/test.yml` matrix, and the
+   `netbox_min_version` / `netbox_max_version` / `netbox_test_min_ref` / `netbox_test_max_ref`
+   answers in `.copier-answers.yml`.
 4. Run the suite locally against the new version.
 5. Note any compatibility changes or breaking changes in `docs/changelog.md`.
 
 ### Cut a release
+
+See [`docs/development/releasing.md`](./docs/development/releasing.md) for the user-facing version.
 
 1. Bump `version` in both `pyproject.toml` and `netbox_branching/__init__.py`. The two must agree — `release.yaml` fails the build if they don't, on release PRs as well as on the tag itself.
 2. Update `docs/changelog.md`.
@@ -308,7 +353,7 @@ To rehearse a publish without touching production PyPI, run the workflow manuall
 - **Exempt models.** Plugin models that should not be branched must be listed in `PLUGINS_CONFIG['netbox_branching']['exempt_models']`. Other plugin authors are responsible for configuring this for their own models.
 - **Migrations.** No squashing has been done; migrations are sequential (0001–0008). Write data migrations using `apps.get_model(...)` and `get_or_create` — ContentType rows may not exist at migration time.
 - **Connection cleanup.** Branch database aliases are dynamically created and not in `DATABASES.keys()`, so Django's built-in `close_old_connections()` misses them. `close_old_branch_connections()` in `utilities.py` is connected to `request_started`/`request_finished` signals to plug this leak (see issue #358).
-- **Linting.** Config in `ruff.toml`. Enabled groups: `E1`–`E3`, `E501`, `W`, `I`, `RET`, `UP`. Line length 120, single quotes, LF endings, `preview = true`. Ignored: `F403`, `F405`, `RET504`, `TRY002`, `UP032`. `netbox_branching` is treated as first-party for import sorting.
+- **Linting.** All tool config lives in `pyproject.toml`; there is deliberately no `ruff.toml`. Ruff runs with `preview = true`, line length 120, single quotes, LF endings, and the scaffold's rule set (pycodestyle, pyflakes, isort, pyupgrade, comprehensions, return, simplify, pathlib, bugbear and logging subsets). Ignored: `F403`, `F405`, `RET504`, `SIM102`, `SIM114`, `UP032`. NetBox core apps and `netbox_branching` are both treated as first-party for import sorting. Run everything with `pre-commit run --all-files` rather than invoking the tools individually.
 
 ## Troubleshooting
 
@@ -327,3 +372,4 @@ To rehearse a publish without touching production PyPI, run the workflow manuall
 - User docs (mkdocs): [`docs/`](./docs/)
 - Plugin development guide: [`docs/plugin-development.md`](./docs/plugin-development.md)
 - NetBox plugin docs: <https://netboxlabs.com/docs/netbox/plugins/>
+- Project scaffold: <https://github.com/netboxlabs/netbox-plugin-scaffold>

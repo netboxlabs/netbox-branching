@@ -18,16 +18,15 @@ from datetime import timedelta
 from types import SimpleNamespace
 from unittest import mock
 
-from core.models import ObjectChange
-from core.signals import handle_changed_object, handle_deleted_object
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
-from netbox.signals import post_clean
-from utilities.exceptions import AbortTransaction
 
+from core.models import ObjectChange
+from core.signals import handle_changed_object, handle_deleted_object
+from netbox.signals import post_clean
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.jobs import (
     AutoArchiveBranchJob,
@@ -40,6 +39,7 @@ from netbox_branching.jobs import (
 from netbox_branching.models import Branch
 from netbox_branching.signal_receivers import validate_branching_operations
 from netbox_branching.utilities import BranchActionIndicator
+from utilities.exceptions import AbortTransaction
 
 
 def _receivers_for(signal):

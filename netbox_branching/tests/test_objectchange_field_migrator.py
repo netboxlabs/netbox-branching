@@ -16,8 +16,8 @@ that the (possibly translated) data is what subsequent logic sees.
 from contextlib import contextmanager
 
 from django.test import TestCase
-from ipam.models import Prefix
 
+from ipam.models import Prefix
 from netbox_branching import utilities
 from netbox_branching.models.changes import ChangeDiff
 from netbox_branching.utilities import (

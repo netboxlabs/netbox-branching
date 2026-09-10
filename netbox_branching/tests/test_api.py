@@ -1,20 +1,20 @@
 import json
 import uuid
 
-from core.choices import ObjectChangeActionChoices
-from core.models import Job
-from dcim.models import Cable, CableTermination, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections
 from django.test import Client, RequestFactory, TestCase, TransactionTestCase
 from django.urls import reverse
-from netbox.context_managers import event_tracking
-from users.models import Token
 
+from core.choices import ObjectChangeActionChoices
+from core.models import Job
+from dcim.models import Cable, CableTermination, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
+from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME
 from netbox_branching.models import Branch, ChangeDiff
+from users.models import Token
 
 
 class BaseAPITestCase:

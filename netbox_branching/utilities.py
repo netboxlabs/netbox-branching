@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from functools import cached_property
 
 from asgiref.local import Local
-from core.choices import JobStatusChoices
 from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db import connections
@@ -15,6 +14,8 @@ from django.http import HttpResponseBadRequest
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext as _
+
+from core.choices import JobStatusChoices
 from netbox.plugins import get_plugin_config
 from netbox.utils import register_request_processor
 
@@ -244,6 +245,7 @@ def supports_branching(model):
     Returns True if branching is supported for the given model; otherwise False.
     """
     from django.apps import apps as live_apps
+
     from netbox.models.features import ChangeLoggingMixin
 
     label = f'{model._meta.app_label}.{model._meta.model_name}'
@@ -652,6 +654,7 @@ def _get_rq_job_status(job):
     # import time (and utilities.rqworker imports django_rq). Hoisting either one pulls that read
     # into a window where django.conf.settings is only half-built.
     import django_rq
+
     from utilities.rqworker import get_queue_for_model
 
     try:
@@ -659,7 +662,7 @@ def _get_rq_job_status(job):
         # legacy jobs recorded before Job.queue_name was introduced (NetBox 4.5.2).
         queue_name = job.queue_name or get_queue_for_model(job.object_type.model if job.object_type else None)
         rq_job = django_rq.get_queue(queue_name).fetch_job(str(job.job_id))
-    except Exception as e:  # noqa: BLE001 — Redis being unavailable must not break the caller
+    except Exception as e:
         logger.debug(f"Unable to retrieve RQ job for job {job.pk}: {e}")
         return None
 
@@ -667,7 +670,7 @@ def _get_rq_job_status(job):
         return RQ_JOB_MISSING
     try:
         return rq_job.get_status()
-    except Exception as e:  # noqa: BLE001 — get_status() raises if the job vanished mid-call
+    except Exception as e:
         logger.debug(f"Unable to read RQ status for job {job.pk}: {e}")
         return RQ_JOB_MISSING
 

@@ -7,6 +7,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, models
+
 from netbox.context_managers import event_tracking
 
 from ..error_report import annotate_validation_error
@@ -492,7 +493,7 @@ class SquashMergeStrategy(MergeStrategy):
         do not hit Python's recursion limit.
         """
         WHITE, GRAY, BLACK = 0, 1, 2
-        color = {node: WHITE for node in adjacency}
+        color = dict.fromkeys(adjacency, WHITE)
         parent = {}
 
         for start in adjacency:

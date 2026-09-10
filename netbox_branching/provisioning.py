@@ -178,7 +178,7 @@ def _run_pool(tasks, label, workers):
                     break
                 with conn.cursor() as cursor:
                     task(cursor)
-        except Exception as e:  # noqa: BLE001 — any task failure must abort the whole pool
+        except Exception as e:
             record_failure(e)
         finally:
             if conn is not None:
@@ -242,7 +242,7 @@ def build_main_table_sizes(cursor, main_schema):
         """,
         [main_schema],
     )
-    return {tablename: size for tablename, size in cursor.fetchall()}
+    return dict(cursor.fetchall())
 
 
 def build_main_constraint_map(cursor, main_schema):

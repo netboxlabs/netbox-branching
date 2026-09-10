@@ -1,55 +1,341 @@
+# See PEP 517 / PEP 621 for the spec of this file.
+#
+# This pyproject.toml follows the NetBox Labs plugin scaffold
+# (https://github.com/netboxlabs/netbox-plugin-scaffold); see .copier-answers.yml.
+# The NetBox version range this plugin supports lives in PluginConfig
+# (see netbox_branching/__init__.py: min_version / max_version), not here.
+# Update both places when you bump the supported range.
+#
+# [tool.*] sections are sorted alphabetically by top-level tool name.
+# Keep [tool.ruff] in this file; do not reintroduce a separate ruff.toml.
+
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
 [project]
+# Distribution name is published on PyPI and must not be renamed to match repo_slug.
 name = "netboxlabs-netbox-branching"
 version = "1.2.1"
 description = "A git-like branching implementation for NetBox"
-readme = "README.md"
+readme = { file = "README.md", content-type = "text/markdown" }
+license-files = ["LICENSE.md"]
 requires-python = ">=3.12"
-license = { text = "NetBox Limited Use License 1.0" }
 authors = [
-    { name = "NetBox Labs", email = "support@netboxlabs.com" }
+    { name = "NetBox Labs", email = "support@netboxlabs.com" },
 ]
 maintainers = [
-    { name = "NetBox Labs", email = "support@netboxlabs.com" }
+    { name = "NetBox Labs", email = "support@netboxlabs.com" },
 ]
-
+keywords = ["netbox", "netbox-plugin"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
+    "Framework :: Django",
+    "Framework :: Django :: 5.2",
     "Intended Audience :: Developers",
-    "Topic :: Software Development :: Build Tools",
-    "Programming Language :: Python :: 3",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Telecommunications Industry",
+    "License :: Other/Proprietary License",
+    "Natural Language :: English",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
     "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
+    "Topic :: System :: Networking",
 ]
-
 dependencies = []
 
-[project.optional-dependencies]
-dev = ["check-manifest", "mkdocs", "mkdocs-material", "ruff==0.15.2"]
-test = ["coverage", "pytest", "pytest-cov"]
-
 [project.urls]
-"Homepage" = "https://netboxlabs.com/"
+Homepage = "https://github.com/netboxlabs/netbox-branching"
+Documentation = "https://netboxlabs.github.io/netbox-branching/"
+Source = "https://github.com/netboxlabs/netbox-branching"
+Issues = "https://github.com/netboxlabs/netbox-branching/issues"
+Changelog = "https://github.com/netboxlabs/netbox-branching/releases"
 
-[project.scripts]
-
-[tool.setuptools]
-packages = [
-    "netbox_branching",
+[project.optional-dependencies]
+dev = [
+    "build==1.2.2",
+    "twine==6.1.0",
 ]
-package-data = { "netbox_branching" = ["**/*", "templates/**"] }
-exclude-package-data = { netbox_branching = ["tests/*"] }
-license-files = ["LICENSE.md"]
+test = [
+    "check-manifest==0.51",
+    "coverage[toml]==7.6.10",
+]
+docs = [
+    "mkdocs==1.6.1",
+    "mkdocs-material==9.7.6",
+]
 
-[build-system]
-requires = ["setuptools>=43.0.0", "wheel"]
-build-backend = "setuptools.build_meta"
+[tool.check-manifest]
+# Files tracked in git but intentionally excluded from sdist/wheel.
+# These are dev-tooling / project-meta files, not Python distribution content.
+ignore = [
+    ".copier-answers.yml",
+    ".pre-commit-config.yaml",
+    ".yamllint",
+    ".hooks/*",
+    "AGENTS.md",
+    "CLAUDE.md",
+    "COMPATIBILITY.md",
+    "SECURITY.md",
+    "docs/*.md",
+    "docs/models/*.md",
+    "docs/development/*.md",
+    "docs/using-branches/*.md",
+    "docs/media/**",
+    "mkdocs.yml",
+    "scripts/*.py",
+    "testing/configuration.py",
+    # Per-view query-count baseline: test-only tooling, not distribution content.
+    "netbox_branching/tests/query_counts.json",
+    ".github/ISSUE_TEMPLATE/*.yaml",
+    ".github/ISSUE_TEMPLATE/config.yml",
+    ".github/labels.yml",
+    ".github/pull_request_template.md",
+    ".github/workflows/*.yaml",
+    ".github/workflows/*.yml",
+]
+
+[tool.codespell]
+# Path patterns relative to repo root; extend as needed.
+skip = "*.po,*.lock,*.svg,*.min.js,*.min.css,docs/_build,site,build,dist,.git"
+# `ot` is the conventional loop variable for a NetBox ObjectType, not a typo.
+ignore-words-list = "ot"
+count = true
 
 [tool.coverage.run]
 source = ["netbox_branching"]
 omit = [
     "*/migrations/*",
     "*/tests/*",
-    "*/management/commands/*",
 ]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+]
+
+[tool.djlint]
+# NetBox templates follow Django conventions.
+profile = "django"
+indent = 2
+max_line_length = 120
+# Conservative ignore set; document each addition with a one-line comment.
+# H006: image without explicit height/width (NetBox UI conventions).
+# H013: image without alt attribute (NetBox icon helpers often omit).
+# H023: entity-encoded characters in templates (intentional in NetBox).
+# H030: meta description tag (NetBox sets at base template).
+# H031: meta keywords tag (NetBox sets at base template).
+# H021: inline styles; used sparingly for one-off column widths.
+# T002: single-quoted tag arguments, matching NetBox core templates and this
+#       project's single-quote Python style.
+# T003: unnamed {% endblock %}; NetBox core does not name them either.
+ignore = "H006,H013,H021,H023,H030,H031,T002,T003"
+
+[tool.ruff]
+exclude = [
+    ".eggs",
+    ".git",
+    ".pyenv",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".venv",
+    ".vscode",
+    "__pypackages__",
+    "_build",
+    "build",
+    "dist",
+    "node_modules",
+    "site-packages",
+    "venv",
+]
+
+# Enforce line length and indentation width.
+line-length = 120
+indent-width = 4
+
+# Ignore files and directories listed in .gitignore.
+respect-gitignore = true
+
+# Generate and lint against the lowest-supported Python.
+target-version = "py312"
+
+[tool.ruff.lint]
+# Pin the effective default rule set used with `preview = true` to match Ruff 0.15.1.
+# Ruff 0.15.2 changed the preview defaults:
+# https://github.com/astral-sh/ruff/releases/tag/0.15.2
+# Keeping this explicit makes Ruff deterministic instead of inheriting future preview-default changes.
+select = [
+    "E4",  # pycodestyle: import/module-level errors from Ruff's historical default set.
+    "E7",  # pycodestyle: statement/style errors from Ruff's historical default set.
+    "E9",  # pycodestyle: syntax/runtime-adjacent errors from Ruff's historical default set.
+    "F",   # pyflakes: undefined names, unused imports, and other likely bugs.
+]
+
+extend-select = [
+    # Baseline style and modernization checks.
+    "E1",    # pycodestyle: indentation errors.
+    "E2",    # pycodestyle: whitespace around operators and delimiters.
+    "E3",    # pycodestyle: blank-line spacing around definitions.
+    "E501",  # pycodestyle: line length for Python code.
+    "W",     # pycodestyle warnings: tabs, invalid escapes, and other warning-level style issues.
+    "W505",  # pycodestyle: documentation/comment line length; enabled by `lint.pycodestyle.max-doc-length`.
+    "I",     # isort: keep imports grouped and sorted consistently.
+    "UP",    # pyupgrade: use modern Python syntax supported by `target-version`.
+    "C4",    # flake8-comprehensions: remove unnecessary or misleading comprehension patterns.
+    "ISC",   # flake8-implicit-str-concat: catch accidental implicit/explicit string concatenation.
+    "RET",   # flake8-return: keep return paths explicit and consistent.
+    "SIM",   # flake8-simplify: catch straightforward simplification opportunities.
+    "PTH",   # flake8-use-pathlib: prefer pathlib APIs over os/os.path where practical.
+
+    # Django/i18n safety. These pair well with the UP032 ignore because translation
+    # strings should remain statically extractable rather than being interpolated first.
+    "INT",   # flake8-gettext: prevent f-string, .format(), and %-formatting inside gettext calls.
+
+    # Accidental debug code.
+    "T100",  # flake8-debugger: catch breakpoint(), pdb, and similar debug statements before merge.
+
+    # Executable/shebang hygiene for scripts.
+    "EXE001",  # flake8-executable: shebang is present but the file is not executable.
+    "EXE002",  # flake8-executable: file is executable but no shebang is present.
+    "EXE004",  # flake8-executable: shebang has leading whitespace.
+    "EXE005",  # flake8-executable: shebang is not on the first line.
+
+    # Logging correctness.
+    "G010",    # flake8-logging-format: replace deprecated logging.warn() with logging.warning().
+    "G101",    # flake8-logging-format: prevent logging extra= keys from clashing with LogRecord fields.
+    "G201",    # flake8-logging-format: prefer logging.exception() over logging.error(..., exc_info=True).
+    "G202",    # flake8-logging-format: avoid redundant exc_info=True with logging.exception().
+    "LOG001",  # flake8-logging: avoid direct Logger construction; use logging.getLogger().
+    "LOG002",  # flake8-logging: require a valid logging.getLogger() argument.
+    "LOG014",  # flake8-logging: avoid exc_info= outside exception handlers.
+    "LOG015",  # flake8-logging: avoid root logger calls; use module loggers.
+    "PLE1205", # Pylint: too many arguments supplied to a logging format string.
+    "PLE1206", # Pylint: too few arguments supplied to a logging format string.
+
+    # Timezone-aware datetime usage. This is especially relevant in a Django app.
+    "DTZ003",  # flake8-datetimez: avoid datetime.utcnow(); prefer aware UTC datetimes.
+    "DTZ005",  # flake8-datetimez: avoid datetime.now() without a timezone.
+    "DTZ006",  # flake8-datetimez: avoid datetime.fromtimestamp() without a timezone.
+    "DTZ901",  # flake8-datetimez: avoid naive datetime.min/datetime.max sentinels.
+
+    # Bugbear correctness checks.
+    "B002",  # flake8-bugbear: catch ++x/--x, which do not increment/decrement in Python.
+    "B004",  # flake8-bugbear: avoid unreliable callable checks based on __call__.
+    "B005",  # flake8-bugbear: catch likely misuse of str.strip() with multi-character strings.
+    "B006",  # flake8-bugbear: prevent mutable default arguments.
+    "B008",  # flake8-bugbear: prevent function calls in default arguments.
+    "B012",  # flake8-bugbear: avoid return/break/continue inside finally blocks.
+    "B013",  # flake8-bugbear: catch redundant tuples in exception handlers.
+    "B014",  # flake8-bugbear: catch duplicate exception classes in handlers.
+    "B016",  # flake8-bugbear: catch invalid raise of literals.
+    "B018",  # flake8-bugbear: catch useless expressions that are likely forgotten code.
+    "B020",  # flake8-bugbear: catch loop variables that override the iterator variable.
+    "B023",  # flake8-bugbear: catch late-binding loop-variable closures.
+    "B025",  # flake8-bugbear: catch duplicate exceptions across try/except handlers.
+    "B029",  # flake8-bugbear: catch except () handlers, which catch nothing.
+    "B030",  # flake8-bugbear: catch except handlers using non-exception classes.
+    "B033",  # flake8-bugbear: catch duplicate values where uniqueness is expected.
+    "B035",  # flake8-bugbear: catch dict comprehensions with static keys.
+    "B039",  # flake8-bugbear: prevent mutable defaults for context variables.
+
+    # Ruff-specific correctness and maintenance checks.
+    "RUF008",  # Ruff: prevent mutable dataclass defaults.
+    "RUF016",  # Ruff: catch invalid index types.
+    "RUF018",  # Ruff: catch assignment expressions inside assert statements.
+    "RUF022",  # Ruff: keep __all__ lists sorted.
+    "RUF024",  # Ruff: prevent shared mutable values from dict.fromkeys().
+    "RUF026",  # Ruff: catch suspicious default_factory usage.
+    "RUF028",  # Ruff: catch invalid formatter suppression comments.
+    "RUF030",  # Ruff: avoid print() calls as assert messages.
+    "RUF032",  # Ruff: avoid constructing Decimal from float literals.
+    "RUF040",  # Ruff: catch invalid assert message literal arguments.
+    "RUF041",  # Ruff: remove unnecessary nested Literal types.
+    "RUF046",  # Ruff: remove unnecessary int() casts.
+    "RUF051",  # Ruff: prefer dict.pop() over key-in-dict followed by del.
+    "RUF057",  # Ruff: remove unnecessary round() calls on integers.
+    "RUF059",  # Ruff: catch unused unpacked variables that should be named "_".
+    "RUF100",  # Ruff: keep noqa comments from going stale.
+    "RUF101",  # Ruff: catch noqa comments that target redirected or renamed rules.
+    "RUF200",  # Ruff: validate pyproject.toml metadata against the relevant PEP schemas.
+
+    # Security-adjacent control-flow checks. These may need targeted noqa comments in
+    # rare intentional cases, but silent failure and dynamic execution should be explicit.
+    "S102",  # flake8-bandit: flag exec(); intentional dynamic execution should be documented.
+    "S110",  # flake8-bandit: flag try/except/pass; silent failure should be visible.
+    "S112",  # flake8-bandit: flag try/except/continue; silent failure in loops should be visible.
+
+    # Test/mock correctness.
+    "PGH005",  # pygrep-hooks: catch invalid access to mock attributes.
+]
+
+# If you add a rule to `ignore`, document the rationale inline below AND in the
+# plugin's developer-facing docs so reviewers can see why the exception was granted.
+ignore = [
+    "F403",    # pyflakes: `from ... import *` used; unable to detect undefined names.
+    "F405",    # pyflakes: name may be undefined or defined from star imports.
+    "RET504",  # flake8-return: allow assigning to a named variable before returning for readability.
+    "SIM102",  # flake8-simplify: allow nested if-statements where they make control flow clearer.
+    "SIM114",  # flake8-simplify: allow separate if-branches when separate branches aid readability.
+    "UP032",   # pyupgrade: keep str.format(...) available, especially for translation strings.
+]
+
+preview = true
+
+[tool.ruff.lint.pycodestyle]
+# Required for W505. Keep documentation/comment line length aligned with the overall
+# line length unless the plugin's style guide adopts a separate docstring limit.
+max-doc-length = 120
+
+[tool.ruff.lint.isort]
+known-first-party = [
+    "account",
+    "circuits",
+    "core",
+    "dcim",
+    "extras",
+    "ipam",
+    "netbox",
+    "tenancy",
+    "users",
+    "utilities",
+    "virtualization",
+    "vpn",
+    "wireless",
+    "netbox_branching",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"template_code.py" = ["E501"]  # Generated/template code may exceed normal line length.
+"**/migrations/*.py" = ["D", "E501", "I"]  # Django-generated migrations: no docstring coverage; long generated values; emitted in non-isort-canonical order.
+"**/tests/*.py" = ["D"]  # Tests do not require docstring coverage by default.
+"**/__init__.py" = ["D104"]  # Package marker files do not require public package docstrings.
+
+[tool.ruff.format]
+# Use single quotes for strings.
+quote-style = "single"
+
+# Indent with spaces, rather than tabs.
+indent-style = "space"
+
+# Enforce UNIX line endings.
+line-ending = "lf"
+
+# Skip auto-format on Django-emitted migrations; their generated layout
+# (multi-arg call wrapping, dict-in-call) is not Ruff-canonical and
+# reformatting them produces noisy diffs without semantic value.
+exclude = ["**/migrations/*.py"]
+
+# Packaging is verified at release time by scripts/verify_wheel_contents.py and
+# scripts/verify_release_tag.py; keep this block in step with those checks.
+[tool.setuptools]
+packages = [
+    "netbox_branching",
+]
+package-data = { "netbox_branching" = ["**/*", "templates/**"] }
+exclude-package-data = { netbox_branching = ["tests/*"] }

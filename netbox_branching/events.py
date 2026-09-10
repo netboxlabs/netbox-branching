@@ -1,4 +1,5 @@
 from django.utils.translation import gettext as _
+
 from netbox.events import EVENT_TYPE_KIND_SUCCESS, EventType
 
 __all__ = (

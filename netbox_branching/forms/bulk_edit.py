@@ -1,10 +1,10 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
+
 from netbox.forms import NetBoxModelBulkEditForm
+from netbox_branching.models import Branch
 from utilities.forms.fields import CommentField
 from utilities.forms.rendering import FieldSet
-
-from netbox_branching.models import Branch
 
 __all__ = (
     'BranchBulkEditForm',

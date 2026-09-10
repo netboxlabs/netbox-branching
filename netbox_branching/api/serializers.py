@@ -1,15 +1,15 @@
-from core.choices import ObjectChangeActionChoices
 from django.core.exceptions import ObjectDoesNotExist
 from drf_spectacular.utils import extend_schema_field
+from rest_framework import serializers
+
+from core.choices import ObjectChangeActionChoices
 from netbox.api.exceptions import SerializerNotFound
 from netbox.api.fields import ChoiceField, ContentTypeField
 from netbox.api.serializers import NetBoxModelSerializer
-from rest_framework import serializers
-from users.api.serializers import UserSerializer
-from utilities.api import get_serializer_for_model
-
 from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
+from users.api.serializers import UserSerializer
+from utilities.api import get_serializer_for_model
 
 __all__ = (
     'BranchEventSerializer',

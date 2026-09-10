@@ -1,5 +1,4 @@
 from netbox.forms import NetBoxModelImportForm
-
 from netbox_branching.models import Branch
 
 __all__ = (

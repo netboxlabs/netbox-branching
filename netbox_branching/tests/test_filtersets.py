@@ -14,7 +14,6 @@ except ImportError:
     TaggableManager = None
 
 from core.choices import ObjectChangeActionChoices
-
 from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.filtersets import BranchEventFilterSet, BranchFilterSet, ChangeDiffFilterSet
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
