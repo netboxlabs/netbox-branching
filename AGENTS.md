@@ -281,6 +281,7 @@ The scaffold targets *private* plugins, so a few surfaces are deliberately diver
 | `testing/configuration.py` | Maintained by hand for this plugin's `DynamicSchemaDict` / `BranchAwareRouter` requirements. |
 | `docs/changelog.md` | This repo's change log; the scaffold ships `docs/releases.md`. |
 | `.yamllint` | The scaffold ships the `yamllint` hook but renders no config, so this one is adapted from the scaffold's own root config. |
+| `.github/workflows/test.yml` | Keeps the `test-against:<ref>` label override and the `workflow_dispatch` ref input, which the scaffold has no equivalent for. Because those check out a caller-supplied NetBox ref and run it, the scaffold's `cache: pip` is removed from both jobs — CodeQL's `actions/cache-poisoning` rule flags package installs as poisonable once any cache exists in such a workflow. Do not reinstate the cache without also removing the dynamic ref. |
 
 The scaffold's `ui/` and `graphql/` stub packages are intentionally absent — this plugin has
 neither surface. A `copier update` will offer to add them; decline.

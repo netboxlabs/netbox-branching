@@ -21,6 +21,12 @@
 #   Collected on a SINGLE matrix leg (see the matrix `include`). The suite is
 #   not run with --parallel: branch provisioning is schema-scoped and has not
 #   been validated against Django's parallel test runner.
+#
+# No caching:
+#   `cache: pip` is deliberately absent from both jobs. This workflow checks
+#   out a caller-supplied NetBox ref and runs its code, and CodeQL's
+#   actions/cache-poisoning rule flags package-install steps as poisonable
+#   once any cache is in play. See AGENTS.md, "Scaffold".
 
 name: Test
 
@@ -57,7 +63,6 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.12'
-          cache: pip
       - name: Install docs and lint tooling
         # The mkdocs-build pre-commit hook shells out to the local mkdocs.
         run: |
@@ -163,8 +168,6 @@ jobs:
 
       - name: Setup Python ${{ matrix.python-version }}
         # actions/setup-python v6.2.0
-        # No `cache: pip` here on purpose: this job runs code from a
-        # checked-out NetBox ref, and a pip cache would be writable by it.
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: ${{ matrix.python-version }}
