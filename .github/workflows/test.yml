@@ -13,31 +13,22 @@
 #   editable so its tests package resolves from the source tree.
 #
 # NetBox ref override:
-#   A PR labelled `test-against:<ref>` swaps the `main` leg for that ref;
-#   workflow_dispatch takes an explicit ref. Both let a PR be validated
-#   against an unreleased NetBox branch.
+#   A PR labelled `test-against:<ref>` swaps the `main` leg for that ref,
+#   letting a PR be validated against an unreleased NetBox branch. There is
+#   deliberately no workflow_dispatch ref input: that trigger can write the
+#   default-branch cache scope, so a caller-supplied ref there is an
+#   untrusted checkout in a privileged context (CodeQL
+#   actions/cache-poisoning).
 #
 # Coverage:
 #   Collected on a SINGLE matrix leg (see the matrix `include`). The suite is
 #   not run with --parallel: branch provisioning is schema-scoped and has not
 #   been validated against Django's parallel test runner.
-#
-# No caching:
-#   `cache: pip` is deliberately absent from both jobs. This workflow checks
-#   out a caller-supplied NetBox ref and runs its code, and CodeQL's
-#   actions/cache-poisoning rule flags package-install steps as poisonable
-#   once any cache is in play. See AGENTS.md, "Scaffold".
 
 name: Test
 
 "on":
   workflow_dispatch:
-    inputs:
-      netbox_ref:
-        description: 'NetBox ref to checkout (branch, tag, or commit)'
-        required: false
-        default: 'main'
-        type: string
   pull_request:
   push:
     branches: [main]
@@ -63,6 +54,7 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: '3.12'
+          cache: pip
       - name: Install docs and lint tooling
         # The mkdocs-build pre-commit hook shells out to the local mkdocs.
         run: |
@@ -128,11 +120,10 @@ jobs:
 
       - name: Resolve NetBox ref
         id: netbox-ref
-        # A `test-against:<ref>` PR label, or the workflow_dispatch input,
-        # overrides the `main` leg only; the declared-floor leg always runs.
+        # A `test-against:<ref>` PR label overrides the `main` leg only;
+        # the declared-floor leg always runs.
         env:
           MATRIX_REF: ${{ matrix.netbox-ref }}
-          INPUT_REF: ${{ inputs.netbox_ref }}
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
           REF="$MATRIX_REF"
@@ -141,9 +132,7 @@ jobs:
             OVERRIDE=$(jq -r 'if type == "array" then .[] else empty end
               | select(startswith("test-against:")) | split(":")[1]' \
               <<<"$LABELS" | head -n1)
-            if [[ -n "$INPUT_REF" ]]; then
-              REF="$INPUT_REF"
-            elif [[ -n "$OVERRIDE" && "$OVERRIDE" != "null" ]]; then
+            if [[ -n "$OVERRIDE" && "$OVERRIDE" != "null" ]]; then
               REF="$OVERRIDE"
             fi
           fi
@@ -171,6 +160,7 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: ${{ matrix.python-version }}
+          cache: pip
 
       - name: Install NetBox dependencies
         working-directory: netbox
