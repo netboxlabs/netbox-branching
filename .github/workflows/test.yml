@@ -13,12 +13,10 @@
 #   editable so its tests package resolves from the source tree.
 #
 # NetBox ref override:
-#   A PR labelled `test-against:<ref>` swaps the `main` leg for that ref,
-#   letting a PR be validated against an unreleased NetBox branch. There is
-#   deliberately no workflow_dispatch ref input: that trigger can write the
-#   default-branch cache scope, so a caller-supplied ref there is an
-#   untrusted checkout in a privileged context (CodeQL
-#   actions/cache-poisoning).
+#   A PR labelled `test-against:<ref>` swaps the `main` leg for that ref;
+#   workflow_dispatch takes an explicit ref. Both let a PR be validated
+#   against an unreleased NetBox branch. The checkout expression below is
+#   kept in the form this repo used before the scaffold migration.
 #
 # Coverage:
 #   Collected on a SINGLE matrix leg (see the matrix `include`). The suite is
@@ -29,6 +27,12 @@ name: Test
 
 "on":
   workflow_dispatch:
+    inputs:
+      netbox_ref:
+        description: 'NetBox ref to checkout (branch, tag, or commit)'
+        required: false
+        default: 'main'
+        type: string
   pull_request:
   push:
     branches: [main]
@@ -120,14 +124,15 @@ jobs:
 
       - name: Resolve NetBox ref
         id: netbox-ref
-        # A `test-against:<ref>` PR label overrides the `main` leg only;
-        # the declared-floor leg always runs.
+        # A `test-against:<ref>` PR label, or the workflow_dispatch input,
+        # overrides the `main` leg only; the declared-floor leg always runs.
         env:
           MATRIX_REF: ${{ matrix.netbox-ref }}
+          INPUT_REF: ${{ inputs.netbox_ref }}
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
-          REF="$MATRIX_REF"
-          if [[ "$MATRIX_REF" == "main" ]]; then
+          REF="${INPUT_REF:-$MATRIX_REF}"
+          if [[ -z "$INPUT_REF" && "$MATRIX_REF" == "main" ]]; then
             # LABELS is `null` for push / workflow_dispatch events.
             OVERRIDE=$(jq -r 'if type == "array" then .[] else empty end
               | select(startswith("test-against:")) | split(":")[1]' \
@@ -151,7 +156,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: netbox-community/netbox
-          ref: ${{ steps.netbox-ref.outputs.ref }}
+          ref: ${{ inputs.netbox_ref || steps.netbox-ref.outputs.ref }}
           path: netbox
           persist-credentials: false
 
