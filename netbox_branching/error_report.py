@@ -87,14 +87,18 @@ def annotate_validation_error(exc, model_class, object_id, content_type_id, bran
 
 def _classify_validation_error(exc):
     """
-    Return an ``(is_uniqueness, first_field)`` tuple for a ValidationError. ``first_field``
-    is None for an error that carries no field mapping at all.
+    Return an ``(is_uniqueness, first_field)`` tuple for a ValidationError. ``first_field`` is
+    None for an error that names no field -- including one keyed on Django's NON_FIELD_ERRORS
+    sentinel, which must never reach the report as if it were a field.
     """
+    def named(field):
+        return None if field == NON_FIELD_ERRORS else field
+
     if hasattr(exc, 'error_dict'):
         for field, field_errors in exc.error_dict.items():
             if any(e.code in ('unique', 'unique_together') for e in field_errors):
-                return True, field
-        return False, next(iter(exc.error_dict), None)
+                return True, named(field)
+        return False, named(next(iter(exc.error_dict), None))
     if hasattr(exc, 'error_list') and exc.error_list:
         return any(e.code in ('unique', 'unique_together') for e in exc.error_list), None
     return False, None
@@ -113,9 +117,13 @@ def _first_error_message(exc, field):
 
 def _probe_branch(model_class, object_id, branch, field):
     """
-    Re-validate the object inside its own branch schema. Returns ``(does field fail there,
-    its current value in the branch)``, or None if the probe could not run -- which callers
-    must treat as unknown, never as clean.
+    Re-validate the object inside its own branch schema. Returns ``(is it invalid there, the
+    current value of field in the branch)``, or None if the probe could not run -- which
+    callers must treat as unknown, never as clean.
+
+    Any failure counts, not just one on ``field``: clean() raises on the first problem it
+    finds, so an unrelated error in the branch says nothing about whether the check that
+    blocked the merge would have failed there too.
     """
     logger = logging.getLogger('netbox_branching.error_report')
     try:
@@ -123,12 +131,12 @@ def _probe_branch(model_class, object_id, branch, field):
             instance = model_class.objects.using(branch.connection_name).get(pk=object_id)
             try:
                 full_clean_with_file_check(instance, logger)
-            except ValidationError as e:
-                failing = set(e.error_dict) if hasattr(e, 'error_dict') else {NON_FIELD_ERRORS}
+            except ValidationError:
+                invalid = True
             else:
-                failing = set()
+                invalid = False
             value = getattr(instance, field, None) if field else None
-            return field in failing, str(value) if value is not None else None
+            return invalid, str(value) if value is not None else None
     # Blind by design: a failing probe must never displace the real ValidationError.
     except Exception as e:  # noqa: BLE001
         logger.debug(f'Branch validity probe failed for {model_class.__name__} {object_id}: {e}')
@@ -143,8 +151,7 @@ def _flag_main_collision(exc, model_class, object_id, branch):
     is_uniqueness, field = _classify_validation_error(exc)
     if is_uniqueness or object_id is None:
         return
-    probe_field = field or NON_FIELD_ERRORS
-    if (result := _probe_branch(model_class, object_id, branch, probe_field)) is None:
+    if (result := _probe_branch(model_class, object_id, branch, field)) is None:
         return
     fails_in_branch, value = result
     if fails_in_branch:

@@ -1709,6 +1709,29 @@ class BaseMergeTests:
             msg='the branch-side remedy is useless under iterative unless it names squash',
         )
 
+    def test_unrelated_branch_invalidity_is_not_reported_as_collision(self):
+        """
+        The probe requires the branch object to validate cleanly, not merely to pass on the
+        field that blocked the merge: clean() raises on its first problem, so an unrelated
+        failure in the branch leaves us unable to say the merge-blocking check would have
+        passed there. Such an object is reported as a plain validation error. (#632)
+        """
+        branch, branch_device = self._rack_collision_branch()
+
+        # Break the branch copy on a different field than the one the merge trips on
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+        with activate_branch(branch), event_tracking(request):
+            device = Device.objects.get(pk=branch_device.pk)
+            device.face = ''
+            device.save()
+
+        with self.assertRaises(ValidationError) as ctx:
+            branch.merge(user=self.user, commit=True)
+
+        self.assertEqual(build_error_report(ctx.exception)['type'], 'validation_error')
+
     def test_merge_invalid_branch_value_is_not_reported_as_collision(self):
         """
         Control: a value that is invalid in the branch too keeps its plain validation_error

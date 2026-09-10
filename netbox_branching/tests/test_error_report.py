@@ -8,7 +8,7 @@ logic with no DB access, so the tests run as SimpleTestCase.
 from types import SimpleNamespace
 
 from dcim.models import Site
-from django.core.exceptions import ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.db import IntegrityError
 from django.test import SimpleTestCase
 
@@ -137,6 +137,28 @@ class MainCollisionClassificationTestCase(SimpleTestCase):
         """Uniqueness failures already point the user at both schemas."""
         exc = self._flagged(ValidationError({'name': [ValidationError('taken', code='unique')]}))
         self.assertEqual(build_error_report(exc)['type'], 'unique_constraint')
+
+    def test_non_field_error_does_not_surface_the_django_sentinel_as_a_field(self):
+        """
+        A clean() error keyed on NON_FIELD_ERRORS must not render as Device "__all__" in the
+        report or the recommendations.
+        """
+        exc = self._flagged(ValidationError({NON_FIELD_ERRORS: ['cross-field check failed']}))
+        entry = build_error_report(exc)
+        self.assertIsNone(entry['field'])
+        self.assertEqual(entry['detail'], 'cross-field check failed')
+        self.assertNotIn('__all__', get_entry_message(entry))
+        recs = get_merge_recommendations(entry, merge_strategy=BranchMergeStrategyChoices.ITERATIVE)
+        self.assertNotIn('__all__', ' '.join(str(r) for r in recs))
+
+    def test_unique_together_error_does_not_surface_the_django_sentinel_as_a_field(self):
+        """validate_unique() files unique_together failures under NON_FIELD_ERRORS."""
+        exc = ValidationError({NON_FIELD_ERRORS: [ValidationError('taken', code='unique_together')]})
+        annotate_validation_error(exc, Site, object_id=7, content_type_id=42)
+        entry = build_error_report(exc)
+        self.assertEqual(entry['type'], 'unique_constraint')
+        self.assertIsNone(entry['field'])
+        self.assertNotIn('__all__', get_entry_message(entry))
 
     def test_every_entry_type_carries_a_detail_key(self):
         """views.py splats the entry into the template context; the shape must be uniform."""
