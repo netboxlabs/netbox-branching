@@ -12,6 +12,7 @@ public contract for third-party integrations. This module verifies that:
     while pre_X fires unconditionally
   * post_migrate fires even when there are no migrations to apply
 """
+
 import uuid
 from contextlib import contextmanager
 

@@ -76,6 +76,7 @@ class BranchJobRunner(JobRunner):
     Subclasses declare the transitional branch status they are responsible for via `branch_status`,
     which lets a stuck branch be traced back to the job which should be clearing it (see #622).
     """
+
     # The transitional Branch status maintained while this job runs
     branch_status = None
 
@@ -94,6 +95,7 @@ class ProvisionBranchJob(BranchJobRunner):
     """
     Provision a Branch in the database.
     """
+
     branch_status = BranchStatusChoices.PROVISIONING
 
     class Meta:
@@ -114,6 +116,7 @@ class SyncBranchJob(BranchJobRunner):
     """
     Sync changes from main into a Branch.
     """
+
     branch_status = BranchStatusChoices.SYNCING
 
     class Meta:
@@ -132,13 +135,14 @@ class SyncBranchJob(BranchJobRunner):
                 branch = self.job.object
                 branch.sync(user=self.job.user, commit=commit)
             except AbortTransaction:
-                logger.info("Dry run completed; rolling back changes")
+                logger.info('Dry run completed; rolling back changes')
 
 
 class MergeBranchJob(BranchJobRunner):
     """
     Merge changes from a Branch into main.
     """
+
     branch_status = BranchStatusChoices.MERGING
 
     class Meta:
@@ -155,17 +159,9 @@ class MergeBranchJob(BranchJobRunner):
         ACTION_DELETE = ObjectChangeActionChoices.ACTION_DELETE
 
         # Aggregate per unique object at the DB level — one row per object, not per change record
-        per_object = (
-            changes_qs
-            .values('changed_object_type_id', 'changed_object_id')
-            .annotate(
-                has_delete=Max(Case(
-                    When(action=ACTION_DELETE, then=1), default=0, output_field=IntegerField()
-                )),
-                has_create=Max(Case(
-                    When(action=ACTION_CREATE, then=1), default=0, output_field=IntegerField()
-                )),
-            )
+        per_object = changes_qs.values('changed_object_type_id', 'changed_object_id').annotate(
+            has_delete=Max(Case(When(action=ACTION_DELETE, then=1), default=0, output_field=IntegerField())),
+            has_create=Max(Case(When(action=ACTION_CREATE, then=1), default=0, output_field=IntegerField())),
         )
 
         creates = defaultdict(int)
@@ -217,7 +213,7 @@ class MergeBranchJob(BranchJobRunner):
         try:
             branch.merge(user=self.job.user, commit=commit)
         except AbortTransaction:
-            logger.info("Dry run completed; rolling back changes")
+            logger.info('Dry run completed; rolling back changes')
         except (IntegrityError, ValidationError) as e:
             self.job.data['report'].append(build_error_report(e))
             raise
@@ -227,6 +223,7 @@ class RevertBranchJob(BranchJobRunner):
     """
     Revert changes from a merged Branch.
     """
+
     branch_status = BranchStatusChoices.REVERTING
 
     class Meta:
@@ -243,13 +240,14 @@ class RevertBranchJob(BranchJobRunner):
             branch = self.job.object
             branch.revert(user=self.job.user, commit=commit)
         except AbortTransaction:
-            logger.info("Dry run completed; rolling back changes")
+            logger.info('Dry run completed; rolling back changes')
 
 
 class MigrateBranchJob(BranchJobRunner):
     """
     Apply any outstanding database migrations from the main schema to the Branch.
     """
+
     branch_status = BranchStatusChoices.MIGRATING
 
     class Meta:
@@ -268,7 +266,7 @@ class MigrateBranchJob(BranchJobRunner):
                 branch = self.job.object
                 branch.migrate(user=self.job.user)
             except AbortTransaction:
-                logger.info("Dry run completed; rolling back changes")
+                logger.info('Dry run completed; rolling back changes')
 
 
 def get_job_class_for_status(status):
@@ -289,6 +287,7 @@ class AutoArchiveBranchJob(JobRunner):
     daily housekeeping job cleans up old merged branches which are no longer needed, helping to
     combat database bloat. Archival is disabled entirely when `auto_archive_days` is None.
     """
+
     class Meta:
         name = 'Auto-archive branches'
 
@@ -309,23 +308,21 @@ class AutoArchiveBranchJob(JobRunner):
             )
         )
         self.logger.info(
-            f"Found {len(branches)} merged branch(es) merged before {cutoff:%Y-%m-%d %H:%M:%S} "
-            f"eligible for automatic archival."
+            f'Found {len(branches)} merged branch(es) merged before {cutoff:%Y-%m-%d %H:%M:%S} '
+            f'eligible for automatic archival.'
         )
 
         for branch in branches:
             # Respect any configured archive validators; skip (rather than fail) branches which
             # are not permitted to be archived so a single blocked branch can't stall the batch.
             if not branch.can_archive:
-                self.logger.warning(f"Skipping branch {branch}: archival is not permitted.")
+                self.logger.warning(f'Skipping branch {branch}: archival is not permitted.')
                 continue
             try:
-                self.logger.info(
-                    f"Archiving branch {branch} (merged {branch.merged_time:%Y-%m-%d %H:%M:%S})."
-                )
+                self.logger.info(f'Archiving branch {branch} (merged {branch.merged_time:%Y-%m-%d %H:%M:%S}).')
                 branch.archive(user=self.job.user)
             except Exception as e:
-                self.logger.error(f"Failed to archive branch {branch}: {e}")
+                self.logger.error(f'Failed to archive branch {branch}: {e}')
 
 
 @system_job(interval=JobIntervalChoices.INTERVAL_HOURLY)
@@ -343,6 +340,7 @@ class RecoverStuckBranchesJob(JobRunner):
     Recovery is skipped entirely when `auto_recover_stuck_branches` is disabled; branches can still
     be recovered on demand from the branch view or the REST API.
     """
+
     class Meta:
         name = 'Recover stuck branches'
 
@@ -351,11 +349,11 @@ class RecoverStuckBranchesJob(JobRunner):
         from .models import Branch
 
         if not get_plugin_config('netbox_branching', 'auto_recover_stuck_branches'):
-            self.logger.info("Automatic recovery of stuck branches is disabled; nothing to do.")
+            self.logger.info('Automatic recovery of stuck branches is disabled; nothing to do.')
             return
 
         branches = Branch.objects.filter(status__in=BranchStatusChoices.TRANSITIONAL)
-        self.logger.info(f"Found {len(branches)} branch(es) in a transitional status.")
+        self.logger.info(f'Found {len(branches)} branch(es) in a transitional status.')
 
         recovered = 0
         for branch in branches:
@@ -363,12 +361,11 @@ class RecoverStuckBranchesJob(JobRunner):
                 if new_status := branch.recover(user=self.job.user):
                     recovered += 1
                     self.logger.warning(
-                        f"Recovered branch {branch}: no job was running for it; "
-                        f"status reset to '{new_status}'."
+                        f"Recovered branch {branch}: no job was running for it; status reset to '{new_status}'."
                     )
                 else:
-                    self.logger.debug(f"Branch {branch} is still being worked on; leaving it alone.")
+                    self.logger.debug(f'Branch {branch} is still being worked on; leaving it alone.')
             except Exception as e:
-                self.logger.error(f"Failed to recover branch {branch}: {e}")
+                self.logger.error(f'Failed to recover branch {branch}: {e}')
 
-        self.logger.info(f"Recovered {recovered} stuck branch(es).")
+        self.logger.info(f'Recovered {recovered} stuck branch(es).')

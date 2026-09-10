@@ -6,21 +6,17 @@ from netbox_branching.models import Branch
 from utilities.forms.fields import CommentField
 from utilities.forms.rendering import FieldSet
 
-__all__ = (
-    'BranchBulkEditForm',
-)
+__all__ = ('BranchBulkEditForm',)
 
 
 class BranchBulkEditForm(NetBoxModelBulkEditForm):
-    description = forms.CharField(
-        label=_('Description'),
-        max_length=200,
-        required=False
-    )
+    description = forms.CharField(label=_('Description'), max_length=200, required=False)
     comments = CommentField()
 
     model = Branch
     fieldsets = (
-        FieldSet('description',),
+        FieldSet(
+            'description',
+        ),
     )
     nullable_fields = ('description', 'comments')

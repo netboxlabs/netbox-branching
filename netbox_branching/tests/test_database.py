@@ -12,6 +12,7 @@ These are exercised indirectly by every branching test, but failures there
 surface as confusing routing errors. The tests here pin down the contracts of
 each primitive in isolation so regressions can be diagnosed quickly.
 """
+
 from django.test import TestCase, override_settings
 
 from dcim.models import Site
@@ -34,13 +35,15 @@ class DynamicSchemaDictTestCase(TestCase):
     """
 
     def _make(self):
-        return DynamicSchemaDict({
-            'default': {
-                'ENGINE': 'django.db.backends.postgresql',
-                'NAME': 'netbox',
-                'OPTIONS': {'connect_timeout': 10},
+        return DynamicSchemaDict(
+            {
+                'default': {
+                    'ENGINE': 'django.db.backends.postgresql',
+                    'NAME': 'netbox',
+                    'OPTIONS': {'connect_timeout': 10},
+                }
             }
-        })
+        )
 
     def test_schema_key_returns_dynamic_config(self):
         config = self._make()['schema_branch_abc123']
@@ -121,9 +124,11 @@ class BranchAwareRouterTestCase(TestCase):
         self.assertIsNone(self.router.db_for_read(Branch))
         self.assertIsNone(self.router.db_for_write(Branch))
 
-    @override_settings(PLUGINS_CONFIG={
-        'netbox_branching': {'exempt_models': ['dcim.site']},
-    })
+    @override_settings(
+        PLUGINS_CONFIG={
+            'netbox_branching': {'exempt_models': ['dcim.site']},
+        }
+    )
     def test_exempt_model_routes_to_main_even_when_branch_active(self):
         """
         exempt_models is read dynamically by supports_branching() on every
@@ -143,6 +148,7 @@ class BranchAwareRouterTestCase(TestCase):
         though ObjectChange is not branchable in the supports_branching sense.
         """
         from core.models import ObjectChange
+
         self.assertIsNone(self.router.db_for_read(ObjectChange))
         self._activate(self.branch)
         self.assertEqual(
@@ -165,21 +171,15 @@ class BranchAwareRouterTestCase(TestCase):
 
     def test_allow_migrate_disallows_plugin_models_in_branches(self):
         """The plugin's own tables must live in main, never in a branch schema."""
-        self.assertFalse(
-            self.router.allow_migrate('schema_branch_xxx', 'netbox_branching', 'branch')
-        )
+        self.assertFalse(self.router.allow_migrate('schema_branch_xxx', 'netbox_branching', 'branch'))
 
     def test_allow_migrate_allows_object_change(self):
         """core.ObjectChange is replicated to every branch schema."""
-        self.assertTrue(
-            self.router.allow_migrate('schema_branch_xxx', 'core', 'objectchange')
-        )
+        self.assertTrue(self.router.allow_migrate('schema_branch_xxx', 'core', 'objectchange'))
 
     def test_allow_migrate_disallows_non_branchable_models(self):
         """auth.User has no 'branching' feature, so it must stay in main only."""
-        self.assertFalse(
-            self.router.allow_migrate('schema_branch_xxx', 'auth', 'user')
-        )
+        self.assertFalse(self.router.allow_migrate('schema_branch_xxx', 'auth', 'user'))
 
 
 class BranchConnectionTrackingTestCase(TestCase):

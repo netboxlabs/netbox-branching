@@ -32,7 +32,6 @@ def make_diff(**kwargs):
 
 
 class AlteredInModifiedTestCase(SimpleTestCase):
-
     def test_returns_changed_keys(self):
         diff = make_diff(original=DATA_A, modified=DATA_B)
         self.assertEqual(diff.altered_in_modified, {'description'})
@@ -57,7 +56,6 @@ class AlteredInModifiedTestCase(SimpleTestCase):
 
 
 class AlteredInCurrentTestCase(SimpleTestCase):
-
     def test_returns_changed_keys(self):
         diff = make_diff(original=DATA_A, current=DATA_C)
         self.assertEqual(diff.altered_in_current, {'description'})
@@ -72,7 +70,6 @@ class AlteredInCurrentTestCase(SimpleTestCase):
 
 
 class OriginalDiffTestCase(SimpleTestCase):
-
     def test_returns_altered_fields(self):
         diff = make_diff(original=DATA_A, modified=DATA_B)
         self.assertEqual(diff.original_diff, {'description': ''})
@@ -88,7 +85,6 @@ class OriginalDiffTestCase(SimpleTestCase):
 
 
 class ModifiedDiffTestCase(SimpleTestCase):
-
     def test_returns_altered_fields(self):
         diff = make_diff(original=DATA_A, modified=DATA_B)
         self.assertEqual(diff.modified_diff, {'description': 'changed'})
@@ -104,7 +100,6 @@ class ModifiedDiffTestCase(SimpleTestCase):
 
 
 class CurrentDiffTestCase(SimpleTestCase):
-
     def test_returns_altered_fields(self):
         diff = make_diff(original=DATA_A, modified=DATA_B, current=DATA_C)
         self.assertEqual(diff.current_diff, {'description': 'main change'})
@@ -237,9 +232,7 @@ class MainSideConflictTestCase(TransactionTestCase):
 
     def test_no_conflict_for_main_change_to_unrelated_field(self):
         with event_tracking(self.request):
-            site = Site.objects.create(
-                name='Site 2', slug='site-2', description='original', status='active'
-            )
+            site = Site.objects.create(name='Site 2', slug='site-2', description='original', status='active')
         site_id = site.pk
 
         branch = provision_branch(user=self.user, name='Branch 2')

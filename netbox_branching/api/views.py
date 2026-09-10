@@ -39,9 +39,7 @@ class BranchViewSet(ModelViewSet):
         """
         if serializer.validated_data.get('acknowledge_conflicts', False):
             return None
-        conflicts = ChangeDiff.objects.filter(
-            branch=branch, conflicts__isnull=False
-        ).select_related('object_type')
+        conflicts = ChangeDiff.objects.filter(branch=branch, conflicts__isnull=False).select_related('object_type')
         if not conflicts.exists():
             return None
         return Response(
@@ -63,11 +61,11 @@ class BranchViewSet(ModelViewSet):
         Enqueue a background job to synchronize a branch from main.
         """
         if not request.user.has_perm('netbox_branching.sync_branch'):
-            raise PermissionDenied("This user does not have permission to sync branches.")
+            raise PermissionDenied('This user does not have permission to sync branches.')
 
         branch = self.get_object()
         if not branch.ready:
-            return HttpResponseBadRequest("Branch is not ready to sync.")
+            return HttpResponseBadRequest('Branch is not ready to sync.')
 
         serializer = serializers.CommitSerializer(data=request.data)
         commit = serializer.validated_data.get('commit', True) if serializer.is_valid() else False
@@ -76,11 +74,7 @@ class BranchViewSet(ModelViewSet):
             return conflict_response
 
         # Enqueue a background job
-        job = SyncBranchJob.enqueue(
-            instance=branch,
-            user=request.user,
-            commit=commit
-        )
+        job = SyncBranchJob.enqueue(instance=branch, user=request.user, commit=commit)
 
         return Response(JobSerializer(job, context={'request': request}).data)
 
@@ -95,11 +89,11 @@ class BranchViewSet(ModelViewSet):
         Enqueue a background job to merge a branch.
         """
         if not request.user.has_perm('netbox_branching.merge_branch'):
-            raise PermissionDenied("This user does not have permission to merge branches.")
+            raise PermissionDenied('This user does not have permission to merge branches.')
 
         branch = self.get_object()
         if not branch.ready:
-            return HttpResponseBadRequest("Branch is not ready to merge.")
+            return HttpResponseBadRequest('Branch is not ready to merge.')
 
         serializer = serializers.CommitSerializer(data=request.data)
         commit = serializer.validated_data.get('commit', True) if serializer.is_valid() else False
@@ -108,11 +102,7 @@ class BranchViewSet(ModelViewSet):
             return conflict_response
 
         # Enqueue a background job
-        job = MergeBranchJob.enqueue(
-            instance=branch,
-            user=request.user,
-            commit=commit
-        )
+        job = MergeBranchJob.enqueue(instance=branch, user=request.user, commit=commit)
 
         return Response(JobSerializer(job, context={'request': request}).data)
 
@@ -127,21 +117,17 @@ class BranchViewSet(ModelViewSet):
         Enqueue a background job to revert a merged branch.
         """
         if not request.user.has_perm('netbox_branching.revert_branch'):
-            raise PermissionDenied("This user does not have permission to revert branches.")
+            raise PermissionDenied('This user does not have permission to revert branches.')
 
         branch = self.get_object()
         if not branch.merged:
-            return HttpResponseBadRequest("Only merged branches can be reverted.")
+            return HttpResponseBadRequest('Only merged branches can be reverted.')
 
         serializer = serializers.CommitSerializer(data=request.data)
         commit = serializer.validated_data.get('commit', True) if serializer.is_valid() else False
 
         # Enqueue a background job
-        job = RevertBranchJob.enqueue(
-            instance=branch,
-            user=request.user,
-            commit=commit
-        )
+        job = RevertBranchJob.enqueue(instance=branch, user=request.user, commit=commit)
 
         return Response(JobSerializer(job, context={'request': request}).data)
 
@@ -155,13 +141,13 @@ class BranchViewSet(ModelViewSet):
         Archive a merged branch, deprovisioning its schema.
         """
         if not request.user.has_perm('netbox_branching.archive_branch'):
-            raise PermissionDenied("This user does not have permission to archive branches.")
+            raise PermissionDenied('This user does not have permission to archive branches.')
 
         branch = self.get_object()
         if not branch.merged:
-            return HttpResponseBadRequest("Only merged branches can be archived.")
+            return HttpResponseBadRequest('Only merged branches can be archived.')
         if not branch.can_archive:
-            return HttpResponseBadRequest("Archiving this branch is not permitted.")
+            return HttpResponseBadRequest('Archiving this branch is not permitted.')
 
         branch.archive(user=request.user)
         branch.refresh_from_db()
@@ -181,11 +167,11 @@ class BranchViewSet(ModelViewSet):
         no longer running (e.g. its worker was killed).
         """
         if not request.user.has_perm('netbox_branching.change_branch'):
-            raise PermissionDenied("This user does not have permission to modify branches.")
+            raise PermissionDenied('This user does not have permission to modify branches.')
 
         branch = self.get_object()
         if branch.status not in BranchStatusChoices.TRANSITIONAL:
-            return HttpResponseBadRequest("Branch is not in a transitional status.")
+            return HttpResponseBadRequest('Branch is not in a transitional status.')
 
         # Recover only a branch which is demonstrably stuck, unless the caller explicitly forces it.
         serializer = serializers.BranchRecoverSerializer(data=request.data)
@@ -198,7 +184,7 @@ class BranchViewSet(ModelViewSet):
             branch.force_recover(user=request.user, retry=retry)
         elif not branch.recover(user=request.user, retry=retry):
             return HttpResponseBadRequest(
-                "A job for this branch still appears to be running. Pass force=true to recover it anyway."
+                'A job for this branch still appears to be running. Pass force=true to recover it anyway.'
             )
 
         branch.refresh_from_db()
@@ -222,6 +208,7 @@ class BranchableModelViewSet(ViewSet):
     """
     List all models that support branching, including models from custom plugins.
     """
+
     permission_classes: ClassVar = [IsAuthenticatedOrLoginNotRequired]
 
     def list(self, request):

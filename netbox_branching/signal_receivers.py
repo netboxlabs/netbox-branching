@@ -63,10 +63,7 @@ def check_object_accessible_in_branch(branch, model, object_id):
     # Object doesn't exist in main - check if it was created in the branch
     content_type = ContentType.objects.get_for_model(model)
     return ChangeDiff.objects.filter(
-        branch=branch,
-        object_type=content_type,
-        object_id=object_id,
-        action=ObjectChangeActionChoices.ACTION_CREATE
+        branch=branch, object_type=content_type, object_id=object_id, action=ObjectChangeActionChoices.ACTION_CREATE
     ).exists()
 
 
@@ -103,11 +100,8 @@ def validate_branching_operations(sender, instance, **kwargs):
             raise ValidationError(
                 _(
                     "Cannot modify {model_name} '{object_name}' because it has been deleted in the main branch. "
-                    "Sync with the main branch to update."
-                ).format(
-                    model_name=model._meta.verbose_name,
-                    object_name=str(instance)
-                )
+                    'Sync with the main branch to update.'
+                ).format(model_name=model._meta.verbose_name, object_name=str(instance))
             )
 
 
@@ -128,7 +122,6 @@ def record_change_diff(instance, **kwargs):
 
     # If this is a global change, update the "current" state in any ChangeDiffs for this object.
     if branch is None:
-
         # There cannot be a pre-existing ChangeDiff for an object that was just created.
         if instance.action == ObjectChangeActionChoices.ACTION_CREATE:
             return
@@ -136,12 +129,10 @@ def record_change_diff(instance, **kwargs):
         if logger.isEnabledFor(logging.DEBUG):
             # changed_object is a GenericForeignKey, so it is resolved eagerly as an argument even
             # though logger.debug() would defer the formatting.
-            logger.debug("Updating change diff for global change to %s", instance.changed_object)
+            logger.debug('Updating change diff for global change to %s', instance.changed_object)
         current_data = instance.postchange_data_clean or None
         for diff in ChangeDiff.objects.filter(
-            object_type=content_type,
-            object_id=object_id,
-            branch__status=BranchStatusChoices.READY
+            object_type=content_type, object_id=object_id, branch__status=BranchStatusChoices.READY
         ).select_related('object_type'):
             diff.current = current_data
             # object_repr is excluded from update_fields because save() recomputes it from the
@@ -152,14 +143,13 @@ def record_change_diff(instance, **kwargs):
                     diff.save(update_fields=('current', 'conflicts', 'last_updated'))
             except DatabaseError:
                 # The ChangeDiff was deleted (e.g. along with its Branch) after being retrieved above.
-                logger.debug("ChangeDiff %s no longer exists; skipping update", diff.pk)
+                logger.debug('ChangeDiff %s no longer exists; skipping update', diff.pk)
 
     # If this is a branch-aware change, create or update ChangeDiff for this object.
     else:
-
         # Updating the existing ChangeDiff
         if diff := ChangeDiff.objects.filter(object_type=content_type, object_id=object_id, branch=branch).first():
-            logger.debug(f"Updating branch change diff for change to {instance.changed_object}")
+            logger.debug(f'Updating branch change diff for change to {instance.changed_object}')
             diff.object = instance.changed_object
             if diff.action != ObjectChangeActionChoices.ACTION_CREATE:
                 diff.action = instance.action
@@ -168,25 +158,24 @@ def record_change_diff(instance, **kwargs):
 
         # Creating a new ChangeDiff
         else:
-            logger.debug(f"Creating branch change diff for change to {instance.changed_object}")
+            logger.debug(f'Creating branch change diff for change to {instance.changed_object}')
             if instance.action == ObjectChangeActionChoices.ACTION_CREATE:
                 current_data = None
             else:
                 model = instance.changed_object_type.model_class()
                 # For update operations, validate that object is accessible.
-                if (
-                    instance.action != ObjectChangeActionChoices.ACTION_DELETE and
-                    not check_object_accessible_in_branch(branch, model, instance.changed_object_id)
+                if instance.action != ObjectChangeActionChoices.ACTION_DELETE and not check_object_accessible_in_branch(
+                    branch, model, instance.changed_object_id
                 ):
                     # Object was deleted in main, not created in branch
                     raise AbortRequest(
                         _(
                             "Cannot {action} {model_name} '{object_name}' because it has been deleted "
-                            "in the main branch. Sync with the main branch to update."
+                            'in the main branch. Sync with the main branch to update.'
                         ).format(
                             action=instance.action.lower(),
                             model_name=model._meta.verbose_name,
-                            object_name=str(instance.changed_object)
+                            object_name=str(instance.changed_object),
                         )
                     )
 
@@ -218,19 +207,15 @@ def handle_branch_event(event_type, branch, user=None, **kwargs):
     Process any EventRules associated with branch events (e.g. syncing or merging).
     """
     logger = logging.getLogger('netbox_branching.signal_receivers.handle_branch_event')
-    logger.debug(f"Checking for {event_type} event rules")
+    logger.debug(f'Checking for {event_type} event rules')
 
     # Find any EventRules for this event type
     object_type = ObjectType.objects.get_by_natural_key('netbox_branching', 'branch')
-    event_rules = EventRule.objects.filter(
-        event_types__contains=[event_type],
-        enabled=True,
-        object_types=object_type
-    )
+    event_rules = EventRule.objects.filter(event_types__contains=[event_type], enabled=True, object_types=object_type)
     if not event_rules:
-        logger.debug("No matching event rules found")
+        logger.debug('No matching event rules found')
         return
-    logger.debug(f"Found {len(event_rules)} event rules")
+    logger.debug(f'Found {len(event_rules)} event rules')
 
     # Serialize the branch & process EventRules
     username = user.username if user else None
@@ -242,15 +227,11 @@ def handle_branch_event(event_type, branch, user=None, **kwargs):
         process_event_rules(
             event_rules=event_rules,
             object_type=object_type,
-            event={'event_type': event_type, 'data': data, 'username': username}
+            event={'event_type': event_type, 'data': data, 'username': username},
         )
     else:
         process_event_rules(
-            event_rules=event_rules,
-            object_type=object_type,
-            event_type=event_type,
-            data=data,
-            username=username
+            event_rules=event_rules, object_type=object_type, event_type=event_type, data=data, username=username
         )
 
 
@@ -268,9 +249,7 @@ def validate_branch_deletion(sender, instance, **kwargs):
     Prevent the deletion of a Branch which is in a transitional state (e.g. provisioning, syncing, etc.).
     """
     if instance.status in BranchStatusChoices.TRANSITIONAL:
-        raise AbortRequest(
-            _("A branch in the {status} status may not be deleted.").format(status=instance.status)
-        )
+        raise AbortRequest(_('A branch in the {status} status may not be deleted.').format(status=instance.status))
 
 
 @receiver(post_migrate)
@@ -281,7 +260,7 @@ def check_pending_migrations(sender, using, **kwargs):
     if sender.name != 'netbox_branching' or using != DEFAULT_DB_ALIAS:
         return
     logger = logging.getLogger('netbox_branching.signal_receivers.check_pending_migrations')
-    logger.info("Checking for branches with pending database migrations")
+    logger.info('Checking for branches with pending database migrations')
 
     open_branches = Branch.objects.filter(status=BranchStatusChoices.READY)
     update_count = 0
@@ -291,7 +270,7 @@ def check_pending_migrations(sender, using, **kwargs):
                 branch.status = BranchStatusChoices.PENDING_MIGRATIONS
                 update_count += 1
         except Exception:
-            logger.exception(f"Failed to check pending migrations for branch {branch!r}")
+            logger.exception(f'Failed to check pending migrations for branch {branch!r}')
         finally:
             # Close the branch's database connection to release its Postgres backend (and the relcache memory
             # accumulated by the pending_migrations introspection) before moving on. Otherwise these connections
@@ -299,5 +278,5 @@ def check_pending_migrations(sender, using, **kwargs):
             # sweep runs under `manage.py migrate`. See issue #581.
             connections[branch.connection_name].close()
     if update_count:
-        logger.info(f"Updating status of {update_count} branches with pending migrations")
+        logger.info(f'Updating status of {update_count} branches with pending migrations')
         Branch.objects.bulk_update(open_branches, ['status'], batch_size=100)

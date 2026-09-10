@@ -8,7 +8,6 @@ from utilities.testing import TestCase
 
 
 class RequestTestCase(TestCase):
-
     @classmethod
     def setUpTestData(cls):
         # Create a Branch
@@ -30,11 +29,9 @@ class RequestTestCase(TestCase):
         url = reverse('home')
         response = self.client.get(f'{url}?{QUERY_PARAM}={branch.schema_id}')
         self.assertEqual(response.status_code, 200)
-        self.assertIn(COOKIE_NAME, self.client.cookies, msg="Cookie was not set on response")
+        self.assertIn(COOKIE_NAME, self.client.cookies, msg='Cookie was not set on response')
         self.assertEqual(
-            self.client.cookies[COOKIE_NAME].value,
-            branch.schema_id,
-            msg="Branch ID set in cookie is incorrect"
+            self.client.cookies[COOKIE_NAME].value, branch.schema_id, msg='Branch ID set in cookie is incorrect'
         )
 
         # Cookie attributes should mirror SESSION_COOKIE_* settings
@@ -46,7 +43,7 @@ class RequestTestCase(TestCase):
 
         # Verify exactly one activation toast (not duplicated by the request processor)
         messages_list = list(response.wsgi_request._messages)
-        self.assertEqual(len(messages_list), 1, msg="Expected exactly one activation toast message")
+        self.assertEqual(len(messages_list), 1, msg='Expected exactly one activation toast message')
 
     @override_settings(
         LOGIN_REQUIRED=False,
@@ -58,15 +55,17 @@ class RequestTestCase(TestCase):
     def test_deactivate_branch(self):
         # Attach the cookie to the test client
         branch = Branch.objects.first()
-        self.client.cookies.load({
-            COOKIE_NAME: branch.schema_id,
-        })
+        self.client.cookies.load(
+            {
+                COOKIE_NAME: branch.schema_id,
+            }
+        )
 
         # Deactivate the Branch
         url = reverse('home')
         response = self.client.get(f'{url}?{QUERY_PARAM}=')
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.client.cookies[COOKIE_NAME].value, '', msg="Cookie was not deleted")
+        self.assertEqual(self.client.cookies[COOKIE_NAME].value, '', msg='Cookie was not deleted')
 
         # Deletion cookie attributes should mirror SESSION_COOKIE_* settings
         cookie = response.cookies[COOKIE_NAME]
@@ -77,15 +76,17 @@ class RequestTestCase(TestCase):
     @override_settings(LOGIN_REQUIRED=False)
     def test_reactivate_branch_no_message(self):
         branch = Branch.objects.first()
-        self.client.cookies.load({
-            COOKIE_NAME: branch.schema_id,
-        })
+        self.client.cookies.load(
+            {
+                COOKIE_NAME: branch.schema_id,
+            }
+        )
 
         url = reverse('home')
         response = self.client.get(f'{url}?{QUERY_PARAM}={branch.schema_id}')
         self.assertEqual(response.status_code, 200)
         messages_list = list(response.wsgi_request._messages)
-        self.assertEqual(len(messages_list), 0, msg="Unexpected toast message on branch re-activation")
+        self.assertEqual(len(messages_list), 0, msg='Unexpected toast message on branch re-activation')
 
     @override_settings(LOGIN_REQUIRED=False)
     def test_stale_cookie_cleared(self):
@@ -96,14 +97,16 @@ class RequestTestCase(TestCase):
         branch.status = BranchStatusChoices.ARCHIVED
         branch.save(provision=False, update_merge_sync_fields=True)
 
-        self.client.cookies.load({
-            COOKIE_NAME: branch.schema_id,
-        })
+        self.client.cookies.load(
+            {
+                COOKIE_NAME: branch.schema_id,
+            }
+        )
 
         url = reverse('home')
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(self.client.cookies[COOKIE_NAME].value, '', msg="Stale cookie was not cleared")
+        self.assertEqual(self.client.cookies[COOKIE_NAME].value, '', msg='Stale cookie was not cleared')
 
     # -------------------------------------------------------------------------
     # Paranoid paths
@@ -128,8 +131,5 @@ class RequestTestCase(TestCase):
         through Branch.objects.get(), which raises Branch.DoesNotExist for an
         unknown schema_id — caught by the middleware and surfaced as 400.
         """
-        response = self.client.get(
-            reverse('api-root'),
-            headers={"x-netbox-branch": 'nonexist'}
-        )
+        response = self.client.get(reverse('api-root'), headers={'x-netbox-branch': 'nonexist'})
         self.assertEqual(response.status_code, 400)

@@ -5,6 +5,7 @@ The resolver list lives at module level on ``netbox_branching.utilities``;
 each test snapshots and restores it so registrations don't leak between
 tests.
 """
+
 from contextlib import contextmanager
 
 from django.contrib.auth.models import Group
@@ -35,8 +36,10 @@ class RegisterBranchingResolverTestCase(TestCase):
 
     def test_register_callable(self):
         with _isolated_resolvers():
+
             def resolver(model):
                 return None
+
             register_branching_resolver(resolver)
             self.assertIn(resolver, utilities._branching_resolvers)
 
@@ -57,6 +60,7 @@ class RegisterBranchingResolverTestCase(TestCase):
 
     def test_multiple_registrations_preserve_order(self):
         with _isolated_resolvers():
+
             def r1(model):
                 return None
 
@@ -86,10 +90,12 @@ class ResolverDispatchTestCase(TestCase):
         self.assertFalse(supports_branching(Group))
 
         with _isolated_resolvers():
+
             def resolver(model):
                 if model is Group:
                     return True
                 return None
+
             register_branching_resolver(resolver)
             self.assertTrue(supports_branching(Group))
 
@@ -104,18 +110,22 @@ class ResolverDispatchTestCase(TestCase):
         self.assertTrue(supports_branching(Prefix))
 
         with _isolated_resolvers():
+
             def resolver(model):
                 if model is Prefix:
                     return False
                 return None
+
             register_branching_resolver(resolver)
             self.assertFalse(supports_branching(Prefix))
 
     def test_resolver_returning_none_falls_through(self):
         """A resolver returning None should not affect the default decision."""
         with _isolated_resolvers():
+
             def resolver(model):
                 return None
+
             register_branching_resolver(resolver)
             # ChangeLoggingMixin-based model still branchable
             self.assertTrue(supports_branching(Prefix))
@@ -125,13 +135,14 @@ class ResolverDispatchTestCase(TestCase):
     def test_first_non_none_wins(self):
         """Resolvers run in registration order; first non-None decides."""
         with _isolated_resolvers():
-            register_branching_resolver(lambda m: None)         # defers
-            register_branching_resolver(lambda m: True)         # decides
-            register_branching_resolver(lambda m: False)        # never reached
+            register_branching_resolver(lambda m: None)  # defers
+            register_branching_resolver(lambda m: True)  # decides
+            register_branching_resolver(lambda m: False)  # never reached
             self.assertTrue(supports_branching(Group))
 
     def test_raising_resolver_is_swallowed(self):
         """A resolver that raises is logged and treated as None."""
+
         def bad_resolver(model):
             raise RuntimeError('boom')
 
@@ -147,6 +158,7 @@ class ResolverDispatchTestCase(TestCase):
 
     def test_raising_resolver_does_not_block_subsequent_resolvers(self):
         """A raising resolver should not prevent the next resolver from running."""
+
         def bad_resolver(model):
             raise RuntimeError('boom')
 
@@ -163,6 +175,7 @@ class ResolverDispatchTestCase(TestCase):
         False should not exclude it.
         """
         from extras.models import TaggedItem
+
         with _isolated_resolvers():
             register_branching_resolver(lambda m: False)
             self.assertTrue(supports_branching(TaggedItem))
@@ -176,7 +189,9 @@ class ResolverDispatchTestCase(TestCase):
             # Without exempt_models: resolver opts Group in.
             self.assertTrue(supports_branching(Group))
             # With exempt_models matching Group: exempt wins.
-            with override_settings(PLUGINS_CONFIG={
-                'netbox_branching': {'exempt_models': ['auth.group']},
-            }):
+            with override_settings(
+                PLUGINS_CONFIG={
+                    'netbox_branching': {'exempt_models': ['auth.group']},
+                }
+            ):
                 self.assertFalse(supports_branching(Group))

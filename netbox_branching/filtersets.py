@@ -19,10 +19,7 @@ __all__ = (
 
 
 class BranchFilterSet(NetBoxModelFilterSet):
-    status = django_filters.MultipleChoiceFilter(
-        choices=BranchStatusChoices,
-        null_value=None
-    )
+    status = django_filters.MultipleChoiceFilter(choices=BranchStatusChoices, null_value=None)
     last_sync = filters.MultiValueDateTimeFilter()
     owner_id = django_filters.ModelMultipleChoiceFilter(
         field_name='owner',
@@ -43,17 +40,11 @@ class BranchFilterSet(NetBoxModelFilterSet):
     def search(self, queryset, name, value):
         if not value.strip():
             return queryset
-        return queryset.filter(
-            Q(name__icontains=value) |
-            Q(description__icontains=value)
-        )
+        return queryset.filter(Q(name__icontains=value) | Q(description__icontains=value))
 
 
 class BranchEventFilterSet(BaseFilterSet):
-    type = django_filters.MultipleChoiceFilter(
-        choices=BranchEventTypeChoices,
-        null_value=None
-    )
+    type = django_filters.MultipleChoiceFilter(choices=BranchEventTypeChoices, null_value=None)
     time = filters.MultiValueDateTimeFilter()
 
     class Meta:
@@ -78,17 +69,11 @@ class ChangeDiffFilterSet(BaseFilterSet):
     )
     last_updated = filters.MultiValueDateTimeFilter()
     object_type_id = django_filters.ModelMultipleChoiceFilter(
-        queryset=ObjectType.objects.all(),
-        field_name='object_type'
+        queryset=ObjectType.objects.all(), field_name='object_type'
     )
     object_type = filters.ContentTypeFilter()
-    action = django_filters.MultipleChoiceFilter(
-        choices=ObjectChangeActionChoices,
-        null_value=None
-    )
-    has_conflicts = django_filters.BooleanFilter(
-        method='_has_conflicts'
-    )
+    action = django_filters.MultipleChoiceFilter(choices=ObjectChangeActionChoices, null_value=None)
+    has_conflicts = django_filters.BooleanFilter(method='_has_conflicts')
 
     class Meta:
         model = ChangeDiff
@@ -97,9 +82,7 @@ class ChangeDiffFilterSet(BaseFilterSet):
     def search(self, queryset, name, value):
         if not value.strip():
             return queryset
-        return queryset.filter(
-            Q(object_repr__icontains=value)
-        )
+        return queryset.filter(Q(object_repr__icontains=value))
 
     def _has_conflicts(self, queryset, name, value):
         if value:

@@ -17,6 +17,7 @@ What is covered here:
 None of the branches here are provisioned; only status transitions matter, and the Job records are
 synthesised rather than executed, since the whole point is a job which never ran to completion.
 """
+
 import re
 import uuid
 from datetime import timedelta
@@ -105,6 +106,7 @@ class BranchConnectionCleanupMixin:
     covered neither by TestCase's transaction nor by its teardown; left open, it is handed to
     whichever test runs next and fails it with "relation ... does not exist". Close them here.
     """
+
     def tearDown(self):
         super().tearDown()
         aliases = _get_tracked_branch_aliases()
@@ -250,7 +252,6 @@ class GetRQJobStatusTestCase(BranchConnectionCleanupMixin, TestCase):
 
 
 class JobClassLookupTestCase(BranchConnectionCleanupMixin, TestCase):
-
     def test_every_transitional_status_maps_to_a_job(self):
         for status in BranchStatusChoices.TRANSITIONAL:
             with self.subTest(status=status):
@@ -267,7 +268,6 @@ class JobClassLookupTestCase(BranchConnectionCleanupMixin, TestCase):
 
 @override_settings(PLUGINS_CONFIG=RECOVERY_CONFIG)
 class BranchStuckDetectionTestCase(BranchConnectionCleanupMixin, TestCase):
-
     def test_non_transitional_branch_is_never_stuck(self):
         for status in (BranchStatusChoices.READY, BranchStatusChoices.MERGED, BranchStatusChoices.FAILED):
             with self.subTest(status=status):
@@ -312,7 +312,6 @@ class BranchStuckDetectionTestCase(BranchConnectionCleanupMixin, TestCase):
 
 @override_settings(PLUGINS_CONFIG=RECOVERY_CONFIG)
 class BranchRecoveryTestCase(BranchConnectionCleanupMixin, TestCase):
-
     def _make_stuck(self, name, status):
         branch = make_branch(name, status)
         job = make_job(branch, get_job_class_for_status(status).Meta.name)
@@ -409,8 +408,10 @@ class RecoverStuckBranchesJobTestCase(BranchConnectionCleanupMixin, TestCase):
         # only on the operator-initiated paths.
         branch = make_branch('Watchdog No Retry', BranchStatusChoices.SYNCING)
         make_job(branch, SyncBranchJob.Meta.name)
-        with patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING), \
-                patch('netbox_branching.jobs.SyncBranchJob.enqueue') as enqueue:
+        with (
+            patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING),
+            patch('netbox_branching.jobs.SyncBranchJob.enqueue') as enqueue,
+        ):
             self._run()
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.READY)
@@ -433,13 +434,15 @@ class RecoverStuckBranchesJobTestCase(BranchConnectionCleanupMixin, TestCase):
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.READY)
 
-    @override_settings(PLUGINS_CONFIG={
-        'netbox_branching': {
-            'job_timeout': 3600,
-            'stuck_job_grace_period': 300,
-            'auto_recover_stuck_branches': False,
+    @override_settings(
+        PLUGINS_CONFIG={
+            'netbox_branching': {
+                'job_timeout': 3600,
+                'stuck_job_grace_period': 300,
+                'auto_recover_stuck_branches': False,
+            }
         }
-    })
+    )
     def test_disabled_by_configuration(self):
         branch = make_branch('Stuck But Disabled', BranchStatusChoices.REVERTING)
         make_job(branch, RevertBranchJob.Meta.name)
@@ -458,7 +461,7 @@ class RecoverStuckBranchesJobTestCase(BranchConnectionCleanupMixin, TestCase):
 
         def flaky(self, user=None):
             if self.pk == first.pk:
-                raise RuntimeError("boom")
+                raise RuntimeError('boom')
             return original(self, user=user)
 
         with (
@@ -475,7 +478,6 @@ class RecoverStuckBranchesJobTestCase(BranchConnectionCleanupMixin, TestCase):
 
 @override_settings(PLUGINS_CONFIG=RECOVERY_CONFIG)
 class BranchRecoverViewTestCase(BranchConnectionCleanupMixin, TestCase):
-
     @classmethod
     def setUpTestData(cls):
         cls.superuser = User.objects.create_user(username='recoverview_super', is_superuser=True)
@@ -533,8 +535,10 @@ class BranchRecoverViewTestCase(BranchConnectionCleanupMixin, TestCase):
 
     def test_post_with_retry_reruns_the_interrupted_operation(self):
         branch = make_branch('Retry Sync', BranchStatusChoices.SYNCING)
-        with patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING), \
-                patch('netbox_branching.jobs.SyncBranchJob.enqueue') as enqueue:
+        with (
+            patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING),
+            patch('netbox_branching.jobs.SyncBranchJob.enqueue') as enqueue,
+        ):
             response = self.client.post(self._url(branch), data={'retry': 'on'})
         self.assertEqual(response.status_code, 302)
         branch.refresh_from_db()
@@ -546,8 +550,10 @@ class BranchRecoverViewTestCase(BranchConnectionCleanupMixin, TestCase):
 
     def test_post_without_retry_only_resets_the_status(self):
         branch = make_branch('No Retry', BranchStatusChoices.SYNCING)
-        with patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING), \
-                patch('netbox_branching.jobs.SyncBranchJob.enqueue') as enqueue:
+        with (
+            patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING),
+            patch('netbox_branching.jobs.SyncBranchJob.enqueue') as enqueue,
+        ):
             response = self.client.post(self._url(branch), data={})
         self.assertEqual(response.status_code, 302)
         branch.refresh_from_db()
@@ -558,8 +564,10 @@ class BranchRecoverViewTestCase(BranchConnectionCleanupMixin, TestCase):
         # A merge writes to main and its dry-run flag dies with the worker, so it is never retried
         # even if the caller asks for it.
         branch = make_branch('No Merge Retry', BranchStatusChoices.MERGING)
-        with patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING), \
-                patch('netbox_branching.jobs.MergeBranchJob.enqueue') as enqueue:
+        with (
+            patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING),
+            patch('netbox_branching.jobs.MergeBranchJob.enqueue') as enqueue,
+        ):
             response = self.client.post(self._url(branch), data={'retry': 'on'})
         self.assertEqual(response.status_code, 302)
         branch.refresh_from_db()
@@ -593,8 +601,10 @@ class BranchRecoverViewTestCase(BranchConnectionCleanupMixin, TestCase):
     def test_post_recovers_without_retrying_by_default(self):
         # Submitting the form is the confirmation; re-running the operation is the opt-in.
         branch = make_branch('Bare Post', BranchStatusChoices.MIGRATING)
-        with patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING), \
-                patch('netbox_branching.jobs.MigrateBranchJob.enqueue') as enqueue:
+        with (
+            patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING),
+            patch('netbox_branching.jobs.MigrateBranchJob.enqueue') as enqueue,
+        ):
             response = self.client.post(self._url(branch), data={})
         self.assertEqual(response.status_code, 302)
         branch.refresh_from_db()
@@ -638,7 +648,6 @@ class BranchRecoverViewTestCase(BranchConnectionCleanupMixin, TestCase):
 
 @override_settings(PLUGINS_CONFIG=RECOVERY_CONFIG)
 class BranchRecoverAPITestCase(BranchConnectionCleanupMixin, TestCase):
-
     def setUp(self):
         self.user = User.objects.create_user(username='recoverapi_super', is_superuser=True)
         self.header = {
@@ -652,6 +661,7 @@ class BranchRecoverAPITestCase(BranchConnectionCleanupMixin, TestCase):
         try:
             # NetBox >= 4.5
             from users.choices import TokenVersionChoices
+
             token = Token(version=TokenVersionChoices.V1, user=user)
             token.save()
         except ImportError:
@@ -678,8 +688,10 @@ class BranchRecoverAPITestCase(BranchConnectionCleanupMixin, TestCase):
     def test_retry_reruns_the_interrupted_operation(self):
         branch = make_branch('API Retry', BranchStatusChoices.MIGRATING)
         make_job(branch, MigrateBranchJob.Meta.name)
-        with patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING), \
-                patch('netbox_branching.jobs.MigrateBranchJob.enqueue') as enqueue:
+        with (
+            patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING),
+            patch('netbox_branching.jobs.MigrateBranchJob.enqueue') as enqueue,
+        ):
             response = self.client.post(
                 self._url(branch), data={'retry': True}, content_type='application/json', **self.header
             )
@@ -690,8 +702,10 @@ class BranchRecoverAPITestCase(BranchConnectionCleanupMixin, TestCase):
         # There is no confirmation step over the API, so re-running is strictly opt-in there.
         branch = make_branch('API No Retry', BranchStatusChoices.MIGRATING)
         make_job(branch, MigrateBranchJob.Meta.name)
-        with patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING), \
-                patch('netbox_branching.jobs.MigrateBranchJob.enqueue') as enqueue:
+        with (
+            patch('netbox_branching.utilities._get_rq_job_status', return_value=RQ_JOB_MISSING),
+            patch('netbox_branching.jobs.MigrateBranchJob.enqueue') as enqueue,
+        ):
             response = self.client.post(self._url(branch), **self.header)
         self.assertEqual(response.status_code, 200)
         enqueue.assert_not_called()

@@ -43,6 +43,7 @@ class BranchConnectionLifecycleTestCase(TransactionTestCase):
         """Open a connection to the branch by executing a query."""
         with activate_branch(branch):
             from django.contrib.contenttypes.models import ContentType
+
             list(ContentType.objects.using(branch.connection_name).all()[:1])
 
     def test_branch_connections_close_after_max_age(self):
@@ -51,13 +52,13 @@ class BranchConnectionLifecycleTestCase(TransactionTestCase):
         self.open_branch_connection(branch)
 
         conn = connections[branch.connection_name]
-        self.assertIsNotNone(conn.connection, "Connection should be open after query")
-        self.assertIsNotNone(conn.close_at, "close_at should be set when CONN_MAX_AGE > 0")
+        self.assertIsNotNone(conn.connection, 'Connection should be open after query')
+        self.assertIsNotNone(conn.close_at, 'close_at should be set when CONN_MAX_AGE > 0')
 
         time.sleep(2)
         close_old_branch_connections()
 
-        self.assertIsNone(conn.connection, "Connection should be closed after CONN_MAX_AGE expires")
+        self.assertIsNone(conn.connection, 'Connection should be closed after CONN_MAX_AGE expires')
 
     def test_multiple_branch_connections_cleanup(self):
         """Multiple branch connections should all close after CONN_MAX_AGE."""
@@ -68,13 +69,13 @@ class BranchConnectionLifecycleTestCase(TransactionTestCase):
 
         conns = [connections[b.connection_name] for b in branches]
         for conn in conns:
-            self.assertIsNotNone(conn.connection, "Connection should be open")
+            self.assertIsNotNone(conn.connection, 'Connection should be open')
 
         time.sleep(2)
         close_old_branch_connections()
 
         for i, conn in enumerate(conns):
-            self.assertIsNone(conn.connection, f"Branch {i} connection should be closed")
+            self.assertIsNone(conn.connection, f'Branch {i} connection should be closed')
 
     def test_check_pending_migrations_closes_branch_connections(self):
         """check_pending_migrations should close each branch's connection after inspecting it (#581)."""
@@ -85,7 +86,7 @@ class BranchConnectionLifecycleTestCase(TransactionTestCase):
             self.open_branch_connection(branch)
         for branch in branches:
             self.assertIsNotNone(
-                connections[branch.connection_name].connection, "Connection should be open before the sweep"
+                connections[branch.connection_name].connection, 'Connection should be open before the sweep'
             )
 
         # Fire the post_migrate handler as Django would during `manage.py migrate`.
@@ -94,7 +95,7 @@ class BranchConnectionLifecycleTestCase(TransactionTestCase):
         for branch in branches:
             self.assertIsNone(
                 connections[branch.connection_name].connection,
-                "Branch connection should be closed after check_pending_migrations",
+                'Branch connection should be closed after check_pending_migrations',
             )
 
     def test_cleanup_handles_deleted_branch(self):
@@ -103,7 +104,7 @@ class BranchConnectionLifecycleTestCase(TransactionTestCase):
         self.open_branch_connection(branch)
 
         conn = connections[branch.connection_name]
-        self.assertIsNotNone(conn.connection, "Connection should be open")
+        self.assertIsNotNone(conn.connection, 'Connection should be open')
 
         branch.deprovision()
         Branch.objects.filter(pk=branch.pk).delete()
@@ -112,4 +113,4 @@ class BranchConnectionLifecycleTestCase(TransactionTestCase):
         try:
             close_old_branch_connections()
         except Exception as e:
-            self.fail(f"cleanup should not raise exception for deleted branch: {e}")
+            self.fail(f'cleanup should not raise exception for deleted branch: {e}')

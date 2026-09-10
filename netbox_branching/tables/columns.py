@@ -80,9 +80,5 @@ class DiffColumn(tables.TemplateColumn):
 
 
 # Register a table column to include the Branch associated with each record in ObjectChangeTable
-branch_column = tables.Column(
-    accessor=tables.A('application__branch'),
-    linkify=True,
-    verbose_name=_('Branch')
-)
+branch_column = tables.Column(accessor=tables.A('application__branch'), linkify=True, verbose_name=_('Branch'))
 register_table_column(branch_column, 'branch', ObjectChangeTable)

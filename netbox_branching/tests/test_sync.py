@@ -9,6 +9,7 @@ changes and applies them to main.
 Unlike merge, there are no different strategies for sync — changes are always
 applied iteratively in chronological order.
 """
+
 import uuid
 
 from django.contrib.auth import get_user_model
@@ -70,9 +71,7 @@ class SyncTestCase(TransactionTestCase):
         with event_tracking(request):
             self.manufacturer = Manufacturer.objects.create(name='Manufacturer 1', slug='manufacturer-1')
             self.device_type = DeviceType.objects.create(
-                manufacturer=self.manufacturer,
-                model='Device Type 1',
-                slug='device-type-1'
+                manufacturer=self.manufacturer, model='Device Type 1', slug='device-type-1'
             )
             self.device_role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1')
 
@@ -121,9 +120,7 @@ class SyncTestCase(TransactionTestCase):
         """
         # Create some sites in main before branch provisioning
         with event_tracking(self.request):
-            site_to_update = Site.objects.create(
-                name='Update Me', slug='update-me', description='Original'
-            )
+            site_to_update = Site.objects.create(name='Update Me', slug='update-me', description='Original')
             site_to_delete = Site.objects.create(name='Delete Me', slug='delete-me')
         update_id = site_to_update.id
         delete_id = site_to_delete.id
@@ -177,9 +174,7 @@ class SyncTestCase(TransactionTestCase):
         """
         # Create site in main before branch provisioning
         with event_tracking(self.request):
-            site = Site.objects.create(
-                name='Contested Site', slug='contested-site', description='Original'
-            )
+            site = Site.objects.create(name='Contested Site', slug='contested-site', description='Original')
             site_id = site.id
 
         # Create branch
@@ -232,7 +227,8 @@ class SyncTestCase(TransactionTestCase):
             site_id = site.id
 
         branch = self._create_and_provision_branch(
-            name=f'Conflict Branch {merge_strategy}', merge_strategy=merge_strategy,
+            name=f'Conflict Branch {merge_strategy}',
+            merge_strategy=merge_strategy,
         )
 
         # Main: active → staging
@@ -292,7 +288,8 @@ class SyncTestCase(TransactionTestCase):
             site_id = site.id
 
         branch = self._create_and_provision_branch(
-            name=f'Partial Branch {merge_strategy}', merge_strategy=merge_strategy,
+            name=f'Partial Branch {merge_strategy}',
+            merge_strategy=merge_strategy,
         )
 
         # Main: status active → staging (description unchanged)
@@ -353,7 +350,8 @@ class SyncTestCase(TransactionTestCase):
             site_id = site.id
 
         branch = self._create_and_provision_branch(
-            name=f'Deleted Branch {merge_strategy}', merge_strategy=merge_strategy,
+            name=f'Deleted Branch {merge_strategy}',
+            merge_strategy=merge_strategy,
         )
 
         # Branch: delete the site
@@ -370,9 +368,14 @@ class SyncTestCase(TransactionTestCase):
         # Capture the branch's ObjectChange count for this site before sync so we can
         # assert that the early-return path did not write a synthetic ObjectChange.
         content_type = ContentType.objects.get_for_model(Site)
-        pre_sync_change_count = CoreObjectChange.objects.using(branch.connection_name).filter(
-            changed_object_type=content_type, changed_object_id=site_id,
-        ).count()
+        pre_sync_change_count = (
+            CoreObjectChange.objects.using(branch.connection_name)
+            .filter(
+                changed_object_type=content_type,
+                changed_object_id=site_id,
+            )
+            .count()
+        )
 
         # Sync should not raise; main's update lands on a branch row that no longer exists
         branch.sync(user=self.user, commit=True)
@@ -381,9 +384,14 @@ class SyncTestCase(TransactionTestCase):
             self.assertFalse(Site.objects.filter(id=site_id).exists())
 
         # No synthetic ObjectChange should have been written for this object during sync
-        post_sync_change_count = CoreObjectChange.objects.using(branch.connection_name).filter(
-            changed_object_type=content_type, changed_object_id=site_id,
-        ).count()
+        post_sync_change_count = (
+            CoreObjectChange.objects.using(branch.connection_name)
+            .filter(
+                changed_object_type=content_type,
+                changed_object_id=site_id,
+            )
+            .count()
+        )
         self.assertEqual(post_sync_change_count, pre_sync_change_count)
 
         # Merge: branch's DELETE wins on main
@@ -415,7 +423,8 @@ class SyncTestCase(TransactionTestCase):
             site_id = site.id
 
         branch = self._create_and_provision_branch(
-            name=f'MultiField Branch {merge_strategy}', merge_strategy=merge_strategy,
+            name=f'MultiField Branch {merge_strategy}',
+            merge_strategy=merge_strategy,
         )
 
         # Main: status active → staging
@@ -565,9 +574,7 @@ class SyncTestCase(TransactionTestCase):
             branch_region.save()
 
             branch_site = Site.objects.create(
-                name='Branch Site',
-                slug='branch-site',
-                region=Region.objects.get(id=region_id)
+                name='Branch Site', slug='branch-site', region=Region.objects.get(id=region_id)
             )
             branch_site_id = branch_site.id
 
@@ -616,15 +623,11 @@ class SyncTestCase(TransactionTestCase):
                 name='Main Device',
                 site=Site.objects.get(id=site_id),
                 device_type=self.device_type,
-                role=self.device_role
+                role=self.device_role,
             )
             device_id = device.id
 
-            interface = Interface.objects.create(
-                device=device,
-                name='eth0',
-                type='1000base-t'
-            )
+            interface = Interface.objects.create(device=device, name='eth0', type='1000base-t')
             interface_id = interface.id
 
         # Sync branch
@@ -711,9 +714,7 @@ class SyncTestCase(TransactionTestCase):
         # In branch: add a grandchild (third level)
         with activate_branch(branch), event_tracking(self.request):
             grandchild = Region.objects.create(
-                name='Grandchild Region',
-                slug='grandchild-region',
-                parent=Region.objects.get(id=child_id)
+                name='Grandchild Region', slug='grandchild-region', parent=Region.objects.get(id=child_id)
             )
             grandchild_id = grandchild.id
 
@@ -1100,8 +1101,7 @@ class SyncTestCase(TransactionTestCase):
         with activate_branch(branch):
             self.assertTrue(Cable.objects.filter(id=cable_id).exists())
             self.assertEqual(
-                CablePath.objects.count(), 2,
-                'Cable paths not populated in branch after sync (#150 regression)'
+                CablePath.objects.count(), 2, 'Cable paths not populated in branch after sync (#150 regression)'
             )
 
         branch.refresh_from_db()
@@ -1215,9 +1215,7 @@ class SyncTestCase(TransactionTestCase):
         """
         # Create site in main before branch provisioning
         with event_tracking(self.request):
-            site = Site.objects.create(
-                name='Contested Site', slug='contested-site', description='Original'
-            )
+            site = Site.objects.create(name='Contested Site', slug='contested-site', description='Original')
             site_id = site.id
 
         # Create branch (inherits the site)
@@ -1277,5 +1275,5 @@ class SyncTestCase(TransactionTestCase):
         with activate_branch(branch):
             self.assertFalse(
                 Site.objects.filter(slug='pending-site-dryrun').exists(),
-                msg="commit=False must not persist the synced change into the branch schema",
+                msg='commit=False must not persist the synced change into the branch schema',
             )

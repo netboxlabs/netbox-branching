@@ -60,15 +60,9 @@ OBJECTCHANGE_REQUEST_ID = """
 <a href="?request_id={{ value }}">{{ value }}</a>
 """
 
-GROUPED_TYPE = (
-    '{% if record.changed_object_type %}'
-    '{{ record.changed_object_type.name|capfirst }}'
-    '{% endif %}'
-)
+GROUPED_TYPE = '{% if record.changed_object_type %}{{ record.changed_object_type.name|capfirst }}{% endif %}'
 
-GROUPED_REQUEST_ID = (
-    '<a href="?request_id={{ record.request_id }}">{{ record.request_id }}</a>'
-)
+GROUPED_REQUEST_ID = '<a href="?request_id={{ record.request_id }}">{{ record.request_id }}</a>'
 
 GROUPED_COUNT = (
     '{% load helpers %}'
@@ -83,39 +77,45 @@ GROUPED_COUNT = (
 
 
 class BranchTable(NetBoxTable):
-    name = tables.Column(
-        verbose_name=_('Name'),
-        linkify=True
-    )
-    is_active = columns.BooleanColumn(
-        verbose_name=_('Active')
-    )
-    status = columns.ChoiceFieldColumn(
-        verbose_name=_('Status')
-    )
+    name = tables.Column(verbose_name=_('Name'), linkify=True)
+    is_active = columns.BooleanColumn(verbose_name=_('Active'))
+    status = columns.ChoiceFieldColumn(verbose_name=_('Status'))
     is_stale = columns.BooleanColumn(
         true_mark=mark_safe('<span class="text-danger"><i class="mdi mdi-alert-circle"></i></span>'),
         false_mark=None,
-        verbose_name=_('Stale')
+        verbose_name=_('Stale'),
     )
-    conflicts = ConflictsColumn(
-        verbose_name=_('Conflicts')
-    )
-    schema_id = tables.TemplateColumn(
-        template_code='<span class="font-monospace">{{ value }}</code>'
-    )
-    tags = columns.TagColumn(
-        url_name='plugins:netbox_branching:branch_list'
-    )
+    conflicts = ConflictsColumn(verbose_name=_('Conflicts'))
+    schema_id = tables.TemplateColumn(template_code='<span class="font-monospace">{{ value }}</code>')
+    tags = columns.TagColumn(url_name='plugins:netbox_branching:branch_list')
 
     class Meta(NetBoxTable.Meta):
         model = Branch
         fields = (
-            'pk', 'id', 'name', 'is_active', 'status', 'is_stale', 'conflicts', 'schema_id', 'description', 'owner',
-            'tags', 'created', 'last_updated',
+            'pk',
+            'id',
+            'name',
+            'is_active',
+            'status',
+            'is_stale',
+            'conflicts',
+            'schema_id',
+            'description',
+            'owner',
+            'tags',
+            'created',
+            'last_updated',
         )
         default_columns = (
-            'pk', 'name', 'is_active', 'status', 'is_stale', 'owner', 'conflicts', 'schema_id', 'description',
+            'pk',
+            'name',
+            'is_active',
+            'status',
+            'is_stale',
+            'owner',
+            'conflicts',
+            'schema_id',
+            'description',
         )
 
     def render_is_active(self, value):
@@ -125,96 +125,79 @@ class BranchTable(NetBoxTable):
 
 
 class ChangeDiffTable(NetBoxTable):
-    id = tables.Column(
-        verbose_name=_('ID'),
-        linkify=True
-    )
-    branch = tables.Column(
-        verbose_name=_('Branch'),
-        linkify=True
-    )
-    object = tables.TemplateColumn(
-        template_code=OBJECTCHANGE_OBJECT,
-        verbose_name=_('Object'),
-        orderable=False
-    )
+    id = tables.Column(verbose_name=_('ID'), linkify=True)
+    branch = tables.Column(verbose_name=_('Branch'), linkify=True)
+    object = tables.TemplateColumn(template_code=OBJECTCHANGE_OBJECT, verbose_name=_('Object'), orderable=False)
     action = columns.ChoiceFieldColumn(
         verbose_name=_('Action'),
     )
-    conflicts = ConflictsColumn(
-        verbose_name=_('Conflicts')
-    )
-    original_diff = DiffColumn(
-        show_conflicts=False,
-        orderable=False,
-        verbose_name=_('Main (original)')
-    )
-    modified_diff = DiffColumn(
-        orderable=False,
-        verbose_name=_('Branch (current)')
-    )
-    current_diff = DiffColumn(
-        orderable=False,
-        verbose_name=_('Main (current)')
-    )
-    actions = columns.ActionsColumn(
-        actions=()
-    )
+    conflicts = ConflictsColumn(verbose_name=_('Conflicts'))
+    original_diff = DiffColumn(show_conflicts=False, orderable=False, verbose_name=_('Main (original)'))
+    modified_diff = DiffColumn(orderable=False, verbose_name=_('Branch (current)'))
+    current_diff = DiffColumn(orderable=False, verbose_name=_('Main (current)'))
+    actions = columns.ActionsColumn(actions=())
 
     class Meta(NetBoxTable.Meta):
         model = ChangeDiff
         fields = (
-            'id', 'branch', 'object_type', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff',
-            'current_diff', 'last_updated', 'actions',
+            'id',
+            'branch',
+            'object_type',
+            'object',
+            'action',
+            'conflicts',
+            'original_diff',
+            'modified_diff',
+            'current_diff',
+            'last_updated',
+            'actions',
         )
         default_columns = (
-            'id', 'branch', 'object', 'action', 'conflicts', 'original_diff', 'modified_diff', 'current_diff',
+            'id',
+            'branch',
+            'object',
+            'action',
+            'conflicts',
+            'original_diff',
+            'modified_diff',
+            'current_diff',
         )
 
 
 class ChangesTable(NetBoxTable):
-    time = columns.DateTimeColumn(
-        verbose_name=_('Time'),
-        timespec='minutes',
-        linkify=True
-    )
+    time = columns.DateTimeColumn(verbose_name=_('Time'), timespec='minutes', linkify=True)
     action = columns.ChoiceFieldColumn(
         verbose_name=_('Action'),
     )
     model = tables.Column()
-    changed_object_type = columns.ContentTypeColumn(
-        verbose_name=_('Type')
-    )
+    changed_object_type = columns.ContentTypeColumn(verbose_name=_('Type'))
     object_repr = tables.TemplateColumn(
         accessor=tables.A('changed_object'),
         template_code=OBJECTCHANGE_OBJECT,
         verbose_name=_('Object'),
-        orderable=False
+        orderable=False,
     )
     before = tables.TemplateColumn(
-        accessor=tables.A('prechange_data_clean'),
-        template_code=BEFORE_DIFF,
-        verbose_name=_('Before'),
-        orderable=False
+        accessor=tables.A('prechange_data_clean'), template_code=BEFORE_DIFF, verbose_name=_('Before'), orderable=False
     )
     after = tables.TemplateColumn(
-        accessor=tables.A('postchange_data_clean'),
-        template_code=AFTER_DIFF,
-        verbose_name=_('After'),
-        orderable=False
+        accessor=tables.A('postchange_data_clean'), template_code=AFTER_DIFF, verbose_name=_('After'), orderable=False
     )
-    request_id = tables.TemplateColumn(
-        template_code=OBJECTCHANGE_REQUEST_ID,
-        verbose_name=_('Request ID')
-    )
-    actions = columns.ActionsColumn(
-        actions=()
-    )
+    request_id = tables.TemplateColumn(template_code=OBJECTCHANGE_REQUEST_ID, verbose_name=_('Request ID'))
+    actions = columns.ActionsColumn(actions=())
 
     class Meta(NetBoxTable.Meta):
         model = ObjectChange
         fields = (
-            'pk', 'time', 'action', 'model', 'changed_object_type', 'object_repr', 'request_id', 'before', 'after',
+            'pk',
+            'time',
+            'action',
+            'model',
+            'changed_object_type',
+            'object_repr',
+            'request_id',
+            'before',
+            'after',
         )
 
 
@@ -223,6 +206,7 @@ class ChangesGroupedTable(BaseTable):
     Aggregated view of ObjectChange records: one row per (request_id, changed_object_type).
     Rows are dicts produced by `.values().annotate(...)` in the view.
     """
+
     time = columns.DateTimeColumn(
         verbose_name=_('Time'),
         timespec='minutes',
@@ -264,6 +248,12 @@ class ChangesGroupedTable(BaseTable):
     class Meta(BaseTable.Meta):
         model = ObjectChange
         fields = (
-            'time', 'user_name', 'changed_object_type', 'request_id', 'creates', 'updates', 'deletes',
+            'time',
+            'user_name',
+            'changed_object_type',
+            'request_id',
+            'creates',
+            'updates',
+            'deletes',
         )
         default_columns = fields

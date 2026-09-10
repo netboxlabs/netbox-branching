@@ -24,27 +24,30 @@ __all__ = (
 
 
 class BranchSerializer(NetBoxModelSerializer):
-    url = serializers.HyperlinkedIdentityField(
-        view_name='plugins-api:netbox_branching-api:branch-detail'
-    )
-    owner = UserSerializer(
-        nested=True,
-        read_only=True
-    )
-    merged_by = UserSerializer(
-        nested=True,
-        read_only=True
-    )
-    status = ChoiceField(
-        choices=BranchStatusChoices,
-        read_only=True
-    )
+    url = serializers.HyperlinkedIdentityField(view_name='plugins-api:netbox_branching-api:branch-detail')
+    owner = UserSerializer(nested=True, read_only=True)
+    merged_by = UserSerializer(nested=True, read_only=True)
+    status = ChoiceField(choices=BranchStatusChoices, read_only=True)
 
     class Meta:
         model = Branch
         fields = (
-            'id', 'url', 'display', 'name', 'status', 'owner', 'description', 'schema_id', 'last_sync', 'merged_time',
-            'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated',
+            'id',
+            'url',
+            'display',
+            'name',
+            'status',
+            'owner',
+            'description',
+            'schema_id',
+            'last_sync',
+            'merged_time',
+            'merged_by',
+            'comments',
+            'tags',
+            'custom_fields',
+            'created',
+            'last_updated',
         )
         brief_fields = ('id', 'url', 'display', 'name', 'status', 'description')
 
@@ -57,72 +60,54 @@ class BranchSerializer(NetBoxModelSerializer):
 
 
 class BranchEventSerializer(NetBoxModelSerializer):
-    url = serializers.HyperlinkedIdentityField(
-        view_name='plugins-api:netbox_branching-api:branchevent-detail'
-    )
-    branch = BranchSerializer(
-        nested=True,
-        read_only=True
-    )
-    user = UserSerializer(
-        nested=True,
-        read_only=True
-    )
-    type = ChoiceField(
-        choices=BranchEventTypeChoices,
-        read_only=True
-    )
+    url = serializers.HyperlinkedIdentityField(view_name='plugins-api:netbox_branching-api:branchevent-detail')
+    branch = BranchSerializer(nested=True, read_only=True)
+    user = UserSerializer(nested=True, read_only=True)
+    type = ChoiceField(choices=BranchEventTypeChoices, read_only=True)
 
     class Meta:
         model = BranchEvent
         fields = (
-            'id', 'url', 'display', 'time', 'branch', 'user', 'type',
+            'id',
+            'url',
+            'display',
+            'time',
+            'branch',
+            'user',
+            'type',
         )
         brief_fields = ('id', 'url', 'display')
 
 
 class ChangeDiffSerializer(NetBoxModelSerializer):
-    url = serializers.HyperlinkedIdentityField(
-        view_name='plugins-api:netbox_branching-api:changediff-detail'
-    )
-    branch = BranchSerializer(
-        nested=True,
-        read_only=True
-    )
-    object_type = ContentTypeField(
-        read_only=True
-    )
-    object = serializers.SerializerMethodField(
-        read_only=True
-    )
-    action = ChoiceField(
-        choices=ObjectChangeActionChoices,
-        read_only=True
-    )
-    diff = serializers.JSONField(
-        read_only=True
-    )
-    original_data = serializers.JSONField(
-        source='original',
-        read_only=True,
-        allow_null=True
-    )
-    modified_data = serializers.JSONField(
-        source='modified',
-        read_only=True,
-        allow_null=True
-    )
-    current_data = serializers.JSONField(
-        source='current',
-        read_only=True,
-        allow_null=True
-    )
+    url = serializers.HyperlinkedIdentityField(view_name='plugins-api:netbox_branching-api:changediff-detail')
+    branch = BranchSerializer(nested=True, read_only=True)
+    object_type = ContentTypeField(read_only=True)
+    object = serializers.SerializerMethodField(read_only=True)
+    action = ChoiceField(choices=ObjectChangeActionChoices, read_only=True)
+    diff = serializers.JSONField(read_only=True)
+    original_data = serializers.JSONField(source='original', read_only=True, allow_null=True)
+    modified_data = serializers.JSONField(source='modified', read_only=True, allow_null=True)
+    current_data = serializers.JSONField(source='current', read_only=True, allow_null=True)
 
     class Meta:
         model = ChangeDiff
         fields = (
-            'id', 'url', 'display', 'branch', 'object_type', 'object_id', 'object', 'object_repr', 'action',
-            'conflicts', 'diff', 'original_data', 'modified_data', 'current_data', 'last_updated',
+            'id',
+            'url',
+            'display',
+            'branch',
+            'object_type',
+            'object_id',
+            'object',
+            'object_repr',
+            'action',
+            'conflicts',
+            'diff',
+            'original_data',
+            'modified_data',
+            'current_data',
+            'last_updated',
         )
         brief_fields = ('id', 'url', 'display', 'object_type', 'object_id', 'object_repr', 'action')
 
@@ -151,14 +136,23 @@ class ConflictSummarySerializer(serializers.ModelSerializer):
     Compact read-only representation of a conflicting ChangeDiff, included inline
     in HTTP 409 responses from the sync and merge actions.
     """
+
     object_type = ContentTypeField(read_only=True)
     action = ChoiceField(choices=ObjectChangeActionChoices, read_only=True)
     conflicting_data = serializers.SerializerMethodField()
 
     class Meta:
         model = ChangeDiff
-        fields = ('id', 'object_type', 'object_id', 'object_repr', 'action', 'conflicts', 'conflicting_data',
-                  'last_updated')
+        fields = (
+            'id',
+            'object_type',
+            'object_id',
+            'object_repr',
+            'action',
+            'conflicts',
+            'conflicting_data',
+            'last_updated',
+        )
 
     def get_conflicting_data(self, obj):
         """
@@ -177,6 +171,7 @@ class ConflictResponseSerializer(serializers.Serializer):
     """
     Shape of the HTTP 409 response body returned by the sync and merge actions.
     """
+
     detail = serializers.CharField()
     conflicts = ConflictSummarySerializer(many=True)
 

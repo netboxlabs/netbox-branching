@@ -93,6 +93,7 @@ class DynamicSchemaDict(dict):
     Behaves like a normal dictionary, except for keys beginning with "schema_". Any lookup for
     "schema_*" will return the default configuration extended to include the search_path option.
     """
+
     @cached_property
     def main_schema(self):
         return get_plugin_config('netbox_branching', 'main_schema')
@@ -106,7 +107,7 @@ class DynamicSchemaDict(dict):
                 **default_config,
                 'OPTIONS': {
                     **default_config.get('OPTIONS', {}),
-                    'options': f'-c search_path={schema},{self.main_schema}'
+                    'options': f'-c search_path={schema},{self.main_schema}',
                 },
             }
         return super().__getitem__(item)
@@ -208,9 +209,7 @@ def resolve_objectchange_field_migration(model, data):
         try:
             result = migrator(model, data)
         except Exception:
-            logger.exception(
-                'objectchange field migrator %r raised; treating as None', migrator
-            )
+            logger.exception('objectchange field migrator %r raised; treating as None', migrator)
             continue
         if result is not None:
             return result
@@ -298,12 +297,8 @@ def get_tables_to_replicate():
     """
     tables = set()
 
-    branch_aware_models = [
-        ot.model_class() for ot in get_branchable_object_types()
-        if ot.model_class() is not None
-    ]
+    branch_aware_models = [ot.model_class() for ot in get_branchable_object_types() if ot.model_class() is not None]
     for model in branch_aware_models:
-
         # Capture the model's table
         tables.add(model._meta.db_table)
 
@@ -323,6 +318,7 @@ class ListHandler(logging.Handler):
     """
     A logging handler which appends log messages to list passed on initialization.
     """
+
     def __init__(self, *args, queue, **kwargs):
         super().__init__(*args, **kwargs)
         self.queue = queue
@@ -336,6 +332,7 @@ class ChangeSummary:
     """
     A record indicating the number of changes which were made between a start and end time.
     """
+
     start: datetime.datetime
     end: datetime.datetime
     count: int
@@ -372,6 +369,7 @@ class _DeletedKey:
     Sentinel marking a dict key that should be removed (rather than set to None)
     during a deep merge. See ``diff_for_merge``.
     """
+
     __slots__ = ()
 
     def __repr__(self):
@@ -471,6 +469,7 @@ def update_object(instance, data, using):
     """
     # Avoid AppRegistryNotReady exception
     from taggit.managers import TaggableManager
+
     logger = logging.getLogger('netbox_branching.utilities.update_object')
     instance.snapshot()
     m2m_assignments = {}
@@ -543,10 +542,11 @@ def get_active_branch(request):
     """
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
     from .models import Branch
+
     if is_api_request(request) and BRANCH_HEADER in request.headers:
         branch = Branch.objects.get(schema_id=request.headers.get(BRANCH_HEADER))
         if not branch.ready:
-            return HttpResponseBadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
+            return HttpResponseBadRequest(f'Branch {branch} is not ready for use (status: {branch.status})')
         return branch
 
     # Branch activated/deactivated by URL query parameter
@@ -554,21 +554,23 @@ def get_active_branch(request):
         if schema_id := request.GET.get(QUERY_PARAM):
             branch = Branch.objects.get(schema_id=schema_id)
             if branch.ready:
-                if (
-                    schema_id != request.COOKIES.get(COOKIE_NAME)
-                    and not getattr(request, '_branch_activation_notified', False)
+                if schema_id != request.COOKIES.get(COOKIE_NAME) and not getattr(
+                    request, '_branch_activation_notified', False
                 ):
-                    messages.success(request, _("Activated branch {branch}").format(branch=branch))
+                    messages.success(request, _('Activated branch {branch}').format(branch=branch))
                     request._branch_activation_notified = True
                 return branch
             if not getattr(request, '_branch_activation_notified', False):
-                messages.error(request, _("Branch {branch} is not ready for use (status: {status})").format(
-                    branch=branch, status=branch.status
-                ))
+                messages.error(
+                    request,
+                    _('Branch {branch} is not ready for use (status: {status})').format(
+                        branch=branch, status=branch.status
+                    ),
+                )
                 request._branch_activation_notified = True
             return None
         if not getattr(request, '_branch_activation_notified', False):
-            messages.success(request, _("Deactivated branch"))
+            messages.success(request, _('Deactivated branch'))
             request._branch_activation_notified = True
         request.COOKIES.pop(COOKIE_NAME, None)  # Delete cookie if set
         return None
@@ -616,10 +618,8 @@ def get_sql_results(cursor):
     """
     Return the results of the most recent SQL query as a list of named tuples.
     """
-    Result = namedtuple("Result", [col[0] for col in cursor.description])
-    return [
-        Result(*row) for row in cursor.fetchall()
-    ]
+    Result = namedtuple('Result', [col[0] for col in cursor.description])
+    return [Result(*row) for row in cursor.fetchall()]
 
 
 @register_request_processor
@@ -637,6 +637,7 @@ class BranchActionIndicator:
     """
     An indication of whether a particular branch action is permitted. If not, an explanatory message must be provided.
     """
+
     permitted: bool
     message: str = ''
 
@@ -663,7 +664,7 @@ def _get_rq_job_status(job):
         queue_name = job.queue_name or get_queue_for_model(job.object_type.model if job.object_type else None)
         rq_job = django_rq.get_queue(queue_name).fetch_job(str(job.job_id))
     except Exception as e:
-        logger.debug(f"Unable to retrieve RQ job for job {job.pk}: {e}")
+        logger.debug(f'Unable to retrieve RQ job for job {job.pk}: {e}')
         return None
 
     if rq_job is None:
@@ -671,7 +672,7 @@ def _get_rq_job_status(job):
     try:
         return rq_job.get_status()
     except Exception as e:
-        logger.debug(f"Unable to read RQ status for job {job.pk}: {e}")
+        logger.debug(f'Unable to read RQ status for job {job.pk}: {e}')
         return RQ_JOB_MISSING
 
 

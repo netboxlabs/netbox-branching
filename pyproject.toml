@@ -329,7 +329,8 @@ line-ending = "lf"
 # Skip auto-format on Django-emitted migrations; their generated layout
 # (multi-arg call wrapping, dict-in-call) is not Ruff-canonical and
 # reformatting them produces noisy diffs without semantic value.
-exclude = ["**/migrations/*.py"]
+# testing/configuration.py is maintained by hand as a reference config.
+exclude = ["**/migrations/*.py", "testing/configuration.py"]
 
 # Packaging is verified at release time by scripts/verify_wheel_contents.py and
 # scripts/verify_release_tag.py; keep this block in step with those checks.

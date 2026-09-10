@@ -51,7 +51,8 @@ def _restore_changelog_timestamps(instance, snapshot, using):
         return
     created, last_updated = snapshot
     type(instance)._base_manager.using(using).filter(pk=instance.pk).update(
-        created=created, last_updated=last_updated,
+        created=created,
+        last_updated=last_updated,
     )
     instance.created = created
     instance.last_updated = last_updated
@@ -61,6 +62,7 @@ class ObjectChange(ObjectChange_):
     """
     Proxy model for NetBox's ObjectChange.
     """
+
     class Meta:
         proxy = True
 
@@ -229,58 +231,23 @@ class ObjectChange(ObjectChange_):
 
 
 class ChangeDiff(models.Model):
-    branch = models.ForeignKey(
-        to='netbox_branching.Branch',
-        on_delete=models.CASCADE
-    )
-    last_updated = models.DateTimeField(
-        auto_now=True
-    )
-    object_type = models.ForeignKey(
-        to='contenttypes.ContentType',
-        on_delete=models.PROTECT,
-        related_name='+'
-    )
+    branch = models.ForeignKey(to='netbox_branching.Branch', on_delete=models.CASCADE)
+    last_updated = models.DateTimeField(auto_now=True)
+    object_type = models.ForeignKey(to='contenttypes.ContentType', on_delete=models.PROTECT, related_name='+')
     object_id = models.PositiveBigIntegerField()
-    object = GenericForeignKey(
-        ct_field='object_type',
-        fk_field='object_id'
-    )
-    object_repr = models.CharField(
-        max_length=200,
-        editable=False
-    )
-    action = models.CharField(
-        verbose_name=_('action'),
-        max_length=50,
-        choices=ObjectChangeActionChoices
-    )
-    original = models.JSONField(
-        blank=True,
-        null=True
-    )
-    modified = models.JSONField(
-        blank=True,
-        null=True
-    )
-    current = models.JSONField(
-        blank=True,
-        null=True
-    )
-    conflicts = ArrayField(
-        base_field=models.CharField(max_length=100),
-        editable=False,
-        blank=True,
-        null=True
-    )
+    object = GenericForeignKey(ct_field='object_type', fk_field='object_id')
+    object_repr = models.CharField(max_length=200, editable=False)
+    action = models.CharField(verbose_name=_('action'), max_length=50, choices=ObjectChangeActionChoices)
+    original = models.JSONField(blank=True, null=True)
+    modified = models.JSONField(blank=True, null=True)
+    current = models.JSONField(blank=True, null=True)
+    conflicts = ArrayField(base_field=models.CharField(max_length=100), editable=False, blank=True, null=True)
 
     objects = RestrictedQuerySet.as_manager()
 
     class Meta:
         ordering = ('-last_updated',)
-        indexes = (
-            models.Index(fields=('object_type', 'object_id')),
-        )
+        indexes = (models.Index(fields=('object_type', 'object_id')),)
         verbose_name = _('change diff')
         verbose_name_plural = _('change diffs')
 
@@ -328,17 +295,15 @@ class ChangeDiff(models.Model):
                 conflicts = [k for k, v in original.items() if v != modified.get(k)]
             else:
                 conflicts = [
-                    k for k, v in original.items()
+                    k
+                    for k, v in original.items()
                     if v != modified.get(k) and v != current.get(k) and modified.get(k) != current.get(k)
                 ]
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
             if current is None:
                 # Object was also deleted in main; no conflict
                 return
-            conflicts = [
-                k for k, v in original.items()
-                if v != current.get(k)
-            ]
+            conflicts = [k for k, v in original.items() if v != current.get(k)]
         self.conflicts = conflicts or None
 
     # The cached properties below intentionally compare raw (un-migrated) dicts.
@@ -351,10 +316,7 @@ class ChangeDiff(models.Model):
         """
         if self.original is None or self.modified is None:
             return set()
-        return {
-            k for k, v in self.modified.items()
-            if k in self.original and v != self.original[k]
-        }
+        return {k for k, v in self.modified.items() if k in self.original and v != self.original[k]}
 
     @cached_property
     def altered_in_current(self):
@@ -363,10 +325,7 @@ class ChangeDiff(models.Model):
         """
         if self.current is None:
             return set()
-        return {
-            k for k, v in self.current.items()
-            if k in self.original and v != self.original[k]
-        }
+        return {k for k, v in self.current.items() if k in self.original and v != self.original[k]}
 
     @cached_property
     def altered_fields(self):
@@ -393,10 +352,7 @@ class ChangeDiff(models.Model):
         """
         if self.original is None:
             return {}
-        return {
-            k: v for k, v in self.original.items()
-            if k in self.altered_fields
-        }
+        return {k: v for k, v in self.original.items() if k in self.altered_fields}
 
     @cached_property
     def modified_diff(self):
@@ -405,10 +361,7 @@ class ChangeDiff(models.Model):
         """
         if self.modified is None:
             return {}
-        return {
-            k: v for k, v in self.modified.items()
-            if k in self.altered_fields
-        }
+        return {k: v for k, v in self.modified.items() if k in self.altered_fields}
 
     @cached_property
     def current_diff(self):
@@ -417,26 +370,16 @@ class ChangeDiff(models.Model):
         """
         if self.current is None:
             return {}
-        return {
-            k: v for k, v in self.current.items()
-            if k in self.altered_fields
-        }
+        return {k: v for k, v in self.current.items() if k in self.altered_fields}
 
 
 class AppliedChange(models.Model):
     """
     Maps an applied ObjectChange to a Branch.
     """
-    change = models.OneToOneField(
-        to='core.ObjectChange',
-        on_delete=models.CASCADE,
-        related_name='application'
-    )
-    branch = models.ForeignKey(
-        to='netbox_branching.Branch',
-        on_delete=models.CASCADE,
-        related_name='applied_changes'
-    )
+
+    change = models.OneToOneField(to='core.ObjectChange', on_delete=models.CASCADE, related_name='application')
+    branch = models.ForeignKey(to='netbox_branching.Branch', on_delete=models.CASCADE, related_name='applied_changes')
 
     objects = RestrictedQuerySet.as_manager()
 

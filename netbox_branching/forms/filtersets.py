@@ -22,15 +22,9 @@ class BranchFilterForm(NetBoxModelFilterSetForm):
         FieldSet('q', 'filter_id', 'tag'),
         FieldSet('status', 'last_sync', 'owner_id', name=_('Branch')),
     )
-    status = forms.MultipleChoiceField(
-        label=_('Status'),
-        choices=BranchStatusChoices,
-        required=False
-    )
+    status = forms.MultipleChoiceField(label=_('Status'), choices=BranchStatusChoices, required=False)
     owner_id = DynamicModelMultipleChoiceField(
-        queryset=get_user_model().objects.all(),
-        required=False,
-        label=_('Owner')
+        queryset=get_user_model().objects.all(), required=False, label=_('Owner')
     )
     tag = TagFilterField(model)
 
@@ -38,21 +32,15 @@ class BranchFilterForm(NetBoxModelFilterSetForm):
 class ChangeDiffFilterForm(NetBoxModelFilterSetForm):
     model = ChangeDiff
     fieldsets = (
-        FieldSet('filter_id',),
+        FieldSet(
+            'filter_id',
+        ),
         FieldSet('branch_id', 'object_type_id', 'action', name=_('Change')),
     )
-    branch_id = DynamicModelMultipleChoiceField(
-        queryset=Branch.objects.all(),
-        required=False,
-        label=_('Branch')
-    )
+    branch_id = DynamicModelMultipleChoiceField(queryset=Branch.objects.all(), required=False, label=_('Branch'))
     object_type_id = ContentTypeMultipleChoiceField(
         queryset=ObjectType.objects.with_feature('change_logging'),
         required=False,
         label=_('Object Type'),
     )
-    action = forms.MultipleChoiceField(
-        label=_('Action'),
-        choices=ObjectChangeActionChoices,
-        required=False
-    )
+    action = forms.MultipleChoiceField(label=_('Action'), choices=ObjectChangeActionChoices, required=False)

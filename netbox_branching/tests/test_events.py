@@ -71,11 +71,14 @@ class AddBranchContextTestCase(TransactionTestCase):
 
         self.assertEqual(self.queue.count, 1)
         data = self.queue.jobs[0].kwargs['data']
-        self.assertEqual(data['active_branch'], {
-            'id': self.branch.pk,
-            'name': self.branch.name,
-            'schema_id': self.branch.schema_id,
-        })
+        self.assertEqual(
+            data['active_branch'],
+            {
+                'id': self.branch.pk,
+                'name': self.branch.name,
+                'schema_id': self.branch.schema_id,
+            },
+        )
 
     @override_settings(EVENTS_PIPELINE=ENRICHED_PIPELINE)
     def test_no_branch_active_no_enrichment(self):

@@ -32,52 +32,43 @@ class BranchTestCase(TransactionTestCase):
         tables_to_replicate = get_tables_to_replicate()
 
         with connection.cursor() as cursor:
-
             # Check that the schema was created in the database
             cursor.execute(
-                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
-                [branch.schema_name]
+                'SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s', [branch.schema_name]
             )
             row = cursor.fetchone()
             self.assertIsNotNone(row)
 
             # Check that all expected tables exist in the schema
-            cursor.execute(
-                "SELECT * FROM information_schema.tables WHERE table_schema=%s",
-                [branch.schema_name]
-            )
+            cursor.execute('SELECT * FROM information_schema.tables WHERE table_schema=%s', [branch.schema_name])
             tables_expected = {*tables_to_replicate, 'core_objectchange', 'django_migrations'}
             tables_found = {row.table_name for row in fetchall(cursor)}
             self.assertSetEqual(tables_expected, tables_found)
 
             # Check that all indexes were renamed to match the main schema
             cursor.execute(
-                "SELECT idx_a.schemaname, idx_a.tablename, idx_a.indexname "
-                "FROM pg_indexes idx_a "
-                "WHERE idx_a.schemaname=%s "
-                "AND NOT EXISTS ("
-                "    SELECT 1 FROM pg_indexes idx_b "
-                "    WHERE idx_b.schemaname=%s AND idx_b.indexname=idx_a.indexname"
-                ") ORDER BY idx_a.indexname",
-                [branch.schema_name, main_schema]
+                'SELECT idx_a.schemaname, idx_a.tablename, idx_a.indexname '
+                'FROM pg_indexes idx_a '
+                'WHERE idx_a.schemaname=%s '
+                'AND NOT EXISTS ('
+                '    SELECT 1 FROM pg_indexes idx_b '
+                '    WHERE idx_b.schemaname=%s AND idx_b.indexname=idx_a.indexname'
+                ') ORDER BY idx_a.indexname',
+                [branch.schema_name, main_schema],
             )
             # Omit skipped indexes
             # TODO: Remove in v0.6.0
-            found_indexes = [
-                idx for idx in fetchall(cursor) if idx.indexname not in SKIP_INDEXES
-            ]
-            self.assertListEqual(found_indexes, [], "Found indexes with unique names in branch schema.")
+            found_indexes = [idx for idx in fetchall(cursor) if idx.indexname not in SKIP_INDEXES]
+            self.assertListEqual(found_indexes, [], 'Found indexes with unique names in branch schema.')
 
             # Check that object counts match the main schema for each table
             for table_name in tables_to_replicate:
-                cursor.execute(f"SELECT COUNT(id) FROM {main_schema}.{table_name}")
+                cursor.execute(f'SELECT COUNT(id) FROM {main_schema}.{table_name}')
                 main_count = fetchone(cursor).count
-                cursor.execute(f"SELECT COUNT(id) FROM {branch.schema_name}.{table_name}")
+                cursor.execute(f'SELECT COUNT(id) FROM {branch.schema_name}.{table_name}')
                 branch_count = fetchone(cursor).count
                 self.assertEqual(
-                    main_count,
-                    branch_count,
-                    msg=f"Table {table_name} object count differs from main schema"
+                    main_count, branch_count, msg=f'Table {table_name} object count differs from main schema'
                 )
 
     def test_delete_branch(self):
@@ -87,38 +78,40 @@ class BranchTestCase(TransactionTestCase):
         branch.delete()
 
         with connection.cursor() as cursor:
-
             # Check that the schema no longer exists in the database
             cursor.execute(
-                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
-                [branch.schema_name]
+                'SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s', [branch.schema_name]
             )
             row = fetchone(cursor)
             self.assertIsNone(row)
 
     def test_branch_schema_id(self):
         branch = Branch(name='Branch 1')
-        self.assertIsNotNone(branch.schema_id, msg="Schema ID has not been set")
-        self.assertIsNotNone(re.match(r'^[a-z0-9]{8}', branch.schema_id), msg="Schema ID does not conform")
+        self.assertIsNotNone(branch.schema_id, msg='Schema ID has not been set')
+        self.assertIsNotNone(re.match(r'^[a-z0-9]{8}', branch.schema_id), msg='Schema ID does not conform')
         schema_id = branch.schema_id
 
         branch.save(provision=False)
         branch.refresh_from_db()
-        self.assertEqual(branch.schema_id, schema_id, msg="Schema ID was changed during save()")
+        self.assertEqual(branch.schema_id, schema_id, msg='Schema ID was changed during save()')
 
-    @override_settings(PLUGINS_CONFIG={
-        'netbox_branching': {
-            'max_working_branches': 2,
+    @override_settings(
+        PLUGINS_CONFIG={
+            'netbox_branching': {
+                'max_working_branches': 2,
+            }
         }
-    })
+    )
     def test_max_working_branches(self):
         """
         Verify that the max_working_branches config parameter is enforced.
         """
-        Branch.objects.bulk_create((
-            Branch(name='Branch 1', status=BranchStatusChoices.MERGED),
-            Branch(name='Branch 2', status=BranchStatusChoices.READY),
-        ))
+        Branch.objects.bulk_create(
+            (
+                Branch(name='Branch 1', status=BranchStatusChoices.MERGED),
+                Branch(name='Branch 2', status=BranchStatusChoices.READY),
+            )
+        )
 
         # Second active branch should be permitted (merged branches don't count)
         branch = Branch(name='Branch 3')
@@ -130,19 +123,23 @@ class BranchTestCase(TransactionTestCase):
         with self.assertRaises(ValidationError):
             branch.full_clean()
 
-    @override_settings(PLUGINS_CONFIG={
-        'netbox_branching': {
-            'max_branches': 2,
+    @override_settings(
+        PLUGINS_CONFIG={
+            'netbox_branching': {
+                'max_branches': 2,
+            }
         }
-    })
+    )
     def test_max_branches(self):
         """
         Verify that the max_branches config parameter is enforced.
         """
-        Branch.objects.bulk_create((
-            Branch(name='Branch 1', status=BranchStatusChoices.ARCHIVED),
-            Branch(name='Branch 2', status=BranchStatusChoices.READY),
-        ))
+        Branch.objects.bulk_create(
+            (
+                Branch(name='Branch 1', status=BranchStatusChoices.ARCHIVED),
+                Branch(name='Branch 2', status=BranchStatusChoices.READY),
+            )
+        )
 
         # Creating a second non-archived Branch should succeed
         branch = Branch(name='Branch 3')
@@ -154,11 +151,13 @@ class BranchTestCase(TransactionTestCase):
         with self.assertRaises(ValidationError):
             branch.full_clean()
 
-    @override_settings(CUSTOM_VALIDATORS={
-        'netbox_branching.branch': [
-            CustomValidator({'name': {'min_length': 5}}),
-        ],
-    })
+    @override_settings(
+        CUSTOM_VALIDATORS={
+            'netbox_branching.branch': [
+                CustomValidator({'name': {'min_length': 5}}),
+            ],
+        }
+    )
     def test_custom_validators_invoked(self):
         """
         Verify that CUSTOM_VALIDATORS configured against the Branch model are
@@ -274,19 +273,15 @@ class BranchTestCase(TransactionTestCase):
         # The schema must still exist
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
-                [branch.schema_name]
+                'SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s', [branch.schema_name]
             )
-            self.assertIsNotNone(cursor.fetchone(), msg="Schema was unexpectedly dropped on blocked delete")
+            self.assertIsNotNone(cursor.fetchone(), msg='Schema was unexpectedly dropped on blocked delete')
 
     def _assert_branch_and_schema_intact(self, branch_pk, schema_name):
         self.assertTrue(Branch.objects.filter(pk=branch_pk).exists())
         with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
-                [schema_name]
-            )
-            self.assertIsNotNone(cursor.fetchone(), msg="Schema unexpectedly missing")
+            cursor.execute('SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s', [schema_name])
+            self.assertIsNotNone(cursor.fetchone(), msg='Schema unexpectedly missing')
 
     def test_delete_rolls_back_row_when_deprovision_raises(self):
         """
@@ -303,7 +298,7 @@ class BranchTestCase(TransactionTestCase):
         schema_name = branch.schema_name
 
         def boom(sender, **kwargs):
-            raise RuntimeError("simulated deprovision failure")
+            raise RuntimeError('simulated deprovision failure')
 
         pre_deprovision.connect(boom, sender=Branch, weak=False)
         try:
@@ -328,7 +323,7 @@ class BranchTestCase(TransactionTestCase):
         schema_name = branch.schema_name
 
         def boom(sender, **kwargs):
-            raise RuntimeError("simulated post-drop failure")
+            raise RuntimeError('simulated post-drop failure')
 
         post_deprovision.connect(boom, sender=Branch, weak=False)
         try:
@@ -412,6 +407,7 @@ class BranchTestCase(TransactionTestCase):
 
     def test_preaction_validator_blocks_sync_call_with_message(self):
         """can_sync gates sync(); a blocking validator must surface there too."""
+
         def blocker(branch):
             return BranchActionIndicator(False, 'blocked by test')
 
@@ -431,6 +427,7 @@ class BranchTestCase(TransactionTestCase):
         BranchActionIndicator(False, ...). This protects integrations that
         still use the old contract.
         """
+
         def legacy_blocker(branch):
             return False
 
@@ -453,7 +450,6 @@ class BranchTestCase(TransactionTestCase):
 
 
 class BranchStatusDescriptionTestCase(SimpleTestCase):
-
     def test_descriptions_cover_all_statuses(self):
         # Every status choice must have a description, and vice versa.
         choice_values = {value for value, _ in BranchStatusChoices()}
@@ -462,10 +458,7 @@ class BranchStatusDescriptionTestCase(SimpleTestCase):
 
     def test_get_status_description(self):
         branch = Branch(name='Branch 1', status=BranchStatusChoices.READY)
-        self.assertEqual(
-            branch.get_status_description(),
-            BranchStatusChoices.DESCRIPTIONS[BranchStatusChoices.READY]
-        )
+        self.assertEqual(branch.get_status_description(), BranchStatusChoices.DESCRIPTIONS[BranchStatusChoices.READY])
 
     def test_get_status_description_unknown_status(self):
         branch = Branch(name='Branch 1', status='not-a-real-status')
@@ -481,6 +474,7 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
       * snapshot import is actually performed (not silently skipped)
       * worker failures cause schema cleanup and a FAILED branch
     """
+
     serialized_rollback = True
 
     def setUp(self):
@@ -512,16 +506,15 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         with connection.cursor() as cursor:
             # Pull all main indexes for the relevant tables, modulo SKIP_INDEXES.
             cursor.execute(
-                "SELECT tablename, indexname FROM pg_indexes WHERE schemaname=%s",
+                'SELECT tablename, indexname FROM pg_indexes WHERE schemaname=%s',
                 [main_schema],
             )
             expected = {
-                (tbl, idx) for tbl, idx in cursor.fetchall()
-                if tbl in relevant_tables and idx not in SKIP_INDEXES
+                (tbl, idx) for tbl, idx in cursor.fetchall() if tbl in relevant_tables and idx not in SKIP_INDEXES
             }
 
             cursor.execute(
-                "SELECT tablename, indexname FROM pg_indexes WHERE schemaname=%s",
+                'SELECT tablename, indexname FROM pg_indexes WHERE schemaname=%s',
                 [branch.schema_name],
             )
             found = set(cursor.fetchall())
@@ -529,7 +522,7 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         missing = expected - found
         self.assertFalse(
             missing,
-            msg=f"Branch schema is missing {len(missing)} indexes that exist on main: {sorted(missing)[:5]}",
+            msg=f'Branch schema is missing {len(missing)} indexes that exist on main: {sorted(missing)[:5]}',
         )
 
     def test_provision_imports_exported_snapshot(self):
@@ -562,7 +555,7 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         finally:
             branches_module.parallel_copy_tables = original
 
-        self.assertIn('token', captured, msg="parallel_copy_tables was never invoked")
+        self.assertIn('token', captured, msg='parallel_copy_tables was never invoked')
         # pg_export_snapshot() returns digits and dashes (occasionally hex).
         self.assertRegex(captured['token'], r'\A[A-Fa-f0-9\-]+\Z')
         self.assertGreater(len(captured['tables']), 0)
@@ -578,7 +571,7 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         original = branches_module.parallel_copy_tables
 
         def boom(*, tables, snapshot_token, schema, main_schema, workers):
-            raise RuntimeError("simulated worker failure")
+            raise RuntimeError('simulated worker failure')
 
         branches_module.parallel_copy_tables = boom
         try:
@@ -595,10 +588,10 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         # The (partial) schema must have been dropped.
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
+                'SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s',
                 [branch.schema_name],
             )
-            self.assertIsNone(cursor.fetchone(), msg="Partial schema was not cleaned up")
+            self.assertIsNone(cursor.fetchone(), msg='Partial schema was not cleaned up')
 
     def test_provision_phase3_failure_drops_schema_and_marks_branch_failed(self):
         """
@@ -613,7 +606,7 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         original = branches_module.parallel_build_indexes
 
         def boom(**kwargs):
-            raise RuntimeError("simulated index build failure")
+            raise RuntimeError('simulated index build failure')
 
         branches_module.parallel_build_indexes = boom
         try:
@@ -630,10 +623,10 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         # The committed-then-populated schema must have been dropped.
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
+                'SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s',
                 [branch.schema_name],
             )
-            self.assertIsNone(cursor.fetchone(), msg="Populated schema was not cleaned up")
+            self.assertIsNone(cursor.fetchone(), msg='Populated schema was not cleaned up')
 
     def test_provision_analyze_failure_is_non_fatal(self):
         """
@@ -650,9 +643,7 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
             # Append a table that does not exist in the branch schema so its ANALYZE
             # raises inside a worker; make_analyze_task's per-table handler must
             # swallow it rather than letting _run_pool re-raise and fail the branch.
-            return original(
-                tables=[*tables, 'this_table_does_not_exist'], schema=schema, workers=workers
-            )
+            return original(tables=[*tables, 'this_table_does_not_exist'], schema=schema, workers=workers)
 
         branches_module.parallel_analyze_tables = analyze_with_a_bad_table
         try:
@@ -669,10 +660,10 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         # The schema must still be present (provision was not rolled back).
         with connection.cursor() as cursor:
             cursor.execute(
-                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
+                'SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s',
                 [branch.schema_name],
             )
-            self.assertIsNotNone(cursor.fetchone(), msg="Schema was wrongly dropped")
+            self.assertIsNotNone(cursor.fetchone(), msg='Schema was wrongly dropped')
 
     def test_provision_preserves_pk_and_unique_constraints(self):
         """
@@ -698,10 +689,7 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
                 """,
                 [main_schema],
             )
-            expected = {
-                (tbl, name, ctype) for tbl, name, ctype in cursor.fetchall()
-                if tbl in relevant_tables
-            }
+            expected = {(tbl, name, ctype) for tbl, name, ctype in cursor.fetchall() if tbl in relevant_tables}
 
             cursor.execute(
                 """
@@ -718,7 +706,7 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         missing = expected - found
         self.assertFalse(
             missing,
-            msg=f"Branch schema is missing {len(missing)} PK/UNIQUE/EXCLUDE constraints: {sorted(missing)[:5]}",
+            msg=f'Branch schema is missing {len(missing)} PK/UNIQUE/EXCLUDE constraints: {sorted(missing)[:5]}',
         )
 
     def test_cancel_backends_does_not_disturb_caller_connection(self):
@@ -733,7 +721,7 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         from netbox_branching.provisioning import _cancel_backends
 
         with connection.cursor() as cursor:
-            cursor.execute("SELECT pg_backend_pid()")
+            cursor.execute('SELECT pg_backend_pid()')
             before_pid = cursor.fetchone()[0]
 
         # PID 0 is never a real backend; pg_cancel_backend returns false
@@ -741,11 +729,12 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         _cancel_backends([0])
 
         with connection.cursor() as cursor:
-            cursor.execute("SELECT pg_backend_pid()")
+            cursor.execute('SELECT pg_backend_pid()')
             after_pid = cursor.fetchone()[0]
 
         self.assertEqual(
-            before_pid, after_pid,
+            before_pid,
+            after_pid,
             msg="_cancel_backends closed the caller's connection (PID changed)",
         )
 
@@ -771,17 +760,17 @@ class SnapshotTokenValidationTestCase(SimpleTestCase):
         from netbox_branching.provisioning import _SNAPSHOT_TOKEN_RE
 
         for hostile in (
-            "",
-            "abc def",                    # whitespace
-            "abc'; DROP TABLE foo; --",   # SQL injection
+            '',
+            'abc def',  # whitespace
+            "abc'; DROP TABLE foo; --",  # SQL injection
             "' OR 1=1 --",
-            "abc\ndef",                   # newline
-            "abç-def",                    # non-ASCII
-            "abc/def",                    # path separator
+            'abc\ndef',  # newline
+            'abç-def',  # non-ASCII
+            'abc/def',  # path separator
         ):
             self.assertIsNone(
                 _SNAPSHOT_TOKEN_RE.match(hostile),
-                msg=f"Regex unexpectedly accepted {hostile!r}",
+                msg=f'Regex unexpectedly accepted {hostile!r}',
             )
 
     def test_parallel_copy_tables_refuses_bad_token(self):

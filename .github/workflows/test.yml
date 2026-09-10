@@ -119,6 +119,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           path: netbox-branching
+          persist-credentials: false
 
       - name: Resolve NetBox ref
         id: netbox-ref
@@ -141,6 +142,13 @@ jobs:
               REF="$OVERRIDE"
             fi
           fi
+          # Only plain branch/tag names. Blocks refs/pull/N/head, which would
+          # run unreviewed upstream code on the runner.
+          if [[ ! "$REF" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::Refusing to check out NetBox ref '$REF';" \
+              "expected a plain branch or tag name."
+            exit 1
+          fi
           echo "Testing against NetBox ref: $REF"
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
 
@@ -151,13 +159,15 @@ jobs:
           repository: netbox-community/netbox
           ref: ${{ steps.netbox-ref.outputs.ref }}
           path: netbox
+          persist-credentials: false
 
       - name: Setup Python ${{ matrix.python-version }}
         # actions/setup-python v6.2.0
+        # No `cache: pip` here on purpose: this job runs code from a
+        # checked-out NetBox ref, and a pip cache would be writable by it.
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
 
       - name: Install NetBox dependencies
         working-directory: netbox
