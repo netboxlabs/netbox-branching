@@ -120,6 +120,19 @@ The good news is that you will be able to proceed with synchronizing or merging 
 
 Alternatively, if the conflicting changes are problematic, you can go back and make the necessary changes in main to avoid overwriting data within your branch.
 
+### Collisions With Objects in Main
+
+Conflicts are detected by comparing the *same* object in your branch and in main, so a collision between two *different* objects cannot be flagged in advance. The common example is a shared resource: you place a device in rack unit 12 inside your branch, and meanwhile someone places a different device in that same slot in main. Each write is perfectly valid in its own schema, nothing is flagged as a conflict, and the collision only surfaces when the merge replays your change against main.
+
+When this happens, the merge fails and the job report describes it as a collision with the main schema, naming the underlying validation error (for example, "U12 is already occupied…"). This is worth distinguishing from an ordinary validation error, because the object you are colliding with is not in your branch at all — it is not visible there and no edit you make inside the branch will make it go away. There are two ways forward:
+
+- Resolve the collision in main: move or delete whatever already claims the resource, then retry the merge. Choose this when you want to keep your branch's change as it stands, and note that it works under either merge strategy.
+- Change the value in your branch so that it no longer collides — assign the device to a different rack unit, say — and then merge using the **squash** strategy.
+
+That second remedy requires squash. Editing the object in your branch records a *new* change on top of the original one; the iterative strategy replays every recorded change in order, so it re-applies the original colliding value long before it reaches the change that fixed it, and fails on the same collision. The intermediate state cannot be written to main in any case — a contested rack unit is guarded by a database constraint as well as by validation. Squash collapses the object's changes into its final state, so the colliding value is never applied at all. This is the same recovery pattern as [Recovering from Duplicate Object Conflicts](#recovering-from-duplicate-object-conflicts) above.
+
+Note that squash does *not* help with a collision you have not resolved: with the branch left as it is, both strategies apply the same colliding value and fail identically.
+
 ## Dry Runs
 
 By default, NetBox will perform a "dry run" when synchronizing or merging a branch through the web UI. This means that it will replicate all the relevant changes to check for errors before ultimately aborting the operation and returning the branch to its original state. To permanently apply the changes instead, check the **Commit changes** checkbox before submitting the form.

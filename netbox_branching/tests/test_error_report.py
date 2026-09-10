@@ -105,6 +105,55 @@ class BuildErrorReportTestCase(SimpleTestCase):
         self.assertEqual(entry['model'], 'site')
 
 
+class MainCollisionClassificationTestCase(SimpleTestCase):
+    """
+    A ValidationError flagged as a collision with main is classified apart from an
+    ordinary validation error, because the guidance the two need is opposite: one is
+    fixed inside the branch, the other cannot be. (#632)
+    """
+
+    def _flagged(self, exc, value='12.0'):
+        annotate_validation_error(exc, Site, object_id=7, content_type_id=42)
+        exc.netbox_branching_main_collision = True
+        exc.netbox_branching_value = value
+        return exc
+
+    def test_flagged_error_classified_as_main_collision(self):
+        exc = self._flagged(ValidationError({'position': ['U12 is already occupied']}))
+        entry = build_error_report(exc)
+        self.assertEqual(entry['type'], 'main_collision')
+        self.assertEqual(entry['field'], 'position')
+        self.assertEqual(entry['value'], '12.0')
+        self.assertEqual(entry['detail'], 'U12 is already occupied')
+
+    def test_unflagged_error_stays_a_validation_error_and_carries_no_detail(self):
+        exc = ValidationError({'position': ['U12 is already occupied']})
+        annotate_validation_error(exc, Site, object_id=7, content_type_id=42)
+        entry = build_error_report(exc)
+        self.assertEqual(entry['type'], 'validation_error')
+        self.assertIsNone(entry['detail'])
+        self.assertIsNone(entry['value'])
+
+    def test_uniqueness_error_is_never_reclassified(self):
+        """
+        Uniqueness failures already point the user at both schemas and benefit from the
+        squash suggestion, so the collision flag must not steal them.
+        """
+        exc = self._flagged(ValidationError({'name': [ValidationError('taken', code='unique')]}))
+        self.assertEqual(build_error_report(exc)['type'], 'unique_constraint')
+
+    def test_every_entry_type_carries_a_detail_key(self):
+        """views.py splats the entry into the template context; the shape must be uniform."""
+        entries = [
+            build_error_report(_make_integrity_error(sqlstate=PG_UNIQUE_VIOLATION, table_name='dcim_site')),
+            build_error_report(_make_integrity_error(sqlstate='42P01')),
+            build_error_report(ValidationError('boom')),
+            build_error_report(RuntimeError('boom')),
+        ]
+        for entry in entries:
+            self.assertIn('detail', entry)
+
+
 class GetEntryMessageTestCase(SimpleTestCase):
 
     def test_unique_constraint_with_full_context_includes_model_field_value(self):
@@ -127,6 +176,24 @@ class GetEntryMessageTestCase(SimpleTestCase):
         msg = get_entry_message({'type': 'validation_error', 'model': 'site', 'field': 'name'})
         self.assertIn('Site', msg)
         self.assertIn('name', msg)
+
+    def test_main_collision_message_names_main_and_quotes_the_underlying_error(self):
+        msg = get_entry_message({
+            'type': 'main_collision',
+            'model': 'device',
+            'field': 'position',
+            'value': '12.0',
+            'detail': 'U12 is already occupied',
+        })
+        self.assertIn('Device', msg)
+        self.assertIn('position', msg)
+        self.assertIn('main schema', msg)
+        self.assertIn('U12 is already occupied', msg)
+
+    def test_main_collision_message_without_detail_still_explains_where_the_conflict_is(self):
+        msg = get_entry_message({'type': 'main_collision', 'model': 'device', 'field': 'position'})
+        self.assertIn('main', msg)
+        self.assertIn('valid within the branch', msg)
 
     def test_database_error_returns_generic_message(self):
         msg = get_entry_message({'type': 'database_error'})
@@ -174,6 +241,65 @@ class GetMergeRecommendationsTestCase(SimpleTestCase):
         )
         self.assertEqual(len(recs), 1)
         self.assertIn('name', str(recs[0]))
+
+    def test_main_collision_offers_a_main_side_and_a_branch_side_route(self):
+        recs = get_merge_recommendations(
+            {'type': 'main_collision', 'field': 'position', 'value': '12.0'},
+            merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
+        )
+        joined = ' '.join(str(r) for r in recs)
+        self.assertEqual(len(recs), 2)
+        self.assertIn('main schema', joined)
+        self.assertIn('position', joined)
+
+    def test_main_collision_recommendations_never_quote_the_branch_side_value(self):
+        """
+        `value` is the branch object's current value, which stops matching the contested
+        resource the moment the user applies the branch-side remedy and retries. Quoting it
+        in the main-side recommendation would then point at the wrong slot entirely.
+        """
+        recs = get_merge_recommendations(
+            {'type': 'main_collision', 'field': 'position', 'value': '21.0'},
+            merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
+        )
+        self.assertNotIn('21.0', ' '.join(str(r) for r in recs))
+
+    def test_main_collision_under_iterative_routes_the_branch_side_fix_through_squash(self):
+        """
+        Editing the value in the branch is not enough under iterative: it replays the
+        original colliding value before reaching the change that fixed it, so the retry
+        fails identically. The branch-side route has to name squash to be usable. (#632)
+        """
+        recs = get_merge_recommendations(
+            {'type': 'main_collision', 'field': 'position', 'value': '12.0'},
+            merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
+        )
+        branch_side = str(recs[1])
+        self.assertIn('Squash', branch_side)
+        self.assertIn('position', branch_side)
+        # The main-side route works under either strategy and needs no such caveat
+        self.assertNotIn('Squash', str(recs[0]))
+
+    def test_main_collision_under_squash_omits_the_redundant_squash_suggestion(self):
+        for entry in ({'type': 'main_collision', 'field': 'position', 'value': '12.0'},
+                      {'type': 'main_collision'}):
+            recs = get_merge_recommendations(entry, merge_strategy=BranchMergeStrategyChoices.SQUASH)
+            self.assertNotIn('Squash', ' '.join(str(r) for r in recs))
+
+    def test_main_collision_without_field_still_names_squash_under_iterative(self):
+        recs = get_merge_recommendations(
+            {'type': 'main_collision'},
+            merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
+        )
+        self.assertIn('Squash', str(recs[1]))
+
+    def test_main_collision_without_field_falls_back_to_generic_guidance(self):
+        recs = get_merge_recommendations(
+            {'type': 'main_collision'},
+            merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
+        )
+        self.assertEqual(len(recs), 2)
+        self.assertIn('main schema', ' '.join(str(r) for r in recs))
 
     def test_database_error_iterative_suggests_log_review_and_squash(self):
         recs = get_merge_recommendations(
