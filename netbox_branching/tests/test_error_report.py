@@ -107,9 +107,8 @@ class BuildErrorReportTestCase(SimpleTestCase):
 
 class MainCollisionClassificationTestCase(SimpleTestCase):
     """
-    A ValidationError flagged as a collision with main is classified apart from an
-    ordinary validation error, because the guidance the two need is opposite: one is
-    fixed inside the branch, the other cannot be. (#632)
+    A collision with main is classified apart from an ordinary validation error: one is fixed
+    inside the branch, the other cannot be. (#632)
     """
 
     def _flagged(self, exc, value='12.0'):
@@ -135,10 +134,7 @@ class MainCollisionClassificationTestCase(SimpleTestCase):
         self.assertIsNone(entry['value'])
 
     def test_uniqueness_error_is_never_reclassified(self):
-        """
-        Uniqueness failures already point the user at both schemas and benefit from the
-        squash suggestion, so the collision flag must not steal them.
-        """
+        """Uniqueness failures already point the user at both schemas."""
         exc = self._flagged(ValidationError({'name': [ValidationError('taken', code='unique')]}))
         self.assertEqual(build_error_report(exc)['type'], 'unique_constraint')
 
@@ -254,9 +250,8 @@ class GetMergeRecommendationsTestCase(SimpleTestCase):
 
     def test_main_collision_recommendations_never_quote_the_branch_side_value(self):
         """
-        `value` is the branch object's current value, which stops matching the contested
-        resource the moment the user applies the branch-side remedy and retries. Quoting it
-        in the main-side recommendation would then point at the wrong slot entirely.
+        `value` is the branch object's current value; once the branch-side remedy is applied
+        it no longer names the contested resource.
         """
         recs = get_merge_recommendations(
             {'type': 'main_collision', 'field': 'position', 'value': '21.0'},
@@ -266,9 +261,8 @@ class GetMergeRecommendationsTestCase(SimpleTestCase):
 
     def test_main_collision_under_iterative_routes_the_branch_side_fix_through_squash(self):
         """
-        Editing the value in the branch is not enough under iterative: it replays the
-        original colliding value before reaching the change that fixed it, so the retry
-        fails identically. The branch-side route has to name squash to be usable. (#632)
+        Under iterative the branch-side route has to name squash: the retry replays the
+        original colliding value and fails identically. (#632)
         """
         recs = get_merge_recommendations(
             {'type': 'main_collision', 'field': 'position', 'value': '12.0'},
@@ -277,7 +271,7 @@ class GetMergeRecommendationsTestCase(SimpleTestCase):
         branch_side = str(recs[1])
         self.assertIn('Squash', branch_side)
         self.assertIn('position', branch_side)
-        # The main-side route works under either strategy and needs no such caveat
+        # The main-side route works under either strategy
         self.assertNotIn('Squash', str(recs[0]))
 
     def test_main_collision_under_squash_omits_the_redundant_squash_suggestion(self):

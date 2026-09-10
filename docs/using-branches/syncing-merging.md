@@ -122,16 +122,14 @@ Alternatively, if the conflicting changes are problematic, you can go back and m
 
 ### Collisions With Objects in Main
 
-Conflicts are detected by comparing the *same* object in your branch and in main, so a collision between two *different* objects cannot be flagged in advance. The common example is a shared resource: you place a device in rack unit 12 inside your branch, and meanwhile someone places a different device in that same slot in main. Each write is perfectly valid in its own schema, nothing is flagged as a conflict, and the collision only surfaces when the merge replays your change against main.
+Conflicts are detected by comparing the same object in your branch and in main, so a collision between two *different* objects cannot be flagged in advance — for example, a device you place in rack unit 12 in your branch and a different device someone places in that slot in main. Both writes are valid in their own schema; the collision surfaces only when the merge replays your change against main.
 
-When this happens, the merge fails and the job report describes it as a collision with the main schema, naming the underlying validation error (for example, "U12 is already occupied…"). This is worth distinguishing from an ordinary validation error, because the object you are colliding with is not in your branch at all — it is not visible there and no edit you make inside the branch will make it go away. There are two ways forward:
+The job report identifies these as a collision with the main schema and quotes the underlying error ("U12 is already occupied…"). Two ways forward:
 
-- Resolve the collision in main: move or delete whatever already claims the resource, then retry the merge. Choose this when you want to keep your branch's change as it stands, and note that it works under either merge strategy.
-- Change the value in your branch so that it no longer collides — assign the device to a different rack unit, say — and then merge using the **squash** strategy.
+- Resolve it in main: move or delete whatever already claims the resource, then retry. Works under either strategy.
+- Change the value in your branch, then merge using **squash**.
 
-That second remedy requires squash. Editing the object in your branch records a *new* change on top of the original one; the iterative strategy replays every recorded change in order, so it re-applies the original colliding value long before it reaches the change that fixed it, and fails on the same collision. The intermediate state cannot be written to main in any case — a contested rack unit is guarded by a database constraint as well as by validation. Squash collapses the object's changes into its final state, so the colliding value is never applied at all. This is the same recovery pattern as [Recovering from Duplicate Object Conflicts](#recovering-from-duplicate-object-conflicts) above.
-
-Note that squash does *not* help with a collision you have not resolved: with the branch left as it is, both strategies apply the same colliding value and fail identically.
+The second requires squash because iterative replays your original colliding value before reaching the change that fixed it. Squash does not help with a collision you have not resolved — both strategies then apply the same value and fail. Same recovery pattern as [Recovering from Duplicate Object Conflicts](#recovering-from-duplicate-object-conflicts).
 
 ## Dry Runs
 

@@ -74,14 +74,9 @@ def annotate_validation_error(exc, model_class, object_id, content_type_id, bran
     """
     Attach branch operation context to a ValidationError before re-raising.
 
-    When ``branch`` is given, the object is additionally re-validated inside its own
-    branch schema to work out *where* the offending value is actually invalid. A
-    failure that does not reproduce there is not a bad value in the branch at all: it
-    is a collision with an object that exists only in main -- two devices independently
-    claiming the same rack unit, say -- which nothing the user does to that field inside
-    the branch necessarily resolves. Recording that distinction here is what lets the
-    job report name the real problem instead of advising the user to "fix" a value that
-    is perfectly valid where it lives. (#632)
+    With ``branch``, also re-validate the object inside its own branch schema: a failure that
+    does not reproduce there is a collision with a main-only object, not a bad value in the
+    branch. (#632)
     """
     exc.netbox_branching_model = model_class
     exc.netbox_branching_object_id = object_id
@@ -118,14 +113,9 @@ def _first_error_message(exc, field):
 
 def _probe_branch(model_class, object_id, branch, field):
     """
-    Re-validate the object as it exists inside its own branch schema.
-
-    Returns a ``(fails_in_branch, value)`` tuple: whether ``field`` is among the fields
-    that fail validation *there*, and that field's current value in the branch. Returns
-    None if the probe could not be run at all -- the object is gone, the connection is
-    unusable, the model does something unexpected during validation. Callers must read
-    None as "unknown" and fall back, never as "clean": this runs while an operation is
-    already failing, and a probe that cannot answer must not be allowed to invent one.
+    Re-validate the object inside its own branch schema. Returns ``(does field fail there,
+    its current value in the branch)``, or None if the probe could not run -- which callers
+    must treat as unknown, never as clean.
     """
     logger = logging.getLogger('netbox_branching.error_report')
     try:
@@ -139,9 +129,7 @@ def _probe_branch(model_class, object_id, branch, field):
                 failing = set()
             value = getattr(instance, field, None) if field else None
             return field in failing, str(value) if value is not None else None
-    # Deliberately blind: this runs while a merge is already failing, and anything the probe
-    # raises must be swallowed rather than replace the user's real ValidationError with an
-    # unrelated traceback. Narrowing the list would only trade a missing hint for a crash.
+    # Blind by design: a failing probe must never displace the real ValidationError.
     except Exception as e:  # noqa: BLE001
         logger.debug(f'Branch validity probe failed for {model_class.__name__} {object_id}: {e}')
         return None
@@ -149,9 +137,8 @@ def _probe_branch(model_class, object_id, branch, field):
 
 def _flag_main_collision(exc, model_class, object_id, branch):
     """
-    Mark ``exc`` as a collision with main if the same object validates cleanly inside its
-    own branch. Uniqueness errors are left alone: their existing classification already
-    points the user at both schemas, so the probe would buy nothing and cost a query.
+    Mark ``exc`` as a collision with main if the object validates cleanly in its own branch.
+    Uniqueness errors are skipped; their existing classification already names both schemas.
     """
     is_uniqueness, field = _classify_validation_error(exc)
     if is_uniqueness or object_id is None:
@@ -251,8 +238,7 @@ def _analyze_validation_error(exc):
         'model': model_name,
         'field': first_field,
         'value': getattr(exc, 'netbox_branching_value', None),
-        # The underlying message ("U12 is already occupied...") is the whole point of a
-        # collision entry: it names the resource that main has already claimed.
+        # Names the resource main has already claimed
         'detail': _first_error_message(exc, first_field) if error_type == 'main_collision' else None,
         'object_id': getattr(exc, 'netbox_branching_object_id', None),
         'content_type_id': getattr(exc, 'netbox_branching_content_type_id', None),
@@ -339,16 +325,10 @@ def get_merge_recommendations(entry, merge_strategy=None):
         return [rename_rec, _REC_TRY_SQUASH_UNIQUE]
 
     if error_type == 'main_collision':
-        # Changing the value in the branch does not, on its own, let an iterative merge
-        # through: iterative replays the recorded changes in order, so it re-applies the
-        # original colliding value long before it reaches the change that fixed it. The
-        # collision is enforced by a database constraint as well as by clean(), so that
-        # intermediate state cannot be materialized in main at all -- only squash, which
-        # collapses an object's changes into its final state, avoids it. (#632)
-        # Deliberately not interpolating `value` here: it is the branch object's *current*
-        # value, which stops matching the contested resource as soon as the user applies the
-        # branch-side remedy below and retries (branch device moved to U21, main still holds
-        # U12). The message carries the real one.
+        # Iterative replays the original colliding value before reaching the change that
+        # fixed it, so the branch-side remedy only works under squash. (#632)
+        # Not interpolating `value`: it is the branch object's current value, which stops
+        # matching the contested resource once the branch-side remedy is applied.
         if field:
             fix_main = _REC_COLLISION_FIX_MAIN_WITH_FIELD % {'field': field}
             branch_template = (

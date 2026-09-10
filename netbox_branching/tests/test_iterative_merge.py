@@ -1590,10 +1590,8 @@ class BaseMergeTests:
 
     def _rack_collision_branch(self):
         """
-        Build the #632 scenario: a branch device and a main device independently claiming
-        rack unit 12. Each is valid in its own schema, so nothing rejects either write and
-        no ChangeDiff conflict is recorded -- the collision only surfaces when the branch
-        CREATE is replayed against main. Returns (branch, branch_device, rack).
+        Build the #632 scenario: a branch device and a main device independently claiming rack
+        unit 12. Returns (branch, branch_device).
         """
         site = Site.objects.create(name='Collision Site', slug='collision-site')
         rack = Rack.objects.create(site=site, name='Collision Rack', u_height=42)
@@ -1629,15 +1627,12 @@ class BaseMergeTests:
 
     def test_merge_rack_position_collision_reports_main_collision(self):
         """
-        A merge that fails because main already occupies the rack unit must be reported as
-        a collision with main, not as an invalid value in the branch. The branch device's
-        position is perfectly valid where it lives, so telling the user to "fix" it is
-        misleading -- the object it collides with is not even visible from the branch. (#632)
+        A merge blocked by main's occupancy of the rack unit is reported as a collision with
+        main, not as an invalid value in the branch. (#632)
         """
         branch, branch_device = self._rack_collision_branch()
 
-        # No conflict is detectable up front: the two devices are different objects, so
-        # there is no per-object field divergence for ChangeDiff to compare.
+        # No conflict is detectable up front: different objects, so nothing diverges
         self.assertFalse(
             ChangeDiff.objects.filter(branch=branch).exclude(conflicts=None).exists(),
             msg='the collision is between two distinct objects, so no ChangeDiff conflict exists',
@@ -1651,7 +1646,6 @@ class BaseMergeTests:
         self.assertEqual(entry['model'], 'device')
         self.assertEqual(entry['field'], 'position')
         self.assertEqual(entry['object_id'], branch_device.pk)
-        # The value and the underlying message are what make the report actionable
         self.assertEqual(entry['value'], '12.0')
         self.assertIn('already occupied', entry['detail'])
 
@@ -1666,8 +1660,7 @@ class BaseMergeTests:
         joined = ' '.join(recommendations)
         self.assertIn('main schema', joined)
         self.assertIn('position', joined)
-        # Under iterative the branch-side route has to go through squash; under squash it
-        # already is squash. See test_branch_side_fix_needs_squash_under_iterative.
+        # The branch-side route needs squash unless we are already on it
         if self.MERGE_STRATEGY == BranchMergeStrategyChoices.SQUASH:
             self.assertNotIn('Squash', joined)
         else:
@@ -1679,12 +1672,9 @@ class BaseMergeTests:
 
     def test_branch_side_fix_needs_squash_under_iterative(self):
         """
-        Moving the branch device out of the contested slot is the remedy the report offers,
-        but it only works under squash. Iterative replays the recorded changes in order, so
-        it re-applies the original CREATE at the colliding position long before reaching the
-        UPDATE that moved it -- and that intermediate state cannot exist in main anyway, as
-        the slot is guarded by a unique constraint as well as by Device.clean(). Squash
-        collapses the two into a single CREATE at the final position and succeeds. (#632)
+        Moving the branch device out of the contested slot only works under squash: iterative
+        re-applies the original CREATE at the colliding position before reaching the UPDATE
+        that moved it. (#632)
         """
         branch, branch_device = self._rack_collision_branch()
 
@@ -1710,8 +1700,7 @@ class BaseMergeTests:
 
         entry = build_error_report(ctx.exception)
         self.assertEqual(entry['type'], 'main_collision')
-        # The branch object now sits at 21, but the replayed change still carries the
-        # original 12 -- which is exactly why the retry fails.
+        # Branch object is at 21 now, but the replayed change still carries the original 12
         self.assertEqual(entry['value'], '21.0')
         self.assertIn('U12', entry['detail'])
         self.assertIn(
@@ -1722,9 +1711,8 @@ class BaseMergeTests:
 
     def test_merge_invalid_branch_value_is_not_reported_as_collision(self):
         """
-        Control for the above: a value that is invalid in the branch too must keep its
-        plain validation_error classification. The probe exists to separate these two
-        cases, so a failure that reproduces inside the branch must not be relabelled.
+        Control: a value that is invalid in the branch too keeps its plain validation_error
+        classification.
         """
         site = Site.objects.create(name='Invalid Site', slug='invalid-site')
         rack = Rack.objects.create(site=site, name='Invalid Rack', u_height=42)
@@ -1734,8 +1722,7 @@ class BaseMergeTests:
         request.id = uuid.uuid4()
         request.user = self.user
 
-        # objects.create() skips full_clean(), so an object that could never pass validation
-        # can still be written into the branch -- a rack position with no rack face.
+        # objects.create() skips full_clean(), so an invalid object can still reach the branch
         with activate_branch(branch), event_tracking(request):
             Device.objects.create(
                 name='Faceless Device',
