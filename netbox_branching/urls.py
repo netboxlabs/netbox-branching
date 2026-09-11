@@ -1,4 +1,5 @@
 from django.urls import include, path
+
 from utilities.urls import get_model_urls
 
 from . import views
@@ -12,7 +13,6 @@ urlpatterns = [
     path('branches/delete/', views.BranchBulkDeleteView.as_view(), name='branch_bulk_delete'),
     path('branches/migrate/', views.BranchBulkMigrateView.as_view(), name='branch_bulk_migrate'),
     path('branches/<int:pk>/', include(get_model_urls('netbox_branching', 'branch'))),
-
     # Change diffs
     path('changes/', views.ChangeDiffListView.as_view(), name='changediff_list'),
     path('changes/<int:pk>/', include(get_model_urls('netbox_branching', 'changediff'))),

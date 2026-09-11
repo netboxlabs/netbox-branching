@@ -12,16 +12,17 @@ public contract for third-party integrations. This module verifies that:
     while pre_X fires unconditionally
   * post_migrate fires even when there are no migrations to apply
 """
+
 import uuid
 from contextlib import contextmanager
 
-from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
-from netbox.context_managers import event_tracking
 
+from dcim.models import Site
+from netbox.context_managers import event_tracking
 from netbox_branching import signals as branch_signals
 from netbox_branching.models import Branch
 from netbox_branching.tests.utils import provision_branch

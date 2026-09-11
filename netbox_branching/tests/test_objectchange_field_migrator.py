@@ -13,11 +13,12 @@ These tests verify both call sites: that a registered migrator is consulted,
 that an unregistered one is not, that the first non-``None`` return wins, and
 that the (possibly translated) data is what subsequent logic sees.
 """
+
 from contextlib import contextmanager
 
 from django.test import TestCase
-from ipam.models import Prefix
 
+from ipam.models import Prefix
 from netbox_branching import utilities
 from netbox_branching.models.changes import ChangeDiff
 from netbox_branching.utilities import (
@@ -43,6 +44,7 @@ class RegisterObjectChangeFieldMigratorTests(TestCase):
 
     def test_appends_callable(self):
         with _isolated_registry():
+
             def migrator(model, data):
                 return None
 
@@ -61,16 +63,20 @@ class RegisterObjectChangeFieldMigratorTests(TestCase):
 
     def test_preserves_registration_order(self):
         with _isolated_registry():
-            def m1(model, data): return None
-            def m2(model, data): return None
-            def m3(model, data): return None
+
+            def m1(model, data):
+                return None
+
+            def m2(model, data):
+                return None
+
+            def m3(model, data):
+                return None
 
             register_objectchange_field_migrator(m1)
             register_objectchange_field_migrator(m2)
             register_objectchange_field_migrator(m3)
-            self.assertEqual(
-                utilities._objectchange_field_migrators, [m1, m2, m3]
-            )
+            self.assertEqual(utilities._objectchange_field_migrators, [m1, m2, m3])
 
 
 class UpdateObjectMigratorTests(TestCase):
@@ -91,25 +97,22 @@ class UpdateObjectMigratorTests(TestCase):
     def test_migrator_transforms_data(self):
         """A registered migrator's return value replaces ``data``."""
         with _isolated_registry():
+
             def rename_migrator(model, data):
                 if model is not Prefix:
                     return None
-                return {
-                    ('description' if k == 'old_desc' else k): v
-                    for k, v in data.items()
-                }
+                return {('description' if k == 'old_desc' else k): v for k, v in data.items()}
 
             register_objectchange_field_migrator(rename_migrator)
             prefix = self._make_prefix()
-            update_object(
-                prefix, {'old_desc': 'translated value'}, using='default'
-            )
+            update_object(prefix, {'old_desc': 'translated value'}, using='default')
 
         self.assertEqual(prefix.description, 'translated value')
 
     def test_first_non_none_wins(self):
         """When multiple migrators are registered, the first non-None wins."""
         with _isolated_registry():
+
             def defer(model, data):
                 return None
 
@@ -131,20 +134,20 @@ class UpdateObjectMigratorTests(TestCase):
     def test_migrator_can_drop_keys(self):
         """A migrator that returns a smaller dict drops the omitted keys."""
         with _isolated_registry():
+
             def drop_all(model, data):
                 return {}
 
             register_objectchange_field_migrator(drop_all)
             prefix = self._make_prefix(description='original')
-            update_object(
-                prefix, {'description': 'would-be new value'}, using='default'
-            )
+            update_object(prefix, {'description': 'would-be new value'}, using='default')
 
         self.assertEqual(prefix.description, 'original')
 
     def test_raising_migrator_treated_as_none(self):
         """A buggy migrator is logged + skipped; later migrators still run."""
         with _isolated_registry():
+
             def bad(model, data):
                 raise RuntimeError('boom')
 
@@ -155,12 +158,8 @@ class UpdateObjectMigratorTests(TestCase):
             register_objectchange_field_migrator(good)
 
             prefix = self._make_prefix()
-            with self.assertLogs(
-                'netbox_branching.utilities', level='ERROR'
-            ) as cm:
-                update_object(
-                    prefix, {'description': 'original'}, using='default'
-                )
+            with self.assertLogs('netbox_branching.utilities', level='ERROR') as cm:
+                update_object(prefix, {'description': 'original'}, using='default')
 
         self.assertEqual(prefix.description, 'from good')
         self.assertTrue(any('boom' in m for m in cm.output))
@@ -172,6 +171,7 @@ class ChangeDiffMigratorTests(TestCase):
     def _make_diff(self, action='update', original=None, modified=None, current=None):
         """Build a ChangeDiff instance in memory (no save)."""
         from core.models import ObjectType
+
         return ChangeDiff(
             action=action,
             original=original,
@@ -197,6 +197,7 @@ class ChangeDiffMigratorTests(TestCase):
         called_with = []
 
         with _isolated_registry():
+
             def trace(model, data):
                 called_with.append(data)
                 return data
@@ -218,11 +219,9 @@ class ChangeDiffMigratorTests(TestCase):
     def test_alias_translation_aligns_divergent_keys(self):
         """A rename-style migrator makes a previously-divergent key set match."""
         with _isolated_registry():
+
             def rename(model, data):
-                return {
-                    ('new_name' if k == 'old_name' else k): v
-                    for k, v in data.items()
-                }
+                return {('new_name' if k == 'old_name' else k): v for k, v in data.items()}
 
             register_objectchange_field_migrator(rename)
             diff = self._make_diff(
@@ -250,6 +249,7 @@ class ChangeDiffMigratorTests(TestCase):
     def test_raising_migrator_treated_as_none(self):
         """A buggy migrator is logged + skipped in conflict detection too."""
         with _isolated_registry():
+
             def bad(model, data):
                 raise RuntimeError('boom')
 
@@ -259,9 +259,7 @@ class ChangeDiffMigratorTests(TestCase):
                 modified={'a': 2},
                 current={'a': 1},
             )
-            with self.assertLogs(
-                'netbox_branching.utilities', level='ERROR'
-            ):
+            with self.assertLogs('netbox_branching.utilities', level='ERROR'):
                 diff._update_conflicts()
         # Migrator returned None → comparison runs on the raw dicts.
         self.assertIsNone(diff.conflicts)

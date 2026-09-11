@@ -1,9 +1,16 @@
 """
 Tests for Branch merge functionality with common base class and iterative merge strategy.
 """
+
 import unittest
 import unittest.mock
 import uuid
+
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
+from django.db import connections
+from django.test import RequestFactory, SimpleTestCase, TransactionTestCase
+from django.urls import reverse
 
 from dcim.models import (
     Cable,
@@ -22,20 +29,14 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
-from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
-from django.db import connections
-from django.test import RequestFactory, SimpleTestCase, TransactionTestCase
-from django.urls import reverse
 from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomField, Tag
 from netbox.context_managers import event_tracking
-from utilities.exceptions import AbortTransaction
-
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import DELETED, _deep_merge_dict, _strip_deleted, activate_branch, diff_for_merge
+from utilities.exceptions import AbortTransaction
 
 User = get_user_model()
 
@@ -69,9 +70,7 @@ class BaseMergeTests:
         with event_tracking(request):
             self.manufacturer = Manufacturer.objects.create(name='Manufacturer 1', slug='manufacturer-1')
             self.device_type = DeviceType.objects.create(
-                manufacturer=self.manufacturer,
-                model='Device Type 1',
-                slug='device-type-1'
+                manufacturer=self.manufacturer, model='Device Type 1', slug='device-type-1'
             )
             self.device_role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1')
 
@@ -100,10 +99,11 @@ class BaseMergeTests:
             QuerySet of changes
         """
         content_type = ContentType.objects.get_for_model(model)
-        changes = branch.get_unmerged_changes().filter(
-            changed_object_type=content_type,
-            changed_object_id=object_id
-        ).order_by('time')
+        changes = (
+            branch.get_unmerged_changes()
+            .filter(changed_object_type=content_type, changed_object_id=object_id)
+            .order_by('time')
+        )
         self.assertEqual(changes.count(), expected_count)
 
         if expected_actions:
@@ -258,9 +258,7 @@ class BaseMergeTests:
         deep merge drops it, so main matches the branch's intended JSON exactly.
         """
         site_ct = ContentType.objects.get_for_model(Site)
-        jsoncf = CustomField.objects.create(
-            name='jsoncf', type=CustomFieldTypeChoices.TYPE_JSON, required=False
-        )
+        jsoncf = CustomField.objects.create(name='jsoncf', type=CustomFieldTypeChoices.TYPE_JSON, required=False)
         jsoncf.object_types.set([site_ct])
 
         request = RequestFactory().get(reverse('home'))
@@ -431,19 +429,12 @@ class BaseMergeTests:
         # Create device with interface in main
         site = Site.objects.create(name='Site 1', slug='site-1')
         device_a = Device.objects.create(
-            name='Device A',
-            site=site,
-            device_type=self.device_type,
-            role=self.device_role
+            name='Device A', site=site, device_type=self.device_type, role=self.device_role
         )
         device_a_id = device_a.id
         device_a_name = device_a.name
 
-        interface_a = Interface.objects.create(
-            device=device_a,
-            name='eth0',
-            type='1000base-t'
-        )
+        interface_a = Interface.objects.create(device=device_a, name='eth0', type='1000base-t')
         interface_a_id = interface_a.id
         interface_a_name = interface_a.name
 
@@ -461,16 +452,12 @@ class BaseMergeTests:
                 name='Device B',
                 site=Site.objects.first(),
                 device_type=DeviceType.objects.first(),
-                role=DeviceRole.objects.first()
+                role=DeviceRole.objects.first(),
             )
             device_b_id = device_b.id
 
             # Create interface on new device
-            interface_b = Interface.objects.create(
-                device=device_b,
-                name='eth0',
-                type='1000base-t'
-            )
+            interface_b = Interface.objects.create(device=device_b, name='eth0', type='1000base-t')
             interface_b_id = interface_b.id
 
             # Delete old device (cascade deletes interface_a)
@@ -552,10 +539,7 @@ class BaseMergeTests:
         # Create initial devices in main
         site = Site.objects.create(name='Site 1', slug='site-1')
         device_a = Device.objects.create(
-            name='Device A',
-            site=site,
-            device_type=self.device_type,
-            role=self.device_role
+            name='Device A', site=site, device_type=self.device_type, role=self.device_role
         )
         device_a_id = device_a.id
         device_a_name = device_a.name
@@ -575,7 +559,7 @@ class BaseMergeTests:
                 name='Device B',
                 site=Site.objects.first(),
                 device_type=DeviceType.objects.first(),
-                role=DeviceRole.objects.first()
+                role=DeviceRole.objects.first(),
             )
             device_b_id = device_b.id
 
@@ -583,24 +567,16 @@ class BaseMergeTests:
                 name='Device C',
                 site=Site.objects.first(),
                 device_type=DeviceType.objects.first(),
-                role=DeviceRole.objects.first()
+                role=DeviceRole.objects.first(),
             )
             device_c_id = device_c.id
 
             # Create interface on device_b
-            interface_b1 = Interface.objects.create(
-                device=device_b,
-                name='eth0',
-                type='1000base-t'
-            )
+            interface_b1 = Interface.objects.create(device=device_b, name='eth0', type='1000base-t')
             interface_b1_id = interface_b1.id
 
             # Create another interface on device_b
-            interface_b2 = Interface.objects.create(
-                device=device_b,
-                name='eth1',
-                type='1000base-t'
-            )
+            interface_b2 = Interface.objects.create(device=device_b, name='eth1', type='1000base-t')
             interface_b2_id = interface_b2.id
 
             # Update device_b
@@ -772,11 +748,7 @@ class BaseMergeTests:
         child_a1 = Region.objects.create(name='Child A1', slug='child-a1', parent=parent_a)
         child_a1_id = child_a1.id
 
-        grandchild_a1_1 = Region.objects.create(
-            name='Grandchild A1-1',
-            slug='grandchild-a1-1',
-            parent=child_a1
-        )
+        grandchild_a1_1 = Region.objects.create(name='Grandchild A1-1', slug='grandchild-a1-1', parent=child_a1)
         grandchild_a1_1_id = grandchild_a1_1.id
 
         child_a2 = Region.objects.create(name='Child A2', slug='child-a2', parent=parent_a)
@@ -788,11 +760,7 @@ class BaseMergeTests:
         child_b1 = Region.objects.create(name='Child B1', slug='child-b1', parent=parent_b)
         child_b1_id = child_b1.id
 
-        grandchild_b1_1 = Region.objects.create(
-            name='Grandchild B1-1',
-            slug='grandchild-b1-1',
-            parent=child_b1
-        )
+        grandchild_b1_1 = Region.objects.create(name='Grandchild B1-1', slug='grandchild-b1-1', parent=child_b1)
 
         # Verify initial hierarchy levels
         self.assertEqual(root_region.level, 0)
@@ -822,16 +790,12 @@ class BaseMergeTests:
 
             # Create a deep nested structure under Child A2 (3 new levels)
             grandchild_a2_1 = Region.objects.create(
-                name='Grandchild A2-1',
-                slug='grandchild-a2-1',
-                parent=Region.objects.get(id=child_a2_id)
+                name='Grandchild A2-1', slug='grandchild-a2-1', parent=Region.objects.get(id=child_a2_id)
             )
             grandchild_a2_1_id = grandchild_a2_1.id
 
             great_grandchild = Region.objects.create(
-                name='Great-Grandchild A2-1-1',
-                slug='great-grandchild-a2-1-1',
-                parent=grandchild_a2_1
+                name='Great-Grandchild A2-1-1', slug='great-grandchild-a2-1-1', parent=grandchild_a2_1
             )
             great_grandchild_id = great_grandchild.id
 
@@ -859,11 +823,10 @@ class BaseMergeTests:
         grandchild_a1_1 = Region.objects.get(id=grandchild_a1_1_id)
         self.assertEqual(grandchild_a1_1.parent_id, child_a1_id)
         self.assertEqual(grandchild_a1_1.level, 3)
-        self.assertEqual(list(grandchild_a1_1.get_ancestors()), [
-            Region.objects.get(name='Root'),
-            Region.objects.get(id=parent_b_id),
-            child_a1
-        ])
+        self.assertEqual(
+            list(grandchild_a1_1.get_ancestors()),
+            [Region.objects.get(name='Root'), Region.objects.get(id=parent_b_id), child_a1],
+        )
 
         # Verify Parent B now has two children
         parent_b = Region.objects.get(id=parent_b_id)
@@ -884,12 +847,15 @@ class BaseMergeTests:
         great_grandchild = Region.objects.get(id=great_grandchild_id)
         self.assertEqual(great_grandchild.level, 4)
         self.assertEqual(great_grandchild.parent_id, grandchild_a2_1_id)
-        self.assertEqual(list(great_grandchild.get_ancestors()), [
-            Region.objects.get(name='Root'),
-            Region.objects.get(id=parent_a_id),
-            Region.objects.get(id=child_a2_id),
-            grandchild_a2_1
-        ])
+        self.assertEqual(
+            list(great_grandchild.get_ancestors()),
+            [
+                Region.objects.get(name='Root'),
+                Region.objects.get(id=parent_a_id),
+                Region.objects.get(id=child_a2_id),
+                grandchild_a2_1,
+            ],
+        )
 
         # Verify Child A2's descendants
         child_a2 = Region.objects.get(id=child_a2_id)
@@ -908,11 +874,10 @@ class BaseMergeTests:
 
         # Verify Child A1's grandchild is back under original hierarchy
         grandchild_a1_1 = Region.objects.get(id=grandchild_a1_1_id)
-        self.assertEqual(list(grandchild_a1_1.get_ancestors()), [
-            Region.objects.get(name='Root'),
-            Region.objects.get(id=parent_a_id),
-            child_a1
-        ])
+        self.assertEqual(
+            list(grandchild_a1_1.get_ancestors()),
+            [Region.objects.get(name='Root'), Region.objects.get(id=parent_a_id), child_a1],
+        )
 
         # Verify Parent A has both children again
         parent_a = Region.objects.get(id=parent_a_id)
@@ -1333,12 +1298,8 @@ class BaseMergeTests:
 
     def _create_ports(self, device):
         """Helper to create a front/rear port pair on a device, with no mapping between them."""
-        rear_port = RearPort.objects.create(
-            device=device, name='rear', type='8p8c', positions=4
-        )
-        front_port = FrontPort.objects.create(
-            device=device, name='front', type='8p8c', positions=4
-        )
+        rear_port = RearPort.objects.create(device=device, name='rear', type='8p8c', positions=4)
+        front_port = FrontPort.objects.create(device=device, name='front', type='8p8c', positions=4)
         return front_port, rear_port
 
     def test_merge_front_rear_port_mapping(self):
@@ -1482,8 +1443,9 @@ class BaseMergeTests:
         branch.merge(user=self.user, commit=True)
 
         self.assertEqual(
-            PortMapping.objects.filter(front_port_id=front_port_id).count(), 0,
-            'Port mapping deleted in branch was not removed from main on merge (#611)'
+            PortMapping.objects.filter(front_port_id=front_port_id).count(),
+            0,
+            'Port mapping deleted in branch was not removed from main on merge (#611)',
         )
 
     def test_merge_delete_after_main_delete(self):

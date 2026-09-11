@@ -13,7 +13,14 @@ Covered models:
 Note: tenancy.contactgroupmembership was removed in NetBox 4.4 and is no
 longer applicable to any supported NetBox version.
 """
+
 import uuid
+
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
+from django.db import connections
+from django.test import RequestFactory, TransactionTestCase
+from django.urls import reverse
 
 from dcim.choices import PortTypeChoices
 from dcim.models import (
@@ -30,16 +37,10 @@ from dcim.models import (
     RearPortTemplate,
     Site,
 )
-from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
-from django.db import connections
-from django.test import RequestFactory, TransactionTestCase
-from django.urls import reverse
 from extras.models import Tag, TaggedItem
 from extras.models.search import CachedValue
 from netbox.context import current_request
 from netbox.context_managers import event_tracking
-
 from netbox_branching.contextvars import active_branch as active_branch_var
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
@@ -52,6 +53,7 @@ class RelatedModelsTestCase(TransactionTestCase):
     Verify that related models are routed to the branch schema when a branch
     is active, not to the main schema.
     """
+
     serialized_rollback = True
 
     def setUp(self):
@@ -155,14 +157,10 @@ class RelatedModelsTestCase(TransactionTestCase):
         site_ct = ContentType.objects.get_for_model(Site)
 
         with activate_branch(branch):
-            self.assertEqual(
-                TaggedItem.objects.filter(content_type=site_ct, object_id=site.pk).count(), 1
-            )
+            self.assertEqual(TaggedItem.objects.filter(content_type=site_ct, object_id=site.pk).count(), 1)
 
         # Main schema should have no tag entry for the branch-only site
-        self.assertEqual(
-            TaggedItem.objects.filter(content_type=site_ct, object_id=site.pk).count(), 0
-        )
+        self.assertEqual(TaggedItem.objects.filter(content_type=site_ct, object_id=site.pk).count(), 0)
 
     def test_cachedvalue_routed_to_branch(self):
         """
@@ -182,9 +180,7 @@ class RelatedModelsTestCase(TransactionTestCase):
         site_ct = ContentType.objects.get_for_model(Site)
 
         with activate_branch(branch):
-            self.assertGreater(
-                CachedValue.objects.filter(object_type=site_ct, object_id=site.pk).count(), 0
-            )
+            self.assertGreater(CachedValue.objects.filter(object_type=site_ct, object_id=site.pk).count(), 0)
 
         # Main schema should have no CachedValue for the branch-only site
         self.assertEqual(CachedValue.objects.filter(object_type=site_ct, object_id=site.pk).count(), 0)
@@ -200,12 +196,16 @@ class RelatedModelsTestCase(TransactionTestCase):
         """
         with event_tracking(self._make_request()):
             device_a = Device.objects.create(
-                name='Device A', device_type=self.device_type,
-                role=self.device_role, site=self.site,
+                name='Device A',
+                device_type=self.device_type,
+                role=self.device_role,
+                site=self.site,
             )
             device_b = Device.objects.create(
-                name='Device B', device_type=self.device_type,
-                role=self.device_role, site=self.site,
+                name='Device B',
+                device_type=self.device_type,
+                role=self.device_role,
+                site=self.site,
             )
             iface_a = Interface.objects.create(device=device_a, name='eth0', type='1000base-t')
             iface_b = Interface.objects.create(device=device_b, name='eth0', type='1000base-t')

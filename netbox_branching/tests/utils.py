@@ -33,9 +33,7 @@ def fetchall(cursor):
     Map cursor.fetchall() into a list of named tuples for convenience.
     """
     result = namedtuple('Result', [col[0] for col in cursor.description])
-    return [
-        result(*row) for row in cursor.fetchall()
-    ]
+    return [result(*row) for row in cursor.fetchall()]
 
 
 def fetchone(cursor):

@@ -1,9 +1,6 @@
 import uuid
 from unittest.mock import patch
 
-from core.choices import ObjectChangeActionChoices
-from core.models import ObjectChange
-from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.messages import get_messages
@@ -12,26 +9,26 @@ from django.db import connections
 from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django_rq import get_queue
-from netbox.context import current_request
-from utilities.testing import ViewTestCases, create_tags
 
+from core.choices import ObjectChangeActionChoices
+from core.models import ObjectChange
+from dcim.models import Site
+from netbox.context import current_request
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tables import ChangesGroupedTable, ChangesTable
+from netbox_branching.tests.plugin_testing import PluginTestCases
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
 from netbox_branching.views import BaseBranchActionView, GroupedChangesViewMixin
+from utilities.testing import create_tags
 
 User = get_user_model()
 
 
-class BranchTestCase(ViewTestCases.PrimaryObjectViewTestCase):
+class BranchTestCase(PluginTestCases.PrimaryObjectViewTestCase):
     model = Branch
-
-    def _get_base_url(self):
-        viewname = super()._get_base_url()
-        return f'plugins:{viewname}'
 
     @classmethod
     def setUpTestData(cls):
@@ -52,17 +49,17 @@ class BranchTestCase(ViewTestCases.PrimaryObjectViewTestCase):
         }
 
         cls.csv_data = (
-            "name,description",
-            "Branch 4,Fourth branch",
-            "Branch 5,Fifth branch",
-            "Branch 6,Sixth branch",
+            'name,description',
+            'Branch 4,Fourth branch',
+            'Branch 5,Fifth branch',
+            'Branch 6,Sixth branch',
         )
 
         cls.csv_update_data = (
-            "id,description",
-            f"{branches[0].pk},New description",
-            f"{branches[1].pk},New description",
-            f"{branches[2].pk},New description",
+            'id,description',
+            f'{branches[0].pk},New description',
+            f'{branches[1].pk},New description',
+            f'{branches[2].pk},New description',
         )
 
         cls.bulk_edit_data = {
@@ -75,7 +72,6 @@ class BranchTestCase(ViewTestCases.PrimaryObjectViewTestCase):
 
 
 class BranchBulkMigrateViewTestCase(TestCase):
-
     @classmethod
     def setUpTestData(cls):
         cls.superuser = User.objects.create_user(username='bulkmigrate_super', is_superuser=True)
@@ -94,10 +90,13 @@ class BranchBulkMigrateViewTestCase(TestCase):
         get_queue('default').connection.flushall()
 
     def test_confirmation_page_shows_only_pending_branches(self):
-        response = self.client.post(self.url, {
-            'pk': [self.pending1.pk, self.pending2.pk, self.ready.pk],
-            'return_url': '/plugins/branching/branches/',
-        })
+        response = self.client.post(
+            self.url,
+            {
+                'pk': [self.pending1.pk, self.pending2.pk, self.ready.pk],
+                'return_url': '/plugins/branching/branches/',
+            },
+        )
         self.assertEqual(response.status_code, 200)
         content = response.content.decode()
         # The form's hidden pk fields should only carry pending branch PKs
@@ -107,31 +106,40 @@ class BranchBulkMigrateViewTestCase(TestCase):
 
     def test_confirm_enqueues_jobs_and_redirects(self):
         with patch('netbox_branching.views.MigrateBranchJob.enqueue') as mock_enqueue:
-            response = self.client.post(self.url, {
-                '_confirm': '1',
-                'pk': [self.pending1.pk, self.pending2.pk],
-                'return_url': '/plugins/branching/branches/',
-            })
+            response = self.client.post(
+                self.url,
+                {
+                    '_confirm': '1',
+                    'pk': [self.pending1.pk, self.pending2.pk],
+                    'return_url': '/plugins/branching/branches/',
+                },
+            )
         self.assertRedirects(response, '/plugins/branching/branches/', fetch_redirect_response=False)
         self.assertEqual(mock_enqueue.call_count, 2)
         msg_texts = [str(m) for m in get_messages(response.wsgi_request)]
         self.assertTrue(any('2' in t and 'branch' in t.lower() for t in msg_texts))
 
     def test_empty_selection_redirects_with_warning(self):
-        response = self.client.post(self.url, {
-            'pk': [self.ready.pk],
-            'return_url': '/plugins/branching/branches/',
-        })
+        response = self.client.post(
+            self.url,
+            {
+                'pk': [self.ready.pk],
+                'return_url': '/plugins/branching/branches/',
+            },
+        )
         self.assertRedirects(response, '/plugins/branching/branches/', fetch_redirect_response=False)
         msg_texts = [str(m) for m in get_messages(response.wsgi_request)]
         self.assertTrue(any('pending' in t.lower() for t in msg_texts))
 
     def test_permission_required(self):
         self.client.force_login(self.unprivileged_user)
-        response = self.client.post(self.url, {
-            'pk': [self.pending1.pk],
-            'return_url': '/plugins/branching/branches/',
-        })
+        response = self.client.post(
+            self.url,
+            {
+                'pk': [self.pending1.pk],
+                'return_url': '/plugins/branching/branches/',
+            },
+        )
         self.assertNotEqual(response.status_code, 200)
 
 
@@ -283,12 +291,8 @@ class BranchArchiveViewTestCase(TestCase):
 
     def setUp(self):
         self.client.force_login(self.superuser)
-        self.url_merged = reverse(
-            'plugins:netbox_branching:branch_archive', kwargs={'pk': self.merged.pk}
-        )
-        self.url_ready = reverse(
-            'plugins:netbox_branching:branch_archive', kwargs={'pk': self.ready.pk}
-        )
+        self.url_merged = reverse('plugins:netbox_branching:branch_archive', kwargs={'pk': self.merged.pk})
+        self.url_ready = reverse('plugins:netbox_branching:branch_archive', kwargs={'pk': self.ready.pk})
 
     def test_archive_get_renders_confirmation_for_merged_branch(self):
         response = self.client.get(self.url_merged)
@@ -355,6 +359,7 @@ class ObjectValidationTestCase(TransactionTestCase):
     Test validation behavior for operations on objects that have been deleted in main.
     Ref: Issue #422
     """
+
     serialized_rollback = True
 
     def setUp(self):
@@ -517,7 +522,7 @@ class BranchMiddlewareTestCase(TransactionTestCase):
         response = self.client.get(f'{site_url}?{QUERY_PARAM}=', follow=True)
         messages = list(get_messages(response.wsgi_request))
         self.assertEqual(len(messages), 1)
-        self.assertIn("does not exist in main", str(messages[0]))
+        self.assertIn('does not exist in main', str(messages[0]))
 
         # Clean up
         branch.deprovision()
@@ -556,7 +561,7 @@ class BranchMiddlewareTestCase(TransactionTestCase):
         response = self.client.get(f'{site_url}?{QUERY_PARAM}={branch.schema_id}', follow=True)
         messages_list = list(get_messages(response.wsgi_request))
         warning_messages = [m for m in messages_list if 'does not exist' in str(m)]
-        self.assertGreaterEqual(len(warning_messages), 1, "Expected at least one warning message")
+        self.assertGreaterEqual(len(warning_messages), 1, 'Expected at least one warning message')
         self.assertIn(f"branch '{branch.name}'", str(warning_messages[0]))
         self.assertIn(site_url, str(warning_messages[0]))
 
@@ -789,11 +794,14 @@ class GroupedChangesViewMixinTestCase(TestCase):
 
         self.assertEqual(len(groups), 3)
         keys = {(g['request_id'], g['changed_object_type_id']) for g in groups}
-        self.assertEqual(keys, {
-            (req_a, self.site_ct.id),
-            (req_b, self.site_ct.id),
-            (req_b, self.device_ct.id),
-        })
+        self.assertEqual(
+            keys,
+            {
+                (req_a, self.site_ct.id),
+                (req_b, self.site_ct.id),
+                (req_b, self.device_ct.id),
+            },
+        )
 
     def test_aggregate_resolves_content_types(self):
         # Verify ContentType lookup happens in a single batched query and attaches the object.

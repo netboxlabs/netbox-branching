@@ -15,6 +15,7 @@ ORM writes inside data migrations must not create ``ObjectChange`` records in
 the branch schema, and the signal handlers disconnected during the job must
 be reconnected afterwards.
 """
+
 import gzip
 import uuid
 import weakref
@@ -22,23 +23,23 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from core.signals import handle_changed_object, handle_deleted_object
-from dcim.models import Manufacturer
 from django.contrib.auth import get_user_model
 from django.db import connection, connections
 from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
+
+from core.signals import handle_changed_object, handle_deleted_object
+from dcim.models import Manufacturer
 from netbox.context_managers import event_tracking
 from netbox.signals import post_clean
-from utilities.exceptions import AbortTransaction
-
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.contextvars import active_branch as active_branch_var
 from netbox_branching.jobs import MigrateBranchJob
 from netbox_branching.models import Branch
 from netbox_branching.signal_receivers import validate_branching_operations
 from netbox_branching.tests.utils import provision_branch
+from utilities.exceptions import AbortTransaction
 
 User = get_user_model()
 
@@ -57,6 +58,7 @@ def _signal_handlers_connected():
     ``disconnect_object_change_signal_handlers()`` are currently registered
     on their respective signals.
     """
+
     def receivers_for(signal):
         # Django's Signal.receivers entries are tuples whose second element
         # is either a weakref to the receiver (default) or the receiver
@@ -71,10 +73,10 @@ def _signal_handlers_connected():
         return result
 
     return (
-        handle_changed_object in receivers_for(post_save) and
-        handle_changed_object in receivers_for(m2m_changed) and
-        handle_deleted_object in receivers_for(pre_delete) and
-        validate_branching_operations in receivers_for(post_clean)
+        handle_changed_object in receivers_for(post_save)
+        and handle_changed_object in receivers_for(m2m_changed)
+        and handle_deleted_object in receivers_for(pre_delete)
+        and validate_branching_operations in receivers_for(post_clean)
     )
 
 
@@ -105,7 +107,7 @@ class BranchUpgradeTestCase(TransactionTestCase):
             # pg_dump's preamble emits `set_config('search_path', '', false)`,
             # which clears the connection's search_path. Reset it so subsequent
             # ORM queries against the default schema work.
-            cursor.execute("SET search_path TO public")
+            cursor.execute('SET search_path TO public')
         self._loaded_schema = schema_name
 
     def test_upgrade_from_v4_4_10(self):
@@ -132,10 +134,7 @@ class BranchUpgradeTestCase(TransactionTestCase):
         # at least some seed data (both required for the test to be meaningful).
         with connection.cursor() as cursor:
             cursor.execute(f'SELECT COUNT(*) FROM "{branch.schema_name}".django_migrations')
-            self.assertGreater(
-                cursor.fetchone()[0], 0,
-                msg="Fixture django_migrations table is empty"
-            )
+            self.assertGreater(cursor.fetchone()[0], 0, msg='Fixture django_migrations table is empty')
 
         # The fixture preserves the ObjectChange records from when the v4.4.10
         # branch was originally in use. Snapshot the count so we can later
@@ -151,27 +150,26 @@ class BranchUpgradeTestCase(TransactionTestCase):
         # are no migrations left to apply.
         branch.refresh_from_db()
         self.assertEqual(
-            branch.status, BranchStatusChoices.READY,
-            msg=f"Branch ended migration in {branch.status!r}, expected READY"
+            branch.status, BranchStatusChoices.READY, msg=f'Branch ended migration in {branch.status!r}, expected READY'
         )
         # Clear cached_property so we re-read the post-migration plan
         if 'pending_migrations' in branch.__dict__:
             del branch.__dict__['pending_migrations']
         self.assertEqual(
-            branch.pending_migrations, [],
-            msg=f"Migrations remain pending after migrate(): {branch.pending_migrations}"
+            branch.pending_migrations, [], msg=f'Migrations remain pending after migrate(): {branch.pending_migrations}'
         )
 
         # Regression for #542: data migrations must not have added to the
         # branch's pre-existing ObjectChange records.
         unmerged_after = branch.get_unmerged_changes().count()
         self.assertEqual(
-            unmerged_after, unmerged_before,
+            unmerged_after,
+            unmerged_before,
             msg=(
-                f"Data migrations created {unmerged_after - unmerged_before} "
-                f"spurious ObjectChange record(s) in the branch "
-                f"(before={unmerged_before}, after={unmerged_after})"
-            )
+                f'Data migrations created {unmerged_after - unmerged_before} '
+                f'spurious ObjectChange record(s) in the branch '
+                f'(before={unmerged_before}, after={unmerged_after})'
+            ),
         )
 
 
@@ -243,7 +241,7 @@ class MigrateBranchSignalTestCase(TransactionTestCase):
         branch = self._create_and_provision_branch()
 
         def fake_migrate(user):
-            raise RuntimeError("simulated migration failure")
+            raise RuntimeError('simulated migration failure')
 
         with patch.object(branch, 'migrate', side_effect=fake_migrate), self.assertRaises(RuntimeError):
             MigrateBranchJob(_make_migrate_job(branch, self.user)).run()

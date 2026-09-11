@@ -11,26 +11,16 @@ from .constants import PG_UNIQUE_VIOLATION
 
 # Recommendation message templates — separated from decision logic in get_merge_recommendations()
 _REC_RENAME_WITH_FIELD = _l(
-    'Rename the conflicting object (where %(field)s="%(value)s") in either the branch'
-    ' or the main schema.'
+    'Rename the conflicting object (where %(field)s="%(value)s") in either the branch or the main schema.'
 )
 _REC_RENAME_GENERIC = _l(
-    'Rename the conflicting object in either the branch or the main schema'
-    ' so the values no longer conflict.'
+    'Rename the conflicting object in either the branch or the main schema so the values no longer conflict.'
 )
-_REC_TRY_SQUASH_UNIQUE = _l(
-    'Switch to the Squash merge strategy, which handles these types of conflicts better.'
-)
-_REC_FIX_FIELD = _l(
-    'Fix the invalid value for field "%(field)s" on the affected object in the branch before retrying.'
-)
-_REC_FIX_GENERIC = _l(
-    'Fix the invalid value on the affected object in the branch before retrying.'
-)
+_REC_TRY_SQUASH_UNIQUE = _l('Switch to the Squash merge strategy, which handles these types of conflicts better.')
+_REC_FIX_FIELD = _l('Fix the invalid value for field "%(field)s" on the affected object in the branch before retrying.')
+_REC_FIX_GENERIC = _l('Fix the invalid value on the affected object in the branch before retrying.')
 _REC_REVIEW_LOG = _l('Review the job log for full error details.')
-_REC_TRY_SQUASH_DB = _l(
-    'Switch to the Squash merge strategy, which may resolve some database-level conflicts.'
-)
+_REC_TRY_SQUASH_DB = _l('Switch to the Squash merge strategy, which may resolve some database-level conflicts.')
 
 __all__ = (
     'annotate_validation_error',

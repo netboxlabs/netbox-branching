@@ -1,16 +1,16 @@
 import uuid
 
 import django_rq
-from core.events import OBJECT_CREATED
-from core.models import ObjectType
-from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.test import RequestFactory, TransactionTestCase, override_settings
 from django.urls import reverse
+
+from core.events import OBJECT_CREATED
+from core.models import ObjectType
+from dcim.models import Site
 from extras.choices import EventRuleActionChoices
 from extras.events import enqueue_event, flush_events
 from extras.models import EventRule, Webhook
-
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
 
@@ -71,11 +71,14 @@ class AddBranchContextTestCase(TransactionTestCase):
 
         self.assertEqual(self.queue.count, 1)
         data = self.queue.jobs[0].kwargs['data']
-        self.assertEqual(data['active_branch'], {
-            'id': self.branch.pk,
-            'name': self.branch.name,
-            'schema_id': self.branch.schema_id,
-        })
+        self.assertEqual(
+            data['active_branch'],
+            {
+                'id': self.branch.pk,
+                'name': self.branch.name,
+                'schema_id': self.branch.schema_id,
+            },
+        )
 
     @override_settings(EVENTS_PIPELINE=ENRICHED_PIPELINE)
     def test_no_branch_active_no_enrichment(self):

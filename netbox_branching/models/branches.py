@@ -9,8 +9,6 @@ from contextlib import contextmanager
 from datetime import timedelta
 from functools import cached_property, partial
 
-from core.choices import JobStatusChoices, ObjectChangeActionChoices
-from core.models import ObjectChange as ObjectChange_
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -26,17 +24,16 @@ from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
+from psycopg.pq import TransactionStatus
+from rq.timeouts import JobTimeoutException
+
+from core.choices import JobStatusChoices, ObjectChangeActionChoices
+from core.models import ObjectChange as ObjectChange_
 from netbox.config import get_config
 from netbox.context import current_request
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
-from psycopg.pq import TransactionStatus
-from rq.timeouts import JobTimeoutException
-from utilities.exceptions import AbortRequest, AbortTransaction
-from utilities.querysets import RestrictedQuerySet
-from utilities.serialization import serialize_object
-
 from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
@@ -62,6 +59,9 @@ from netbox_branching.utilities import (
     record_applied_change,
     supports_branching,
 )
+from utilities.exceptions import AbortRequest, AbortTransaction
+from utilities.querysets import RestrictedQuerySet
+from utilities.serialization import serialize_object
 
 from .changes import ChangeDiff, ObjectChange
 
@@ -166,8 +166,8 @@ def _fake_for_branch(migration):
     for operation in migration.operations:
         if isinstance(operation, SeparateDatabaseAndState):
             logger.error(
-                f"Migration {migration} contains SeparateDatabaseAndState, which is not supported "
-                f"for branch schema migration. This migration will not be faked."
+                f'Migration {migration} contains SeparateDatabaseAndState, which is not supported '
+                f'for branch schema migration. This migration will not be faked.'
             )
             return False
         if (model_name := getattr(operation, 'model_name', None)) is None:
@@ -179,7 +179,7 @@ def _fake_for_branch(migration):
         except LookupError:
             # If we can't resolve the model (e.g. removed in a squashed migration),
             # conservatively treat it as branchable and don't fake.
-            logger.warning(f"Could not resolve model {migration.app_label}.{model_name}; not faking {migration}")
+            logger.warning(f'Could not resolve model {migration.app_label}.{model_name}; not faking {migration}')
             return False
         if supports_branching(model):
             return False
@@ -187,30 +187,17 @@ def _fake_for_branch(migration):
 
 
 class Branch(JobsMixin, PrimaryModel):
-    name = models.CharField(
-        verbose_name=_('name'),
-        max_length=100,
-        unique=True
-    )
+    name = models.CharField(verbose_name=_('name'), max_length=100, unique=True)
     owner = models.ForeignKey(
-        to=get_user_model(),
-        on_delete=models.SET_NULL,
-        blank=True,
-        null=True,
-        related_name='branches'
+        to=get_user_model(), on_delete=models.SET_NULL, blank=True, null=True, related_name='branches'
     )
-    schema_id = models.CharField(
-        max_length=8,
-        unique=True,
-        verbose_name=_('schema ID'),
-        editable=False
-    )
+    schema_id = models.CharField(max_length=8, unique=True, verbose_name=_('schema ID'), editable=False)
     status = models.CharField(
         verbose_name=_('status'),
         max_length=50,
         choices=BranchStatusChoices,
         default=BranchStatusChoices.NEW,
-        editable=False
+        editable=False,
     )
     applied_migrations = ArrayField(
         verbose_name=_('applied migrations'),
@@ -218,22 +205,10 @@ class Branch(JobsMixin, PrimaryModel):
         blank=True,
         default=list,
     )
-    last_sync = models.DateTimeField(
-        blank=True,
-        null=True,
-        editable=False
-    )
-    merged_time = models.DateTimeField(
-        verbose_name=_('merged time'),
-        blank=True,
-        null=True
-    )
+    last_sync = models.DateTimeField(blank=True, null=True, editable=False)
+    merged_time = models.DateTimeField(verbose_name=_('merged time'), blank=True, null=True)
     merged_by = models.ForeignKey(
-        to=get_user_model(),
-        on_delete=models.SET_NULL,
-        blank=True,
-        null=True,
-        related_name='+'
+        to=get_user_model(), on_delete=models.SET_NULL, blank=True, null=True, related_name='+'
     )
     merge_strategy = models.CharField(
         verbose_name=_('merge strategy'),
@@ -242,7 +217,7 @@ class Branch(JobsMixin, PrimaryModel):
         blank=True,
         null=True,
         default=None,
-        help_text=_('Strategy used to merge this branch')
+        help_text=_('Strategy used to merge this branch'),
     )
 
     _preaction_validators = {
@@ -314,8 +289,8 @@ class Branch(JobsMixin, PrimaryModel):
             if total_branch_count >= max_branches:
                 raise ValidationError(
                     _(
-                        "The configured maximum number of non-archived branches ({max}) cannot be exceeded. One or "
-                        "more existing branches must be deleted before a new branch may be created."
+                        'The configured maximum number of non-archived branches ({max}) cannot be exceeded. One or '
+                        'more existing branches must be deleted before a new branch may be created.'
                     ).format(max=max_branches)
                 )
 
@@ -325,14 +300,18 @@ class Branch(JobsMixin, PrimaryModel):
             if working_branch_count >= max_working_branches:
                 raise ValidationError(
                     _(
-                        "The configured maximum number of working branches ({max}) cannot be exceeded. One or more "
-                        "working branches must be merged or archived before a new branch may be created."
+                        'The configured maximum number of working branches ({max}) cannot be exceeded. One or more '
+                        'working branches must be merged or archived before a new branch may be created.'
                     ).format(max=max_working_branches)
                 )
 
     # Fields owned by background jobs; excluded from save() by default to avoid clobbering. See #445.
     LIFECYCLE_FIELDS = (
-        'status', 'last_sync', 'merged_time', 'merged_by', 'applied_migrations',
+        'status',
+        'last_sync',
+        'merged_time',
+        'merged_by',
+        'applied_migrations',
     )
 
     def save(self, provision=True, update_merge_sync_fields=False, *args, **kwargs):
@@ -347,14 +326,11 @@ class Branch(JobsMixin, PrimaryModel):
         from netbox_branching.jobs import ProvisionBranchJob
 
         _provision = provision and self.pk is None
-        _shield_lifecycle = (
-            self.pk and not update_merge_sync_fields and 'update_fields' not in kwargs
-        )
+        _shield_lifecycle = self.pk and not update_merge_sync_fields and 'update_fields' not in kwargs
 
         if _shield_lifecycle:
             kwargs['update_fields'] = [
-                f.name for f in self._meta.concrete_fields
-                if f.name not in self.LIFECYCLE_FIELDS and not f.primary_key
+                f.name for f in self._meta.concrete_fields if f.name not in self.LIFECYCLE_FIELDS and not f.primary_key
             ]
 
         super().save(*args, **kwargs)
@@ -366,14 +342,11 @@ class Branch(JobsMixin, PrimaryModel):
         if _provision:
             # Enqueue a background job to provision the Branch
             request = current_request.get()
-            ProvisionBranchJob.enqueue(
-                instance=self,
-                user=request.user if request else None
-            )
+            ProvisionBranchJob.enqueue(instance=self, user=request.user if request else None)
 
     def delete(self, *args, **kwargs):
         if active_branch.get() == self:
-            raise AbortRequest(_("The active branch cannot be deleted."))
+            raise AbortRequest(_('The active branch cannot be deleted.'))
 
         # Row delete and schema drop must succeed or fail together — see #445.
         with transaction.atomic():
@@ -396,7 +369,7 @@ class Branch(JobsMixin, PrimaryModel):
         Register a validator to run before a specific branch action (i.e. sync or merge).
         """
         if action not in BRANCH_ACTIONS:
-            raise ValueError(f"Invalid branch action: {action}")
+            raise ValueError(f'Invalid branch action: {action}')
         cls._preaction_validators[action].add(func)
 
     def get_changes(self):
@@ -416,11 +389,10 @@ class Branch(JobsMixin, PrimaryModel):
         # upon provisioning. Defaults to the branch creation time.
         last_sync = self.last_sync or self.created
         if self.status == BranchStatusChoices.READY:
-            return ObjectChange.objects.using(DEFAULT_DB_ALIAS).exclude(
-                application__branch=self
-            ).filter(
-                changed_object_type__in=get_branchable_object_types(),
-                time__gt=last_sync
+            return (
+                ObjectChange.objects.using(DEFAULT_DB_ALIAS)
+                .exclude(application__branch=self)
+                .filter(changed_object_type__in=get_branchable_object_types(), time__gt=last_sync)
             )
         return ObjectChange.objects.none()
 
@@ -437,9 +409,7 @@ class Branch(JobsMixin, PrimaryModel):
         Return a queryset of all merged ObjectChange records for the Branch.
         """
         if self.status in (BranchStatusChoices.MERGED, BranchStatusChoices.ARCHIVED):
-            return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(
-                application__branch=self
-            )
+            return ObjectChange.objects.using(DEFAULT_DB_ALIAS).filter(application__branch=self)
         return ObjectChange.objects.none()
 
     def get_event_history(self):
@@ -447,11 +417,7 @@ class Branch(JobsMixin, PrimaryModel):
         last_time = timezone.now()
         for event in self.events.all():
             if change_count := self.get_changes().filter(time__gte=event.time, time__lt=last_time).count():
-                summary = ChangeSummary(
-                    start=event.time,
-                    end=last_time,
-                    count=change_count
-                )
+                summary = ChangeSummary(start=event.time, end=last_time, count=change_count)
                 history.append(summary)
             history.append(event)
             last_time = event.time
@@ -505,9 +471,7 @@ class Branch(JobsMixin, PrimaryModel):
         executor = MigrationExecutor(connection)
         targets = executor.loader.graph.leaf_nodes()
         plan = executor.migration_plan(targets)
-        return [
-            (migration.app_label, migration.name) for migration, backward in plan
-        ]
+        return [(migration.app_label, migration.name) for migration, backward in plan]
 
     @cached_property
     def migrators(self):
@@ -523,7 +487,7 @@ class Branch(JobsMixin, PrimaryModel):
                 module = importlib.import_module(f'{app_label}.migrations.{name}')
             except ModuleNotFoundError:
                 logger = logging.getLogger('netbox_branching.branch')
-                logger.warning(f"Failed to load module for migration {migration}; skipping.")
+                logger.warning(f'Failed to load module for migration {migration}; skipping.')
                 continue
 
             for object_type, migrator in getattr(module, 'objectchange_migrators', {}).items():
@@ -540,7 +504,7 @@ class Branch(JobsMixin, PrimaryModel):
         action. Return False if any fail; otherwise return True.
         """
         if action not in BRANCH_ACTIONS:
-            raise Exception(f"Unrecognized branch action: {action}")
+            raise Exception(f'Unrecognized branch action: {action}')
 
         # Run any pre-action validators
         for func in self._preaction_validators[action]:
@@ -680,7 +644,7 @@ class Branch(JobsMixin, PrimaryModel):
         new_status = BranchStatusChoices.RECOVERY_STATUS[interrupted_status]
         logger.warning(
             f"Recovering branch {self} from status '{interrupted_status}': resetting to '{new_status}' "
-            f"(requested by {user or 'system'})"
+            f'(requested by {user or "system"})'
         )
 
         # Claim the reset before acting on it. The conditional update succeeds for exactly one
@@ -690,7 +654,7 @@ class Branch(JobsMixin, PrimaryModel):
         claimed = Branch.objects.filter(pk=self.pk, status=interrupted_status).update(status=new_status)
         self.status = new_status
         if not claimed:
-            logger.info(f"Branch {self} was already recovered by another caller; nothing further to do")
+            logger.info(f'Branch {self} was already recovered by another caller; nothing further to do')
             return new_status
 
         # Terminate the orphaned job record so it no longer reports itself as running. Jobs which
@@ -698,10 +662,12 @@ class Branch(JobsMixin, PrimaryModel):
         if job is not None and job.status not in JobStatusChoices.TERMINAL_STATE_CHOICES:
             job.terminate(
                 status=JobStatusChoices.STATUS_FAILED,
-                error=str(_(
-                    "The job did not complete. Its worker is no longer running; the branch has been "
-                    "reset to '{status}'."
-                )).format(status=new_status)
+                error=str(
+                    _(
+                        'The job did not complete. Its worker is no longer running; the branch has been '
+                        "reset to '{status}'."
+                    )
+                ).format(status=new_status),
             )
 
         # Pick the interrupted operation back up rather than leaving the operator to re-initiate it
@@ -709,7 +675,7 @@ class Branch(JobsMixin, PrimaryModel):
         # for why merges, reverts and provisioning are not.
         if retry and interrupted_status in BranchStatusChoices.RECOVERY_RETRYABLE:
             job_class = get_job_class_for_status(interrupted_status)
-            logger.info(f"Re-enqueueing {job_class.Meta.name} for branch {self}")
+            logger.info(f'Re-enqueueing {job_class.Meta.name} for branch {self}')
             job_class.enqueue(instance=self, user=user)
 
         return new_status
@@ -811,9 +777,7 @@ class Branch(JobsMixin, PrimaryModel):
                 continue
 
             originals = ', '.join(entry['user_names']) or 'system'
-            sync_message = (
-                f'Synced from main (originally by {originals})'
-            )[:message_max_length]
+            sync_message = (f'Synced from main (originally by {originals})')[:message_max_length]
 
             ObjectChange_.objects.using(self.connection_name).create(
                 action=ObjectChangeActionChoices.ACTION_UPDATE,
@@ -847,7 +811,9 @@ class Branch(JobsMixin, PrimaryModel):
         primary_pk = change.changed_object_id
 
         def _capture_cascade(
-            sender, instance, using,
+            sender,
+            instance,
+            using,
             _conn=self.connection_name,
             _primary_model=primary_model,
             _primary_pk=primary_pk,
@@ -863,9 +829,7 @@ class Branch(JobsMixin, PrimaryModel):
                 return
             if not sender.objects.using(DEFAULT_DB_ALIAS).filter(pk=instance.pk).exists():
                 prechange_data = (
-                    instance.serialize_object()
-                    if hasattr(instance, 'serialize_object')
-                    else serialize_object(instance)
+                    instance.serialize_object() if hasattr(instance, 'serialize_object') else serialize_object(instance)
                 )
                 # Capture pk, repr, and model as values now — Django sets instance.pk = None
                 # after deletion, so reading them from the instance later would give wrong results.
@@ -907,24 +871,24 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info(f'Syncing branch {self} ({self.schema_name})')
 
         if not self.ready:
-            raise Exception(f"Branch {self} is not ready to sync")
+            raise Exception(f'Branch {self} is not ready to sync')
         if self.is_stale:
-            raise Exception(f"Branch {self} is stale and can no longer be synced")
+            raise Exception(f'Branch {self} is stale and can no longer be synced')
         if commit and not self.can_sync:
-            raise Exception("Syncing this branch is not permitted.")
+            raise Exception('Syncing this branch is not permitted.')
 
         # Emit pre-sync signal
         pre_sync.send(sender=self.__class__, branch=self, user=user)
 
         # Retrieve unsynced changes before we update the Branch's status
         if changes := self.get_unsynced_changes().order_by('time'):
-            logger.info(f"Found {len(changes)} changes to sync")
+            logger.info(f'Found {len(changes)} changes to sync')
         else:
-            logger.info("No changes found; aborting.")
+            logger.info('No changes found; aborting.')
             return
 
         # Update Branch status
-        logger.debug(f"Setting branch status to {BranchStatusChoices.SYNCING}")
+        logger.debug(f'Setting branch status to {BranchStatusChoices.SYNCING}')
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.SYNCING)
 
         # Generate a request ID for correlating ObjectChange records from this sync
@@ -968,9 +932,7 @@ class Branch(JobsMixin, PrimaryModel):
                         )
                         models.update(cascade_models)
                         # A buffered synthetic UPDATE is invalidated by a later DELETE.
-                        sync_buffer.pop(
-                            (change.changed_object_type_id, change.changed_object_id), None
-                        )
+                        sync_buffer.pop((change.changed_object_type_id, change.changed_object_id), None)
                     else:
                         self._apply_sync_update(change, logger, touched_object_keys, sync_buffer)
 
@@ -993,13 +955,13 @@ class Branch(JobsMixin, PrimaryModel):
             raise
 
         # Record the branch's last_synced time & update its status
-        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
+        logger.debug(f'Setting branch status to {BranchStatusChoices.READY}')
         self.last_sync = timezone.now()
         self.status = BranchStatusChoices.READY
         self.save(update_merge_sync_fields=True)
 
         # Record a branch event for the sync
-        logger.debug(f"Recording branch event: {BranchEventTypeChoices.SYNCED}")
+        logger.debug(f'Recording branch event: {BranchEventTypeChoices.SYNCED}')
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.SYNCED)
 
         # Emit post-sync signal
@@ -1017,12 +979,12 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info(f'Migrating branch {self} ({self.schema_name})')
 
         def migration_progress_callback(action, migration=None, fake=False):
-            if action == "apply_start":
+            if action == 'apply_start':
                 if fake:
-                    logger.debug(f"Faking migration {migration} (no branchable models affected)")
+                    logger.debug(f'Faking migration {migration} (no branchable models affected)')
                 else:
-                    logger.info(f"Applying migration {migration}")
-            elif action == "apply_success" and migration is not None:
+                    logger.info(f'Applying migration {migration}')
+            elif action == 'apply_success' and migration is not None:
                 self.applied_migrations.append(migration)
                 # Persist after each migration rather than only at the end. A migration is applied
                 # in its own transaction, so one which has succeeded stays applied even if the job
@@ -1034,7 +996,7 @@ class Branch(JobsMixin, PrimaryModel):
         pre_migrate.send(sender=self.__class__, branch=self, user=user)
 
         # Set Branch status
-        logger.debug(f"Setting branch status to {BranchStatusChoices.MIGRATING}")
+        logger.debug(f'Setting branch status to {BranchStatusChoices.MIGRATING}')
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MIGRATING)
 
         # Generate migration plan & apply any migrations
@@ -1079,15 +1041,15 @@ class Branch(JobsMixin, PrimaryModel):
                 self.status = BranchStatusChoices.FAILED
                 raise
         else:
-            logger.info("Found no migrations to apply")
+            logger.info('Found no migrations to apply')
 
         # Reset Branch status to ready
-        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
+        logger.debug(f'Setting branch status to {BranchStatusChoices.READY}')
         self.status = BranchStatusChoices.READY
         self.save(update_merge_sync_fields=True)
 
         # Record a branch event for the migration
-        logger.debug(f"Recording branch event: {BranchEventTypeChoices.MIGRATED}")
+        logger.debug(f'Recording branch event: {BranchEventTypeChoices.MIGRATED}')
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MIGRATED)
 
         # Emit post-migration signal
@@ -1106,22 +1068,22 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info(f'Merging branch {self} ({self.schema_name})')
 
         if not self.ready:
-            raise Exception(f"Branch {self} is not ready to merge")
+            raise Exception(f'Branch {self} is not ready to merge')
         if commit and not self.can_merge:
-            raise Exception("Merging this branch is not permitted.")
+            raise Exception('Merging this branch is not permitted.')
 
         # Emit pre-merge signal
         pre_merge.send(sender=self.__class__, branch=self, user=user)
 
         # Retrieve staged changes before we update the Branch's status
         if changes := self.get_unmerged_changes().order_by('time'):
-            logger.info(f"Found {len(changes)} changes to merge")
+            logger.info(f'Found {len(changes)} changes to merge')
         else:
-            logger.info("No changes found; aborting.")
+            logger.info('No changes found; aborting.')
             return
 
         # Update Branch status
-        logger.debug(f"Setting branch status to {BranchStatusChoices.MERGING}")
+        logger.debug(f'Setting branch status to {BranchStatusChoices.MERGING}')
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MERGING)
 
         # Create a dummy request for the event_tracking() context manager
@@ -1135,7 +1097,7 @@ class Branch(JobsMixin, PrimaryModel):
             with transaction.atomic():
                 # Get and execute the appropriate merge strategy
                 strategy_class = get_merge_strategy(self.merge_strategy)
-                logger.debug(f"Merging using {self.merge_strategy} strategy")
+                logger.debug(f'Merging using {self.merge_strategy} strategy')
                 strategy_class().merge(self, changes, request, logger, user)
 
                 if not commit:
@@ -1150,14 +1112,14 @@ class Branch(JobsMixin, PrimaryModel):
             raise
 
         # Update the Branch's status to "merged"
-        logger.debug(f"Setting branch status to {BranchStatusChoices.MERGED}")
+        logger.debug(f'Setting branch status to {BranchStatusChoices.MERGED}')
         self.status = BranchStatusChoices.MERGED
         self.merged_time = timezone.now()
         self.merged_by = user
         self.save(update_merge_sync_fields=True)
 
         # Record a branch event for the merge
-        logger.debug(f"Recording branch event: {BranchEventTypeChoices.MERGED}")
+        logger.debug(f'Recording branch event: {BranchEventTypeChoices.MERGED}')
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.MERGED)
 
         # Emit post-merge signal
@@ -1179,9 +1141,9 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info(f'Reverting branch {self} ({self.schema_name})')
 
         if not self.merged:
-            raise Exception("Only merged branches can be reverted.")
+            raise Exception('Only merged branches can be reverted.')
         if commit and not self.can_revert:
-            raise Exception("Reverting this branch is not permitted.")
+            raise Exception('Reverting this branch is not permitted.')
 
         # Emit pre-revert signal
         pre_revert.send(sender=self.__class__, branch=self, user=user)
@@ -1191,13 +1153,13 @@ class Branch(JobsMixin, PrimaryModel):
 
         # Retrieve applied changes before we update the Branch's status
         if changes := self.get_changes().order_by(strategy_class.revert_changes_ordering):
-            logger.info(f"Found {len(changes)} changes to revert")
+            logger.info(f'Found {len(changes)} changes to revert')
         else:
-            logger.info("No changes found; aborting.")
+            logger.info('No changes found; aborting.')
             return
 
         # Update Branch status
-        logger.debug(f"Setting branch status to {BranchStatusChoices.REVERTING}")
+        logger.debug(f'Setting branch status to {BranchStatusChoices.REVERTING}')
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.REVERTING)
 
         # Create a dummy request for the event_tracking() context manager
@@ -1210,7 +1172,7 @@ class Branch(JobsMixin, PrimaryModel):
         try:
             with transaction.atomic():
                 # Execute the revert strategy
-                logger.debug(f"Reverting using {self.merge_strategy} strategy")
+                logger.debug(f'Reverting using {self.merge_strategy} strategy')
                 strategy_class().revert(self, changes, request, logger, user)
 
                 if not commit:
@@ -1225,7 +1187,7 @@ class Branch(JobsMixin, PrimaryModel):
             raise
 
         # Update the Branch's status to "ready"
-        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
+        logger.debug(f'Setting branch status to {BranchStatusChoices.READY}')
         self.status = BranchStatusChoices.READY
         self.merged_time = None
         self.merged_by = None
@@ -1233,7 +1195,7 @@ class Branch(JobsMixin, PrimaryModel):
         self.save(update_merge_sync_fields=True)
 
         # Record a branch event for the merge
-        logger.debug(f"Recording branch event: {BranchEventTypeChoices.REVERTED}")
+        logger.debug(f'Recording branch event: {BranchEventTypeChoices.REVERTED}')
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.REVERTED)
 
         # Emit post-revert signal
@@ -1293,8 +1255,8 @@ class Branch(JobsMixin, PrimaryModel):
             # the workers in Phase 2 (which run on separate connections) can see
             # the newly-created schema and tables.
             with connection.cursor() as cursor:
-                cursor.execute("BEGIN")
-                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+                cursor.execute('BEGIN')
+                cursor.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
 
                 # A fresh branch's schema (a unique, randomly-named schema_id) should not
                 # already exist. If it does, it's an orphan left by a previous provision of
@@ -1305,23 +1267,21 @@ class Branch(JobsMixin, PrimaryModel):
                 # destroys data, so its (rare, expected-only-after-an-interrupted-provision)
                 # firing must be visible rather than silent and unconditional.
                 logger.debug(f'Creating schema {schema}')
-                cursor.execute(
-                    "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s", [schema]
-                )
+                cursor.execute('SELECT 1 FROM information_schema.schemata WHERE schema_name = %s', [schema])
                 if cursor.fetchone():
                     logger.warning(
-                        f"Schema {schema} already exists at provision time; dropping it before "
-                        f"recreating. This is expected only after a previously interrupted "
-                        f"provision of this branch."
+                        f'Schema {schema} already exists at provision time; dropping it before '
+                        f'recreating. This is expected only after a previously interrupted '
+                        f'provision of this branch.'
                     )
-                    cursor.execute(f"DROP SCHEMA IF EXISTS {quote_ident(schema)} CASCADE")
+                    cursor.execute(f'DROP SCHEMA IF EXISTS {quote_ident(schema)} CASCADE')
                 try:
-                    cursor.execute(f"CREATE SCHEMA {quote_ident(schema)}")
+                    cursor.execute(f'CREATE SCHEMA {quote_ident(schema)}')
                 except ProgrammingError as e:
                     if str(e).startswith('permission denied '):
                         logger.critical(
-                            f"Provisioning failed due to insufficient database permissions. Ensure that the NetBox "
-                            f"role ({settings.DATABASE['USER']}) has permission to create new schemas on this "
+                            f'Provisioning failed due to insufficient database permissions. Ensure that the NetBox '
+                            f'role ({settings.DATABASE["USER"]}) has permission to create new schemas on this '
                             f"database ({settings.DATABASE['NAME']}). (Use the PostgreSQL command 'GRANT CREATE ON "
                             f"DATABASE $database TO $role;' to grant the required permission.)"
                         )
@@ -1346,14 +1306,14 @@ class Branch(JobsMixin, PrimaryModel):
                 main_objectchange = f'{quote_ident(main_schema)}.{quote_ident(objectchange_table)}'
                 branch_objectchange = f'{quote_ident(schema)}.{quote_ident(objectchange_table)}'
                 logger.debug(f'Creating table {schema}.{objectchange_table}')
-                cursor.execute(f"CREATE TABLE {branch_objectchange} ( LIKE {main_objectchange} )")
+                cursor.execute(f'CREATE TABLE {branch_objectchange} ( LIKE {main_objectchange} )')
                 # Look the sequence up dynamically rather than assuming the
                 # <table>_id_seq naming convention (matches the Phase 2 copy).
                 cursor.execute("SELECT pg_get_serial_sequence(%s, 'id')", [main_objectchange])
                 row = cursor.fetchone()
                 if row and row[0]:
                     cursor.execute(
-                        f"ALTER TABLE {branch_objectchange} ALTER COLUMN id SET DEFAULT nextval(%s)",
+                        f'ALTER TABLE {branch_objectchange} ALTER COLUMN id SET DEFAULT nextval(%s)',
                         [row[0]],
                     )
 
@@ -1361,17 +1321,15 @@ class Branch(JobsMixin, PrimaryModel):
                 branch_migrations = f'{quote_ident(schema)}.django_migrations'
                 main_migrations = f'{quote_ident(main_schema)}.django_migrations'
                 logger.debug(f'Creating table {schema}.django_migrations')
-                cursor.execute(f"CREATE TABLE {branch_migrations} ( LIKE {main_migrations} )")
-                cursor.execute(f"INSERT INTO {branch_migrations} SELECT * FROM {main_migrations}")
-                cursor.execute(
-                    f"ALTER TABLE {branch_migrations} ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY"
-                )
+                cursor.execute(f'CREATE TABLE {branch_migrations} ( LIKE {main_migrations} )')
+                cursor.execute(f'INSERT INTO {branch_migrations} SELECT * FROM {main_migrations}')
+                cursor.execute(f'ALTER TABLE {branch_migrations} ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY')
                 # COALESCE guards against an empty django_migrations on main: MAX
                 # of no rows returns NULL, which would TypeError on + 1 below.
-                cursor.execute(f"SELECT COALESCE(MAX(id), 0) + 1 FROM {branch_migrations}")
+                cursor.execute(f'SELECT COALESCE(MAX(id), 0) + 1 FROM {branch_migrations}')
                 starting_id = cursor.fetchone()[0]
                 cursor.execute(
-                    f"ALTER SEQUENCE {quote_ident(schema)}.django_migrations_id_seq RESTART WITH {starting_id}"
+                    f'ALTER SEQUENCE {quote_ident(schema)}.django_migrations_id_seq RESTART WITH {starting_id}'
                 )
 
                 # Create empty destination tables (no indexes) for the parallel copy.
@@ -1380,11 +1338,11 @@ class Branch(JobsMixin, PrimaryModel):
                 for table in tables_to_replicate:
                     logger.debug(f'Creating table {schema}.{table}')
                     cursor.execute(
-                        f"CREATE TABLE {quote_ident(schema)}.{quote_ident(table)} "
-                        f"( LIKE {quote_ident(main_schema)}.{quote_ident(table)} )"
+                        f'CREATE TABLE {quote_ident(schema)}.{quote_ident(table)} '
+                        f'( LIKE {quote_ident(main_schema)}.{quote_ident(table)} )'
                     )
 
-                cursor.execute("COMMIT")
+                cursor.execute('COMMIT')
 
             # Order parallel work heaviest-table-first (longest-processing-time
             # scheduling) so a single large table can't be dispatched last and left
@@ -1397,9 +1355,9 @@ class Branch(JobsMixin, PrimaryModel):
             # workers import it; do not commit until every worker has finished.
             coordinator_commit_failed = False
             with connection.cursor() as cursor:
-                cursor.execute("BEGIN")
-                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-                cursor.execute("SELECT pg_export_snapshot()")
+                cursor.execute('BEGIN')
+                cursor.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+                cursor.execute('SELECT pg_export_snapshot()')
                 snapshot_token = cursor.fetchone()[0]
                 logger.debug(f'Exported snapshot {snapshot_token} for {len(tables_to_replicate)} tables')
 
@@ -1416,12 +1374,10 @@ class Branch(JobsMixin, PrimaryModel):
                     # here so it can't mask a worker exception that's already in
                     # flight — the original traceback is what the operator needs.
                     try:
-                        cursor.execute("COMMIT")
+                        cursor.execute('COMMIT')
                     except Exception:
                         coordinator_commit_failed = True
-                        logger.exception(
-                            "Failed to COMMIT Phase 2 coordinator transaction"
-                        )
+                        logger.exception('Failed to COMMIT Phase 2 coordinator transaction')
 
             # The copied data is already durable (each worker committed its own
             # transaction) and this coordinator transaction was read-only, so a failed
@@ -1502,8 +1458,8 @@ class Branch(JobsMixin, PrimaryModel):
                 raise
             except Exception:
                 logger.warning(
-                    f"ANALYZE of branch schema {schema} failed; planner statistics will be "
-                    f"populated by autovacuum instead.",
+                    f'ANALYZE of branch schema {schema} failed; planner statistics will be '
+                    f'populated by autovacuum instead.',
                     exc_info=True,
                 )
 
@@ -1517,19 +1473,21 @@ class Branch(JobsMixin, PrimaryModel):
             # connections), so only issue the ROLLBACK when the server actually
             # has an open transaction — an out-of-transaction ROLLBACK would emit
             # a spurious "no transaction in progress" warning.
-            if connection.connection is not None and \
-                    connection.connection.info.transaction_status != TransactionStatus.IDLE:
+            if (
+                connection.connection is not None
+                and connection.connection.info.transaction_status != TransactionStatus.IDLE
+            ):
                 try:
                     with connection.cursor() as cursor:
-                        cursor.execute("ROLLBACK")
+                        cursor.execute('ROLLBACK')
                 except Exception:
-                    logger.exception(f"Failed to roll back aborted transaction for {schema}")
+                    logger.exception(f'Failed to roll back aborted transaction for {schema}')
             # Clean up any partial state from the failed provision.
             try:
                 with connection.cursor() as cursor:
-                    cursor.execute(f"DROP SCHEMA IF EXISTS {quote_ident(schema)} CASCADE")
+                    cursor.execute(f'DROP SCHEMA IF EXISTS {quote_ident(schema)} CASCADE')
             except Exception:
-                logger.exception(f"Failed to drop schema {schema} during provision cleanup")
+                logger.exception(f'Failed to drop schema {schema} during provision cleanup')
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
             raise
 
@@ -1582,13 +1540,13 @@ class Branch(JobsMixin, PrimaryModel):
         """
         logger = logging.getLogger('netbox_branching.branch.provision')
         with connection.cursor() as cursor:
-            cursor.execute("BEGIN")
+            cursor.execute('BEGIN')
             try:
                 # Fetch trigger definitions with the main schema alone on the
                 # search_path so pg_get_triggerdef emits unqualified table and
                 # function names (both live in the main schema). Emitting them
                 # qualified would rebind the recreated trigger to the main table.
-                cursor.execute(f"SET LOCAL search_path = {quote_ident(main_schema)}")
+                cursor.execute(f'SET LOCAL search_path = {quote_ident(main_schema)}')
                 cursor.execute(
                     """
                     SELECT c.relname, pg_get_triggerdef(t.oid, true)
@@ -1607,18 +1565,16 @@ class Branch(JobsMixin, PrimaryModel):
                     # Recreate each trigger with the branch schema searched first so
                     # the unqualified table name binds to the branch copy, while the
                     # unqualified function name still resolves in the main schema.
-                    cursor.execute(
-                        f"SET LOCAL search_path = {quote_ident(schema)}, {quote_ident(main_schema)}"
-                    )
+                    cursor.execute(f'SET LOCAL search_path = {quote_ident(schema)}, {quote_ident(main_schema)}')
                     for table, triggerdef in triggerdefs:
                         logger.debug(f'Replicating trigger onto {schema}.{table}')
                         cursor.execute(triggerdef)
 
-                cursor.execute("COMMIT")
+                cursor.execute('COMMIT')
                 logger.debug(f'Replicated {len(triggerdefs)} trigger(s) onto schema {schema}')
             except Exception:
                 try:
-                    cursor.execute("ROLLBACK")
+                    cursor.execute('ROLLBACK')
                 except Exception:
                     # Don't let a broken connection mask the original failure
                     logger.exception(f'Failed to roll back trigger replication for {schema}')
@@ -1629,7 +1585,7 @@ class Branch(JobsMixin, PrimaryModel):
         Deprovision the Branch and set its status to "archived."
         """
         if not self.can_archive:
-            raise Exception("Archiving this branch is not permitted.")
+            raise Exception('Archiving this branch is not permitted.')
 
         # Drop the schema and flip the status atomically so a failure after the schema
         # has been dropped does not leave an un-archived Branch with no schema.
@@ -1653,9 +1609,7 @@ class Branch(JobsMixin, PrimaryModel):
         with connection.cursor() as cursor:
             # Delete the schema and all its tables
             logger.debug(f'Deleting schema {self.schema_name}')
-            cursor.execute(
-                f"DROP SCHEMA IF EXISTS {quote_ident(self.schema_name)} CASCADE"
-            )
+            cursor.execute(f'DROP SCHEMA IF EXISTS {quote_ident(self.schema_name)} CASCADE')
 
         # Emit post-deprovision signal
         post_deprovision.send(sender=self.__class__, branch=self)
@@ -1666,28 +1620,12 @@ class Branch(JobsMixin, PrimaryModel):
 
 
 class BranchEvent(models.Model):
-    time = models.DateTimeField(
-        auto_now_add=True,
-        editable=False
-    )
-    branch = models.ForeignKey(
-        to='netbox_branching.branch',
-        on_delete=models.CASCADE,
-        related_name='events'
-    )
+    time = models.DateTimeField(auto_now_add=True, editable=False)
+    branch = models.ForeignKey(to='netbox_branching.branch', on_delete=models.CASCADE, related_name='events')
     user = models.ForeignKey(
-        to=get_user_model(),
-        on_delete=models.SET_NULL,
-        blank=True,
-        null=True,
-        related_name='branch_events'
+        to=get_user_model(), on_delete=models.SET_NULL, blank=True, null=True, related_name='branch_events'
     )
-    type = models.CharField(
-        verbose_name=_('type'),
-        max_length=50,
-        choices=BranchEventTypeChoices,
-        editable=False
-    )
+    type = models.CharField(verbose_name=_('type'), max_length=50, choices=BranchEventTypeChoices, editable=False)
 
     objects = RestrictedQuerySet.as_manager()
 

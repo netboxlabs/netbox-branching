@@ -1,6 +1,7 @@
 import django_tables2 as tables
-from core.tables import ObjectChangeTable
 from django.utils.translation import gettext_lazy as _
+
+from core.tables import ObjectChangeTable
 from utilities.tables import register_table_column
 
 __all__ = (
@@ -79,9 +80,5 @@ class DiffColumn(tables.TemplateColumn):
 
 
 # Register a table column to include the Branch associated with each record in ObjectChangeTable
-branch_column = tables.Column(
-    accessor=tables.A('application__branch'),
-    linkify=True,
-    verbose_name=_('Branch')
-)
+branch_column = tables.Column(accessor=tables.A('application__branch'), linkify=True, verbose_name=_('Branch'))
 register_table_column(branch_column, 'branch', ObjectChangeTable)

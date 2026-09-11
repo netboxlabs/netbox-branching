@@ -5,15 +5,19 @@
 {% load render_table from django_tables2 %}
 {% load i18n %}
 {% load branch_buttons %}
-
 {% block extra_controls %}
   {% if not object.is_active %}
     {% if object.ready %}
-      <a href="?_branch={{ object.schema_id }}" class="btn btn-green" role="button">
+      <a href="?_branch={{ object.schema_id }}"
+         class="btn btn-green"
+         role="button">
         <i class="mdi mdi-check-bold"></i> {% trans "Activate" %}
       </a>
     {% else %}
-      <a href="?_branch={{ object.schema_id }}" class="btn btn-green disabled" role="button" aria-disabled="true">
+      <a href="?_branch={{ object.schema_id }}"
+         class="btn btn-green disabled"
+         role="button"
+         aria-disabled="true">
         <i class="mdi mdi-check-bold"></i> {% trans "Activate" %}
       </a>
     {% endif %}
@@ -31,10 +35,10 @@
     {% branch_archive_button object %}
   {% endif %}
 {% endblock %}
-
 {% block content %}
   {% if is_stuck %}
-    <div class="alert alert-warning d-flex justify-content-between align-items-center" role="alert">
+    <div class="alert alert-warning d-flex justify-content-between align-items-center"
+         role="alert">
       <i class="mdi mdi-alert fs-1 text-warning"></i>
       <div class="flex-grow-1 ms-3">
         <h4 class="alert-title text-warning mb-0">
@@ -54,38 +58,43 @@
     </div>
   {% endif %}
   {% if last_job_errored %}
-    <div class="alert alert-danger d-flex justify-content-between align-items-start" role="alert">
+    <div class="alert alert-danger d-flex justify-content-between align-items-start"
+         role="alert">
       <div>
         <h4 class="alert-title">
           <i class="mdi mdi-alert"></i>
           {% blocktrans with url=last_job.get_absolute_url name=last_job.name %}The <a href="{{ url }}" class="alert-link">last job</a> ({{ name }}) failed with an error.{% endblocktrans %}
         </h4>
         {% if last_job.data.report %}
-          <div class="text-secondary">{% blocktrans count count=last_job.data.report|length %}{{ count }} error occurred.{% plural %}{{ count }} errors occurred.{% endblocktrans %}</div>
+          <div class="text-secondary">
+            {% blocktrans count count=last_job.data.report|length %}{{ count }} error occurred.{% plural %}{{ count }} errors occurred.{% endblocktrans %}
+          </div>
         {% else %}
           <div class="text-secondary">{{ last_job.error }}</div>
         {% endif %}
       </div>
       {% if last_merge_job_errored and last_merge_job.data.report %}
-        <a href="{% url 'plugins:netbox_branching:branch_job-report' pk=object.pk %}" class="btn btn-sm btn-outline-danger ms-3 text-nowrap">
+        <a href="{% url 'plugins:netbox_branching:branch_job-report' pk=object.pk %}"
+           class="btn btn-sm btn-outline-danger ms-3 text-nowrap">
           <i class="mdi mdi-file-document-outline"></i> {% trans "View Report" %}
         </a>
       {% endif %}
     </div>
   {% endif %}
   {% with days_remaining=object.stale_warning %}
-  {% if days_remaining %}
-    <div class="alert alert-warning d-flex align-items-center" role="alert">
-      <i class="mdi mdi-alert fs-1 text-warning me-3"></i>
-      <div>
-        <h4 class="alert-title text-warning mb-0">{% trans "Branch is at risk of becoming stale" %}</h4>
-        {% blocktrans count days=days_remaining %}This branch will become stale in {{ days }} day. Sync the branch to avoid losing the ability to merge.{% plural %}This branch will become stale in {{ days }} days. Sync the branch to avoid losing the ability to merge.{% endblocktrans %}
+    {% if days_remaining %}
+      <div class="alert alert-warning d-flex align-items-center" role="alert">
+        <i class="mdi mdi-alert fs-1 text-warning me-3"></i>
+        <div>
+          <h4 class="alert-title text-warning mb-0">{% trans "Branch is at risk of becoming stale" %}</h4>
+          {% blocktrans count days=days_remaining %}This branch will become stale in {{ days }} day. Sync the branch to avoid losing the ability to merge.{% plural %}This branch will become stale in {{ days }} days. Sync the branch to avoid losing the ability to merge.{% endblocktrans %}
+        </div>
       </div>
-    </div>
-  {% endif %}
+    {% endif %}
   {% endwith %}
   {% if object.pending_migrations %}
-    <div class="alert alert-warning d-flex justify-content-between align-items-center" role="alert">
+    <div class="alert alert-warning d-flex justify-content-between align-items-center"
+         role="alert">
       <i class="mdi mdi-alert fs-1 text-warning"></i>
       <div class="flex-grow-1">
         <h4 class="alert-title text-warning mb-0">
@@ -99,7 +108,7 @@
     </div>
   {% endif %}
   <div class="row">
-	  <div class="col col-md-6">
+    <div class="col col-md-6">
       <div class="card">
         <h5 class="card-header">{% trans "Branch" %}</h5>
         <table class="table table-hover attr-table">
@@ -142,11 +151,13 @@
               {% if object.last_sync %}
                 {{ object.last_sync|isodatetime }}
                 {% if object.is_stale %}
-                  <span class="text-danger" title="{% trans "Branch is stale and can no longer be synced" %}">
+                  <span class="text-danger"
+                        title="{% trans "Branch is stale and can no longer be synced" %}">
                     <i class="mdi mdi-alert-circle"></i>
                   </span>
                 {% elif object.stale_warning %}
-                  <span class="text-warning" title="{% trans "Branch is at risk of becoming stale" %}">
+                  <span class="text-warning"
+                        title="{% trans "Branch is at risk of becoming stale" %}">
                     <i class="mdi mdi-alert"></i>
                   </span>
                 {% endif %}
@@ -172,7 +183,8 @@
                 {{ ''|placeholder }}
               {% elif conflicts_count %}
                 <span class="text-red"><i class="mdi mdi-alert"></i></span>
-                <a href="{% url 'plugins:netbox_branching:branch_diff' pk=object.pk %}?has_conflicts=True" class="text-red">{{ conflicts_count }} {% trans "conflicts found" %}</a>
+                <a href="{% url 'plugins:netbox_branching:branch_diff' pk=object.pk %}?has_conflicts=True"
+                   class="text-red">{{ conflicts_count }} {% trans "conflicts found" %}</a>
               {% else %}
                 <span class="text-green">
                   <i class="mdi mdi-check-bold"></i>
@@ -204,19 +216,18 @@
               <div class="row align-items-center">
                 {% if event.pk %}
                   {# Event object #}
-                  <div class="col-3 text-end">
-                    {% badge event.get_type_display bg_color=event.get_type_color %}
-                  </div>
+                  <div class="col-3 text-end">{% badge event.get_type_display bg_color=event.get_type_color %}</div>
                   <div class="col text-truncate">
-                    <span>{{ event.get_type_display }}{% if event.user %} by <strong>{{ event.user }}</strong>{% endif %}</span>
+                    <span>{{ event.get_type_display }}
+                      {% if event.user %}by <strong>{{ event.user }}</strong>{% endif %}
+                    </span>
                     <small class="d-block text-muted">{{ event.time|isodatetime }}</small>
                   </div>
                 {% else %}
                   {# Change summary #}
                   <div class="col offset-3 text-truncate">
-                    <a href="{% url 'plugins:netbox_branching:branch_changes-ahead' pk=object.pk %}?time_after={{ event.start.isoformat }}&time_before={{ event.end.isoformat }}" class="text-muted">
-                      {{ event.count }} {% trans "changes" %}
-                    </a>
+                    <a href="{% url 'plugins:netbox_branching:branch_changes-ahead' pk=object.pk %}?time_after={{ event.start.isoformat }}&time_before={{ event.end.isoformat }}"
+                       class="text-muted">{{ event.count }} {% trans "changes" %}</a>
                   </div>
                 {% endif %}
               </div>
@@ -235,7 +246,8 @@
         <h5 class="card-header text-green">{% trans "Created" %}</h5>
         <ul class="list-group list-group-flush">
           {% for ct, count in stats.created.items %}
-            <a href="{% url 'plugins:netbox_branching:branch_changes-ahead' pk=object.pk %}?action=create&changed_object_type_id={{ ct.pk }}" class="list-group-item list-group-item-action d-flex justify-content-between">
+            <a href="{% url 'plugins:netbox_branching:branch_changes-ahead' pk=object.pk %}?action=create&changed_object_type_id={{ ct.pk }}"
+               class="list-group-item list-group-item-action d-flex justify-content-between">
               {{ ct.model_class|meta:'verbose_name'|bettertitle }}
               <span class="badge">{{ count }}</span>
             </a>
@@ -250,7 +262,8 @@
         <h5 class="card-header text-yellow">{% trans "Updated" %}</h5>
         <ul class="list-group list-group-flush">
           {% for ct, count in stats.updated.items %}
-            <a href="{% url 'plugins:netbox_branching:branch_changes-ahead' pk=object.pk %}?action=update&changed_object_type_id={{ ct.pk }}" class="list-group-item list-group-item-action d-flex justify-content-between">
+            <a href="{% url 'plugins:netbox_branching:branch_changes-ahead' pk=object.pk %}?action=update&changed_object_type_id={{ ct.pk }}"
+               class="list-group-item list-group-item-action d-flex justify-content-between">
               {{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}
               <span class="badge">{{ count }}</span>
             </a>
@@ -265,7 +278,8 @@
         <h5 class="card-header text-red">{% trans "Deleted" %}</h5>
         <ul class="list-group list-group-flush">
           {% for ct, count in stats.deleted.items %}
-            <a href="{% url 'plugins:netbox_branching:branch_changes-ahead' pk=object.pk %}?action=delete&changed_object_type_id={{ ct.pk }}" class="list-group-item list-group-item-action d-flex justify-content-between">
+            <a href="{% url 'plugins:netbox_branching:branch_changes-ahead' pk=object.pk %}?action=delete&changed_object_type_id={{ ct.pk }}"
+               class="list-group-item list-group-item-action d-flex justify-content-between">
               {{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}
               <span class="badge">{{ count }}</span>
             </a>
@@ -277,8 +291,6 @@
     </div>
   </div>
   <div class="row mb-3">
-    <div class="col col-md-12">
-      {% plugin_full_width_page object %}
-    </div>
+    <div class="col col-md-12">{% plugin_full_width_page object %}</div>
   </div>
 {% endblock %}

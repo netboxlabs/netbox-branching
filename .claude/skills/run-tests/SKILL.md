@@ -5,7 +5,7 @@ description: Run the netbox_branching plugin's Django test suite against a local
 
 # Run the plugin's test suite
 
-This plugin uses Django's built-in test runner (`django.test.TestCase`), **not** pytest — `pyproject.toml` lists `pytest` as a test extra but the suite is invoked via NetBox's `manage.py test`. CI runs this exact command in `.github/workflows/lint-tests.yaml`.
+This plugin uses Django's built-in test runner (`django.test.TestCase`), **not** pytest — `pyproject.toml` lists `pytest` as a test extra but the suite is invoked via NetBox's `manage.py test`. CI runs this exact command in `.github/workflows/test.yml`.
 
 ## Canonical command
 
@@ -20,14 +20,17 @@ This is the same command CI runs. Add `-v 2` to print each test as it executes; 
 ## Prerequisites (one-time setup)
 
 1. NetBox checkout alongside this repo (`../netbox` or any sibling path).
-2. `testing/configuration.py` symlinked into NetBox:
+2. `testing/configuration.py` made visible to NetBox. CI does this without touching the
+   NetBox checkout, and so can you:
    ```bash
-   ln -sf "$PWD/testing/configuration.py" ../netbox/netbox/netbox/configuration.py
+   export NETBOX_CONFIGURATION=configuration
+   export PYTHONPATH="$PWD/testing"
    ```
-   This config sets `PLUGINS = ['netbox_branching']`, wraps `DATABASES` with `DynamicSchemaDict`, adds `BranchAwareRouter` to `DATABASE_ROUTERS`, and points at a local Postgres + Redis on default ports (`netbox` / `netbox` / `netbox`).
+   A symlink into `../netbox/netbox/netbox/configuration.py` also works, but overwrites
+   whatever config that checkout already has. This config sets `PLUGINS = ['netbox_branching']`, wraps `DATABASES` with `DynamicSchemaDict`, adds `BranchAwareRouter` to `DATABASE_ROUTERS`, and points at a local Postgres + Redis on default ports (`netbox` / `netbox` / `netbox`).
 3. Plugin installed in editable mode with test extras:
    ```bash
-   pip install -e '.[dev,test]'
+   pip install -e '.[dev,test,docs]'
    ```
 4. NetBox dependencies installed: `pip install -r ../netbox/requirements.txt`.
 5. Postgres + Redis reachable on localhost (defaults).
@@ -80,5 +83,5 @@ python netbox/manage.py makemigrations netbox_branching
 ## References
 
 - [`AGENTS.md`](../../../AGENTS.md) "Testing" and "Development" sections — environment setup and layout.
-- [`.github/workflows/lint-tests.yaml`](../../../.github/workflows/lint-tests.yaml) — authoritative CI invocation.
+- [`.github/workflows/test.yml`](../../../.github/workflows/test.yml) — authoritative CI invocation.
 - [`testing/configuration.py`](../../../testing/configuration.py) — NetBox config the test runner uses.

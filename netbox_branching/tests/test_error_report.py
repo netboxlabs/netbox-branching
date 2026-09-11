@@ -5,13 +5,14 @@ This module classifies exceptions raised during merge/revert into structured
 report entries that surface in the job log. It is pure parsing/string-shaping
 logic with no DB access, so the tests run as SimpleTestCase.
 """
+
 from types import SimpleNamespace
 
-from dcim.models import Site
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.test import SimpleTestCase
 
+from dcim.models import Site
 from netbox_branching.choices import BranchMergeStrategyChoices
 from netbox_branching.constants import PG_UNIQUE_VIOLATION
 from netbox_branching.error_report import (
@@ -27,6 +28,7 @@ class _FakePgCause(Exception):
     Stand-in for the psycopg exception chained to a Django IntegrityError.
     Must derive from BaseException to be assignable to __cause__.
     """
+
     def __init__(self, sqlstate, table_name=None, constraint_name=None, message_detail=None):
         super().__init__()
         self.sqlstate = sqlstate
@@ -106,14 +108,15 @@ class BuildErrorReportTestCase(SimpleTestCase):
 
 
 class GetEntryMessageTestCase(SimpleTestCase):
-
     def test_unique_constraint_with_full_context_includes_model_field_value(self):
-        msg = get_entry_message({
-            'type': 'unique_constraint',
-            'model': 'site',
-            'field': 'slug',
-            'value': 'my-site',
-        })
+        msg = get_entry_message(
+            {
+                'type': 'unique_constraint',
+                'model': 'site',
+                'field': 'slug',
+                'value': 'my-site',
+            }
+        )
         # Don't pin the exact translated string — verify it carries the salient parts
         self.assertIn('Site', msg)
         self.assertIn('slug', msg)

@@ -1,0 +1,193 @@
+---
+# .github/workflows/test.yml
+#
+# PR validation: lint (pre-commit + mkdocs) then test matrix. The test job is
+# gated on the lint job passing, so expensive CI minutes are spent only on
+# green code. The Python axis lists the interpreter versions this plugin
+# supports; the NetBox axis covers the declared min / max supported versions
+# plus main as an early-warning canary.
+#
+# Test config:
+#   testing/configuration.py is loaded via NETBOX_CONFIGURATION + PYTHONPATH
+#   rather than symlinked into the NetBox checkout. The plugin is installed
+#   editable so its tests package resolves from the source tree.
+#
+# NetBox ref override:
+#   A PR labelled `test-against:<ref>` swaps the `main` leg for that ref;
+#   workflow_dispatch takes an explicit ref. Both let a PR be validated
+#   against an unreleased NetBox branch. All three sources are resolved and
+#   validated in one step, so the checkout consumes only its output.
+#
+# Coverage:
+#   Collected on a SINGLE matrix leg (see the matrix `include`). The suite is
+#   not run with --parallel: branch provisioning is schema-scoped and has not
+#   been validated against Django's parallel test runner.
+
+name: Test
+
+"on":
+  workflow_dispatch:
+    inputs:
+      netbox_ref:
+        description: 'NetBox ref to checkout (branch, tag, or commit)'
+        required: false
+        default: 'main'
+        type: string
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (pre-commit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        # actions/checkout v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Setup Python
+        # actions/setup-python v6.2.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install docs and lint tooling
+        # The mkdocs-build pre-commit hook shells out to the local mkdocs.
+        run: |
+          python -m pip install --upgrade pip
+          pip install pre-commit
+          pip install '.[docs]'
+      - name: Run pre-commit
+        run: pre-commit run --all-files --show-diff-on-failure --color=always
+
+  test:
+    name: >-
+      py${{ matrix.python-version }} / netbox-${{ matrix.netbox-ref }}${{
+      matrix.coverage && ' (coverage)' || '' }}
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NETBOX_CONFIGURATION: configuration
+      PYTHONPATH: ${{ github.workspace }}/netbox-branching/testing
+      COVERAGE_RCFILE: ${{ github.workspace }}/netbox-branching/pyproject.toml
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13', '3.14']
+        netbox-ref:
+          - 'v4.7.0'
+          - 'main'
+        include:
+          - coverage: false
+          # Collect coverage once, on the newest Python against NetBox main.
+          - python-version: '3.14'
+            netbox-ref: 'main'
+            coverage: true
+    services:
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      postgres:
+        image: postgres
+        env:
+          POSTGRES_USER: netbox
+          POSTGRES_PASSWORD: netbox
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout plugin
+        # actions/checkout v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: netbox-branching
+          persist-credentials: false
+
+      - name: Resolve NetBox ref
+        id: netbox-ref
+        # A `test-against:<ref>` PR label, or the workflow_dispatch input,
+        # overrides the `main` leg only; the declared-floor leg always runs.
+        env:
+          MATRIX_REF: ${{ matrix.netbox-ref }}
+          INPUT_REF: ${{ inputs.netbox_ref }}
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          REF="${INPUT_REF:-$MATRIX_REF}"
+          if [[ -z "$INPUT_REF" && "$MATRIX_REF" == "main" ]]; then
+            # LABELS is `null` for push / workflow_dispatch events.
+            OVERRIDE=$(jq -r 'if type == "array" then .[] else empty end
+              | select(startswith("test-against:")) | split(":")[1]' \
+              <<<"$LABELS" | head -n1)
+            if [[ -n "$OVERRIDE" && "$OVERRIDE" != "null" ]]; then
+              REF="$OVERRIDE"
+            fi
+          fi
+          # Only plain branch/tag names. Blocks refs/pull/N/head, which would
+          # run unreviewed upstream code on the runner.
+          if [[ ! "$REF" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::Refusing to check out NetBox ref '$REF';" \
+              "expected a plain branch or tag name."
+            exit 1
+          fi
+          echo "Testing against NetBox ref: $REF"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout NetBox
+        # actions/checkout v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: netbox-community/netbox
+          ref: ${{ steps.netbox-ref.outputs.ref }}
+          path: netbox
+          persist-credentials: false
+
+      - name: Setup Python ${{ matrix.python-version }}
+        # actions/setup-python v6.2.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install NetBox dependencies
+        working-directory: netbox
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install plugin (editable, with test extras)
+        working-directory: netbox-branching
+        run: pip install -e '.[test]'
+
+      - name: Run tests
+        if: ${{ ! matrix.coverage }}
+        working-directory: netbox
+        run: python netbox/manage.py test netbox_branching.tests --keepdb
+
+      - name: Run tests with coverage
+        if: ${{ matrix.coverage }}
+        working-directory: netbox
+        run: coverage run netbox/manage.py test netbox_branching.tests --keepdb
+
+      - name: Show coverage report
+        if: ${{ matrix.coverage }}
+        working-directory: netbox
+        run: coverage report

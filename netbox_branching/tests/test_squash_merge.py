@@ -1,17 +1,18 @@
 """
 Tests for Branch merge functionality with ObjectChange collapsing using squash merge strategy.
 """
+
 import uuid
 
-from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
-from dcim.models import Device, Interface, Location, Region, Site, VirtualChassis
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
+
+from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
+from dcim.models import Device, Interface, Location, Region, Site, VirtualChassis
 from ipam.models import IPAddress
 from netbox.context_managers import event_tracking
-
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.utilities import activate_branch
 
@@ -262,19 +263,11 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
         # In branch: create Circuit and CircuitTermination with circular dependency
         with activate_branch(branch), event_tracking(request):
             # Step 1: Create Circuit without termination_a (will be NULL initially)
-            circuit = Circuit.objects.create(
-                cid='TEST-001',
-                provider=provider,
-                type=circuit_type
-            )
+            circuit = Circuit.objects.create(cid='TEST-001', provider=provider, type=circuit_type)
             circuit_id = circuit.id
 
             # Step 2: Create CircuitTermination pointing to the Circuit
-            termination = CircuitTermination.objects.create(
-                circuit=circuit,
-                termination=site,
-                term_side='A'
-            )
+            termination = CircuitTermination.objects.create(circuit=circuit, termination=site, term_side='A')
             termination_id = termination.id
 
             # Step 3: Update Circuit to set termination_a to the CircuitTermination
@@ -467,10 +460,16 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
             vc = VirtualChassis.objects.create(name='VC1')
 
             device1 = Device.objects.create(
-                name='Device 1', site=site, device_type=self.device_type, role=self.device_role,
+                name='Device 1',
+                site=site,
+                device_type=self.device_type,
+                role=self.device_role,
             )
             device2 = Device.objects.create(
-                name='Device 2', site=site, device_type=self.device_type, role=self.device_role,
+                name='Device 2',
+                site=site,
+                device_type=self.device_type,
+                role=self.device_role,
             )
 
             # The primary IP of device1 lives on an interface of device2.
@@ -544,7 +543,7 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
                 physical_address='123 Initial St',
                 latitude=10.0,
                 longitude=20.0,
-                region=region1
+                region=region1,
             )
             site_id = site.id
 
@@ -577,10 +576,7 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
 
         # Verify multiple ObjectChanges were created
         site_ct = ContentType.objects.get_for_model(Site)
-        changes = branch.get_unmerged_changes().filter(
-            changed_object_type=site_ct,
-            changed_object_id=site_id
-        )
+        changes = branch.get_unmerged_changes().filter(changed_object_type=site_ct, changed_object_id=site_id)
         # Should have 1 create + 4 updates = 5 changes
         self.assertEqual(changes.count(), 5)
         actions = [c.action for c in changes.order_by('time')]
@@ -660,10 +656,7 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
         self.assertTrue(IPAddress.objects.filter(id=ip_id).exists())
         merged_ip = IPAddress.objects.get(id=ip_id)
         self.assertEqual(merged_ip.assigned_object_id, iface_id)
-        self.assertEqual(
-            merged_ip.assigned_object_type,
-            ContentType.objects.get_for_model(Interface)
-        )
+        self.assertEqual(merged_ip.assigned_object_type, ContentType.objects.get_for_model(Interface))
 
         # Verify branch status
         branch.refresh_from_db()
@@ -743,10 +736,7 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
         self.assertTrue(IPAddress.objects.filter(id=ip_id).exists())
         merged_ip = IPAddress.objects.get(id=ip_id)
         self.assertEqual(merged_ip.assigned_object_id, iface_id)
-        self.assertEqual(
-            merged_ip.assigned_object_type,
-            ContentType.objects.get_for_model(Interface)
-        )
+        self.assertEqual(merged_ip.assigned_object_type, ContentType.objects.get_for_model(Interface))
 
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
@@ -973,9 +963,7 @@ class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
         """
         # Site exists in main BEFORE provisioning so the branch inherits it
         with event_tracking(self._make_request()):
-            site = Site.objects.create(
-                name='Doomed Site', slug='doomed-site', description='Original'
-            )
+            site = Site.objects.create(name='Doomed Site', slug='doomed-site', description='Original')
         site_id = site.id
 
         branch = self._create_and_provision_branch()
