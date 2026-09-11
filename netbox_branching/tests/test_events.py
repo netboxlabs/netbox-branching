@@ -74,7 +74,7 @@ class AddBranchContextTestCase(TransactionTestCase):
         self.assertEqual(data['active_branch'], {
             'id': self.branch.pk,
             'name': self.branch.name,
-            'schema_id': self.branch.schema_id,
+            'backend_id': self.branch.backend_id,
         })
 
     @override_settings(EVENTS_PIPELINE=ENRICHED_PIPELINE)

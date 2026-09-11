@@ -225,7 +225,7 @@ class BranchJobReportView(generic.ObjectView):
                         # Object may only exist in the branch schema (e.g. created in branch, conflicts on merge)
                         obj = ct.model_class()._default_manager.using(instance.connection_name).get(pk=obj_id)
                     if hasattr(obj, 'get_absolute_url'):
-                        object_url = f'{obj.get_absolute_url()}?{QUERY_PARAM}={instance.schema_id}'
+                        object_url = f'{obj.get_absolute_url()}?{QUERY_PARAM}={instance.backend_id}'
                     object_str = str(obj)
                     if not entry.get('value') and (field := entry.get('field')):
                         value = getattr(obj, field, None)

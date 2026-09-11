@@ -22,8 +22,8 @@ class ConfigTestCase(TestCase):
         }
     })
     def test_schema_prefix(self):
-        branch = Branch(name='Branch 5')
-        self.assertEqual(branch.schema_name, f'dummy_{branch.schema_id}')
+        branch = Branch(name='Branch 5', backend_id='abcd1234')
+        self.assertEqual(branch.schema_name, 'dummy_abcd1234')
 
 
 class DynamicSchemaDictTestCase(TestCase):

@@ -96,15 +96,64 @@ class BranchTestCase(TransactionTestCase):
             row = fetchone(cursor)
             self.assertIsNone(row)
 
-    def test_branch_schema_id(self):
+    def test_delete_unprovisioned_branch(self):
+        """
+        A Branch whose provisioning never ran has no backend ID and therefore no
+        schema; deleting it must not attempt a DROP SCHEMA.
+        """
         branch = Branch(name='Branch 1')
-        self.assertIsNotNone(branch.schema_id, msg="Schema ID has not been set")
-        self.assertIsNotNone(re.match(r'^[a-z0-9]{8}', branch.schema_id), msg="Schema ID does not conform")
-        schema_id = branch.schema_id
+        branch.save(provision=False)
+        self.assertIsNone(branch.backend_id)
 
+        branch_pk = branch.pk
+        branch.delete()
+
+        self.assertFalse(Branch.objects.filter(pk=branch_pk).exists())
+
+    def test_branch_backend_id(self):
+        """
+        The backend ID is assigned by the branching backend during provisioning, not
+        when the Branch is created, and is stable thereafter.
+        """
+        branch = Branch(name='Branch 1')
         branch.save(provision=False)
         branch.refresh_from_db()
-        self.assertEqual(branch.schema_id, schema_id, msg="Schema ID was changed during save()")
+        self.assertIsNone(branch.backend_id, msg="Backend ID was set before provisioning")
+
+        branch.provision(user=None)
+        branch.refresh_from_db()
+        self.assertIsNotNone(branch.backend_id, msg="Backend ID has not been set")
+        self.assertIsNotNone(
+            re.match(r'^[a-z0-9]{8}$', branch.backend_id), msg="Backend ID does not conform"
+        )
+        backend_id = branch.backend_id
+
+        branch.save()
+        branch.refresh_from_db()
+        self.assertEqual(branch.backend_id, backend_id, msg="Backend ID was changed during save()")
+
+    def test_backend_id_cannot_be_changed(self):
+        """
+        The backend ID addresses the branch's isolated dataset, so reassigning it would
+        orphan the data the branch already holds.
+        """
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+        branch.set_backend_id('abcd1234')
+
+        # Re-assigning the same value is permitted, so a retried provision need not
+        # special-case an identifier it already assigned
+        branch.set_backend_id('abcd1234')
+
+        with self.assertRaises(ValueError):
+            branch.set_backend_id('wxyz5678')
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.backend_id, 'abcd1234')
+
+    def test_schema_name_requires_a_backend_id(self):
+        with self.assertRaises(ValueError):
+            _ = Branch(name='Branch 1').schema_name
 
     @override_settings(PLUGINS_CONFIG={
         'netbox_branching': {
@@ -251,6 +300,45 @@ class BranchTestCase(TransactionTestCase):
         self.assertEqual(updated.name, 'Renamed Branch')
         self.assertEqual(updated.status, BranchStatusChoices.READY)
         self.assertEqual(updated.last_sync, sync_time)
+
+    def test_edit_form_preserves_backend_fields(self):
+        """
+        The branch's identity is assigned asynchronously by the provisioning job, so an
+        instance loaded before provisioning completes carries a null backend_id. Saving
+        that instance must not write the null back over the assigned value: doing so
+        orphans the branch's dataset, leaving it unreachable and undeprovisionable.
+        """
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+
+        # Simulate a form instance loaded before provisioning assigned an identifier
+        stale_instance = Branch.objects.get(pk=branch.pk)
+        self.assertIsNone(stale_instance.backend_id)
+
+        # Concurrently, the provisioning job assigns the branch's identity
+        connection_params = {'HOST': 'replica.example.com'}
+        Branch.objects.filter(pk=branch.pk).update(
+            backend_id='abc123',
+            connection_params=connection_params,
+        )
+
+        # The user submits the edit form against the stale instance
+        form = BranchForm(
+            data={'name': 'Renamed Branch', 'description': '', 'comments': ''},
+            instance=stale_instance,
+        )
+        self.assertTrue(form.is_valid(), msg=form.errors)
+        form.save()
+
+        # The name change persisted, the backend's fields were not clobbered
+        updated = Branch.objects.get(pk=branch.pk)
+        self.assertEqual(updated.name, 'Renamed Branch')
+        self.assertEqual(updated.backend_id, 'abc123')
+        self.assertEqual(updated.connection_params, connection_params)
+
+        # And the saved instance reflects the current state
+        self.assertEqual(stale_instance.backend_id, 'abc123')
+        self.assertEqual(stale_instance.connection_params, connection_params)
 
     def test_delete_transitional_branch_preserves_schema(self):
         """
@@ -489,16 +577,24 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         # any schemas these tests create and drop them in tearDown so --keepdb
         # runs don't accumulate orphans.
         super().setUp()
-        self._provisioned_schemas = []
+        self._provisioned_branches = []
 
     def tearDown(self):
-        for schema_name in self._provisioned_schemas:
+        for branch in self._provisioned_branches:
+            if not branch.backend_id:
+                # Never got as far as being assigned an identifier, so no schema exists
+                continue
             with connection.cursor() as cursor:
-                cursor.execute(f'DROP SCHEMA IF EXISTS {quote_ident(schema_name)} CASCADE')
+                cursor.execute(f'DROP SCHEMA IF EXISTS {quote_ident(branch.schema_name)} CASCADE')
         super().tearDown()
 
     def _track(self, branch):
-        self._provisioned_schemas.append(branch.schema_name)
+        """
+        Register a Branch whose schema must be dropped in tearDown. The schema name is
+        not known until provisioning assigns the branch a backend ID, so hold the Branch
+        itself and resolve the name lazily.
+        """
+        self._provisioned_branches.append(branch)
         return branch
 
     def test_provision_preserves_every_main_schema_index(self):
@@ -537,10 +633,10 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         Phase 2 must call parallel_copy_tables with a non-empty snapshot token
         of the format pg_export_snapshot() returns.
         """
-        from netbox_branching.models import branches as branches_module
+        from netbox_branching.backends import schema as schema_backend
 
         captured = {}
-        original = branches_module.parallel_copy_tables
+        original = schema_backend.parallel_copy_tables
 
         def spy(*, tables, snapshot_token, schema, main_schema, workers):
             captured['token'] = snapshot_token
@@ -554,13 +650,13 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
                 workers=workers,
             )
 
-        branches_module.parallel_copy_tables = spy
+        schema_backend.parallel_copy_tables = spy
         try:
             branch = self._track(Branch(name='SnapshotImport'))
             branch.save(provision=False)
             branch.provision(user=None)
         finally:
-            branches_module.parallel_copy_tables = original
+            schema_backend.parallel_copy_tables = original
 
         self.assertIn('token', captured, msg="parallel_copy_tables was never invoked")
         # pg_export_snapshot() returns digits and dashes (occasionally hex).
@@ -573,21 +669,21 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         CASCADE and a FAILED branch status — matching the rollback semantics
         of the previous single-transaction implementation.
         """
-        from netbox_branching.models import branches as branches_module
+        from netbox_branching.backends import schema as schema_backend
 
-        original = branches_module.parallel_copy_tables
+        original = schema_backend.parallel_copy_tables
 
         def boom(*, tables, snapshot_token, schema, main_schema, workers):
             raise RuntimeError("simulated worker failure")
 
-        branches_module.parallel_copy_tables = boom
+        schema_backend.parallel_copy_tables = boom
         try:
             branch = self._track(Branch(name='FailureCleanup'))
             branch.save(provision=False)
             with self.assertRaisesRegex(RuntimeError, 'simulated worker failure'):
                 branch.provision(user=None)
         finally:
-            branches_module.parallel_copy_tables = original
+            schema_backend.parallel_copy_tables = original
 
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.FAILED)
@@ -608,21 +704,21 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         pins down that the outer except block cleans up a fully-populated schema —
         not just the empty-schema state a Phase 2 failure leaves behind.
         """
-        from netbox_branching.models import branches as branches_module
+        from netbox_branching.backends import schema as schema_backend
 
-        original = branches_module.parallel_build_indexes
+        original = schema_backend.parallel_build_indexes
 
         def boom(**kwargs):
             raise RuntimeError("simulated index build failure")
 
-        branches_module.parallel_build_indexes = boom
+        schema_backend.parallel_build_indexes = boom
         try:
             branch = self._track(Branch(name='Phase3FailureCleanup'))
             branch.save(provision=False)
             with self.assertRaisesRegex(RuntimeError, 'simulated index build failure'):
                 branch.provision(user=None)
         finally:
-            branches_module.parallel_build_indexes = original
+            schema_backend.parallel_build_indexes = original
 
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.FAILED)
@@ -642,9 +738,9 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         still end up READY with its schema intact — a missing-statistics cold start
         is preferable to discarding an otherwise-complete provision.
         """
-        from netbox_branching.models import branches as branches_module
+        from netbox_branching.backends import schema as schema_backend
 
-        original = branches_module.parallel_analyze_tables
+        original = schema_backend.parallel_analyze_tables
 
         def analyze_with_a_bad_table(*, tables, schema, workers):
             # Append a table that does not exist in the branch schema so its ANALYZE
@@ -654,14 +750,14 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
                 tables=[*tables, 'this_table_does_not_exist'], schema=schema, workers=workers
             )
 
-        branches_module.parallel_analyze_tables = analyze_with_a_bad_table
+        schema_backend.parallel_analyze_tables = analyze_with_a_bad_table
         try:
             branch = self._track(Branch(name='AnalyzeFailure'))
             branch.save(provision=False)
             # Must NOT raise despite the failing ANALYZE.
             branch.provision(user=None)
         finally:
-            branches_module.parallel_analyze_tables = original
+            schema_backend.parallel_analyze_tables = original
 
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.READY)

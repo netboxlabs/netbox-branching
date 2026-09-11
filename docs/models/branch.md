@@ -16,9 +16,14 @@ An optional short description of the branch.
 
 The NetBox user who created the branch. This value may be null if the owning user account has since been deleted.
 
-### Schema ID
+### Backend ID
 
-The unique, randomly-generated identifier of the PostgreSQL schema which houses the branch in the database. This is an eight-character alphanumeric string and is generated automatically when the branch is created. The full schema name is the `schema_id` prepended with the configured [`schema_prefix`](../configuration.md#schema_prefix).
+The branch's unique, opaque identifier, assigned by the configured [branching backend](../plugin-development.md#branching-backends) when the branch is provisioned. It is the value used to reference a branch in the `_branch` query parameter and the `X-NetBox-Branch` API header. This field is null until provisioning completes: a branch in the "new" or "provisioning" status does not yet have an identifier and cannot be activated.
+
+The default [`SchemaBranchingBackend`](../plugin-development.md#branching-backends) assigns an eight-character alphanumeric string, which doubles as the identifier of the PostgreSQL schema housing the branch: the full schema name is the backend ID prepended with the configured [`schema_prefix`](../configuration.md#schema_prefix). An alternative backend may use an identifier of any form up to 255 characters.
+
+!!! warning "Renamed in v2.0"
+    This field was named `schema_id` in earlier releases. The old name has been removed with no compatibility alias; update any code, event rule scripts, or webhook consumers which reference it.
 
 ### Status
 
@@ -67,6 +72,12 @@ The time at which the branch was merged into main. This value will be null if th
 ### Merged By
 
 The NetBox user who merged the branch. This value will be null if the branch has not been merged. It may also be null if the user account has been deleted since the branch was merged.
+
+### Connection Parameters
+
+!!! info "This field was added in v2.0."
+
+Reserved for use by the configured [branching backend](../plugin-development.md#branching-backends) to persist per-branch connection metadata (for example, the endpoint of a branch hosted on a separate database). This field is not editable, is not exposed via the REST API, and is unused by the default `SchemaBranchingBackend`.
 
 ### Comments
 

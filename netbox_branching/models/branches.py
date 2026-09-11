@@ -1,27 +1,19 @@
 import importlib
 import logging
 import math
-import random
-import string
 import uuid
 from collections import defaultdict
-from contextlib import contextmanager
 from datetime import timedelta
 from functools import cached_property, partial
 
 from core.choices import JobStatusChoices, ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
-from django.apps import apps
-from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
-from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
-from django.db.migrations.executor import MigrationExecutor
-from django.db.migrations.operations.special import RunSQL, SeparateDatabaseAndState
+from django.db import DEFAULT_DB_ALIAS, models, transaction
 from django.db.models.signals import post_save, pre_delete
-from django.db.utils import DatabaseError, ProgrammingError
 from django.test import RequestFactory
 from django.urls import reverse
 from django.utils import timezone
@@ -31,36 +23,23 @@ from netbox.context import current_request
 from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
-from psycopg.pq import TransactionStatus
-from rq.timeouts import JobTimeoutException
 from utilities.exceptions import AbortRequest, AbortTransaction
 from utilities.querysets import RestrictedQuerySet
 from utilities.serialization import serialize_object
 
+from netbox_branching.backends import get_branching_backend
 from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
-from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
+from netbox_branching.constants import BRANCH_ACTIONS
 from netbox_branching.contextvars import active_branch
 from netbox_branching.merge_strategies import get_merge_strategy
-from netbox_branching.provisioning import (
-    build_main_constraint_map,
-    build_main_index_map,
-    build_main_table_sizes,
-    parallel_add_constraints,
-    parallel_analyze_tables,
-    parallel_build_indexes,
-    parallel_copy_tables,
-    quote_ident,
-)
 from netbox_branching.signals import *
 from netbox_branching.utilities import (
     BranchActionIndicator,
     ChangeSummary,
     activate_branch,
     get_branchable_object_types,
-    get_tables_to_replicate,
     is_job_abandoned,
     record_applied_change,
-    supports_branching,
 )
 
 from .changes import ChangeDiff, ObjectChange
@@ -69,11 +48,6 @@ __all__ = (
     'Branch',
     'BranchEvent',
 )
-
-
-# pg_catalog.set_config(name, value, is_local=true) is the function-call form
-# of SET LOCAL — value is passed as a query parameter rather than interpolated.
-_SET_SEARCH_PATH = "SELECT pg_catalog.set_config('search_path', %s, true)"
 
 
 def _serialize_for_sync(obj):
@@ -89,103 +63,6 @@ def _serialize_for_sync(obj):
     return serialize_object(obj, exclude=['created', 'last_updated'])
 
 
-@contextmanager
-def _branch_isolated_runsql(branch_schema, main_schema):
-    """
-    Restrict ``search_path`` to ``branch_schema`` for each ``RunSQL`` body, then
-    restore ``<branch>,<main>`` afterwards. Other operation types keep the
-    default search_path because they may need cross-schema visibility (e.g. FKs
-    to ``auth.User`` / ``contenttypes``, which aren't replicated to branches).
-
-    Implemented by monkey-patching ``RunSQL.database_forwards`` for the
-    duration of the block. Safe because NetBox runs branch migrations as RQ
-    jobs (one per worker process); concurrent ``Branch.migrate()`` calls in
-    the same process would race.
-
-    A body needing objects from another schema — extension types and operators, which
-    live wherever the extension was installed — must put that schema on the path itself;
-    NetBox's ltree backfills do so (see ``utilities/mptt_to_ltree.py``). (#617)
-    """
-    logger = logging.getLogger('netbox_branching.branch.migrate')
-    original = RunSQL.database_forwards
-    isolated_path = branch_schema
-    full_path = f'{branch_schema},{main_schema}'
-
-    def database_forwards(self, app_label, schema_editor, from_state, to_state):
-        connection = schema_editor.connection
-
-        def set_search_path(value):
-            with connection.cursor() as cursor:
-                cursor.execute(_SET_SEARCH_PATH, [value])
-
-        set_search_path(isolated_path)
-        try:
-            return original(self, app_label, schema_editor, from_state, to_state)
-        finally:
-            try:
-                set_search_path(full_path)
-            except DatabaseError:
-                # Transaction already aborted; don't mask the original failure
-                logger.debug(f'Unable to restore search_path after failed RunSQL in {app_label}')
-
-    RunSQL.database_forwards = database_forwards
-    try:
-        yield
-    finally:
-        RunSQL.database_forwards = original
-
-
-def _fake_for_branch(migration):
-    """
-    Return True if a migration should be faked when applied to a branch schema, False otherwise.
-
-    Decision order:
-    1. If the migration module sets a ``fake_on_branch`` attribute, that value is respected
-       directly: ``True`` forces faking, ``False`` forces the migration to run.
-    2. Otherwise, fall back to a heuristic: fake migrations whose model-specific operations
-       affect only non-branchable models. This prevents RunSQL operations from inadvertently
-       acting on the main (public) schema via the search_path.
-
-    Migrations with no model-specific operations (e.g. pure RunSQL or RunPython) are not faked
-    by the heuristic, as we cannot determine their intent without executing them. Authors of
-    such migrations should set ``fake_on_branch`` explicitly when needed.
-
-    SeparateDatabaseAndState operations are not supported and will be skipped with an error.
-    """
-    logger = logging.getLogger('netbox_branching.branch.migrate')
-
-    # Check for an explicit per-migration override
-    try:
-        module = importlib.import_module(f'{migration.app_label}.migrations.{migration.name}')
-    except ModuleNotFoundError:
-        module = None
-    if module is not None and (explicit := getattr(module, 'fake_on_branch', None)) is not None:
-        return bool(explicit)
-
-    has_model_operations = False
-    for operation in migration.operations:
-        if isinstance(operation, SeparateDatabaseAndState):
-            logger.error(
-                f"Migration {migration} contains SeparateDatabaseAndState, which is not supported "
-                f"for branch schema migration. This migration will not be faked."
-            )
-            return False
-        if (model_name := getattr(operation, 'model_name', None)) is None:
-            continue
-        has_model_operations = True
-        # If any operation targets a branchable model, don't fake this migration
-        try:
-            model = apps.get_model(migration.app_label, model_name)
-        except LookupError:
-            # If we can't resolve the model (e.g. removed in a squashed migration),
-            # conservatively treat it as branchable and don't fake.
-            logger.warning(f"Could not resolve model {migration.app_label}.{model_name}; not faking {migration}")
-            return False
-        if supports_branching(model):
-            return False
-    return has_model_operations
-
-
 class Branch(JobsMixin, PrimaryModel):
     name = models.CharField(
         verbose_name=_('name'),
@@ -199,11 +76,14 @@ class Branch(JobsMixin, PrimaryModel):
         null=True,
         related_name='branches'
     )
-    schema_id = models.CharField(
-        max_length=8,
+    backend_id = models.CharField(
+        max_length=255,
         unique=True,
-        verbose_name=_('schema ID'),
-        editable=False
+        blank=True,
+        null=True,
+        verbose_name=_('backend ID'),
+        editable=False,
+        help_text=_('Unique identifier assigned by the branching backend during provisioning')
     )
     status = models.CharField(
         verbose_name=_('status'),
@@ -244,6 +124,13 @@ class Branch(JobsMixin, PrimaryModel):
         default=None,
         help_text=_('Strategy used to merge this branch')
     )
+    connection_params = models.JSONField(
+        verbose_name=_('connection parameters'),
+        blank=True,
+        null=True,
+        editable=False,
+        help_text=_('Backend-specific parameters for connecting to this branch')
+    )
 
     _preaction_validators = {
         'sync': set(),
@@ -264,13 +151,6 @@ class Branch(JobsMixin, PrimaryModel):
         ]
         verbose_name = _('branch')
         verbose_name_plural = _('branches')
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-
-        # Generate a random schema ID if this is a new Branch
-        if self.pk is None:
-            self.schema_id = self._generate_schema_id()
 
     def __str__(self):
         return self.name
@@ -297,13 +177,25 @@ class Branch(JobsMixin, PrimaryModel):
         return self.status == BranchStatusChoices.MERGED
 
     @cached_property
+    def backend(self):
+        """
+        The configured branching backend, which owns the mechanism by which this branch's
+        dataset is isolated from main. See netbox_branching.backends.BranchingBackend.
+        """
+        return get_branching_backend()
+
+    @cached_property
     def schema_name(self):
+        if not self.backend_id:
+            raise ValueError(
+                f"Branch {self} has no backend ID; it has not yet been provisioned."
+            )
         schema_prefix = get_plugin_config('netbox_branching', 'schema_prefix')
-        return f'{schema_prefix}{self.schema_id}'
+        return f'{schema_prefix}{self.backend_id}'
 
     @cached_property
     def connection_name(self):
-        return f'schema_{self.schema_name}'
+        return self.backend.get_connection_alias(self)
 
     def clean(self):
         super().clean()
@@ -330,9 +222,11 @@ class Branch(JobsMixin, PrimaryModel):
                     ).format(max=max_working_branches)
                 )
 
-    # Fields owned by background jobs; excluded from save() by default to avoid clobbering. See #445.
+    # Fields owned by background jobs and by the branching backend; excluded from save() by default to
+    # avoid clobbering.
     LIFECYCLE_FIELDS = (
-        'status', 'last_sync', 'merged_time', 'merged_by', 'applied_migrations',
+        'status', 'last_sync', 'merged_time', 'merged_by', 'applied_migrations', 'backend_id',
+        'connection_params',
     )
 
     def save(self, provision=True, update_merge_sync_fields=False, *args, **kwargs):
@@ -382,13 +276,33 @@ class Branch(JobsMixin, PrimaryModel):
 
         return result
 
-    @staticmethod
-    def _generate_schema_id(length=8):
+    def set_backend_id(self, backend_id):
         """
-        Generate a random alphanumeric schema identifier of the specified length.
+        Assign and persist this Branch's backend identifier. Called by the branching
+        backend during provisioning.
+
+        A branch's identifier is immutable once assigned: it is what addresses the
+        branch's isolated dataset, so changing it would orphan the data the branch
+        already holds. Re-assigning the value already in place is permitted, so that
+        a backend need not special-case a retried provision.
         """
-        chars = [*string.ascii_lowercase, *string.digits]
-        return ''.join(random.choices(chars, k=length))
+        if self.backend_id and self.backend_id != backend_id:
+            raise ValueError(
+                f"Branch {self} already has a backend ID ({self.backend_id}); a branch's "
+                f"backend ID cannot be changed."
+            )
+
+        self.backend_id = backend_id
+
+        # Only reachable for a backend whose get_connection_alias() tolerates a missing
+        # identifier: schema_name raises without one, and cached_property does not cache
+        # a raised exception. Such a backend may have cached an alias derived from None.
+        self.__dict__.pop('schema_name', None)
+        self.__dict__.pop('connection_name', None)
+
+        # Scoped to the one column, so this cannot write back the stale in-memory status
+        # over the transition Branch.provision() applied with a queryset update().
+        self.save(update_fields=['backend_id'])
 
     @classmethod
     def register_preaction_check(cls, func, action):
@@ -403,7 +317,7 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all ObjectChange records created within the Branch.
         """
-        if self.status == BranchStatusChoices.NEW:
+        if self.status == BranchStatusChoices.NEW or not self.backend_id:
             return ObjectChange.objects.none()
         return ObjectChange.objects.using(self.connection_name)
 
@@ -428,7 +342,7 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all unmerged ObjectChange records within the Branch schema.
         """
-        if self.status == BranchStatusChoices.READY:
+        if self.status == BranchStatusChoices.READY and self.backend_id:
             return ObjectChange.objects.using(self.connection_name)
         return ObjectChange.objects.none()
 
@@ -501,13 +415,10 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a list of database migrations which have been applied in main but not in the branch.
         """
-        connection = connections[self.connection_name]
-        executor = MigrationExecutor(connection)
-        targets = executor.loader.graph.leaf_nodes()
-        plan = executor.migration_plan(targets)
-        return [
-            (migration.app_label, migration.name) for migration, backward in plan
-        ]
+        if not self.backend_id:
+            # Nothing has been provisioned yet, so nothing can be outstanding
+            return []
+        return self.backend.get_pending_migrations(self)
 
     @cached_property
     def migrators(self):
@@ -904,7 +815,7 @@ class Branch(JobsMixin, PrimaryModel):
         Apply changes from the main schema onto the Branch's schema.
         """
         logger = logging.getLogger('netbox_branching.branch.sync')
-        logger.info(f'Syncing branch {self} ({self.schema_name})')
+        logger.info(f'Syncing branch {self}')
 
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to sync")
@@ -1014,7 +925,7 @@ class Branch(JobsMixin, PrimaryModel):
         Apply any pending database migrations to the branch schema.
         """
         logger = logging.getLogger('netbox_branching.branch.migrate')
-        logger.info(f'Migrating branch {self} ({self.schema_name})')
+        logger.info(f'Migrating branch {self}')
 
         def migration_progress_callback(action, migration=None, fake=False):
             if action == "apply_start":
@@ -1038,48 +949,16 @@ class Branch(JobsMixin, PrimaryModel):
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.MIGRATING)
 
         # Generate migration plan & apply any migrations
-        connection = connections[self.connection_name]
-        executor = MigrationExecutor(connection, progress_callback=migration_progress_callback)
-        targets = executor.loader.graph.leaf_nodes()
-        main_schema = get_plugin_config('netbox_branching', 'main_schema')
-        if plan := executor.migration_plan(targets):
-            try:
-                # Activate the branch so that any ORM queries inside data migrations
-                # (RunPython) route to the branch schema rather than main. Without this,
-                # historical-model queries fall through the BranchAwareRouter to the default
-                # connection and read from main, which may have already been migrated past
-                # columns the branch's pending migration still depends on.
-                with activate_branch(self), _branch_isolated_runsql(self.schema_name, main_schema):
-                    # Apply each migration individually, faking those that only affect
-                    # non-branchable models to prevent RunSQL from inadvertently operating
-                    # on the main schema via the search_path. See GitHub issue #423.
-                    full_plan = executor.migration_plan(executor.loader.graph.leaf_nodes(), clean_start=True)
-                    migrations_to_run = {m for m, _ in plan}
-                    # _create_project_state is a private Django API (MigrationExecutor). It builds
-                    # the current ProjectState from all applied migrations, which apply_migration
-                    # requires as its starting point. There is no public equivalent as of Django 5.x.
-                    state = executor._create_project_state(with_applied_migrations=True)
-                    for migration, _ in full_plan:
-                        if not migrations_to_run:
-                            break
-                        if migration in migrations_to_run:
-                            fake = _fake_for_branch(migration)
-                            state = executor.apply_migration(state, migration, fake=fake)
-                            if fake:
-                                # apply_migration() doesn't advance the state when faking, leaving
-                                # later data migrations with stale historical models. (#617)
-                                state = migration.mutate_state(state, preserve=False)
-                            migrations_to_run.remove(migration)
-            except Exception as e:
-                if err_message := str(e):
-                    logger.error(err_message)
-                # Mark the branch as failed so it cannot be activated in a partially-migrated
-                # state. Migrations already applied have been persisted by the progress callback.
-                Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
-                self.status = BranchStatusChoices.FAILED
-                raise
-        else:
-            logger.info("Found no migrations to apply")
+        try:
+            self.backend.apply_migrations(self, progress_callback=migration_progress_callback)
+        except Exception as e:
+            if err_message := str(e):
+                logger.error(err_message)
+            # Mark the branch as failed so it cannot be activated in a partially-migrated
+            # state. Migrations already applied have been persisted by the progress callback.
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
+            self.status = BranchStatusChoices.FAILED
+            raise
 
         # Reset Branch status to ready
         logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
@@ -1103,7 +982,7 @@ class Branch(JobsMixin, PrimaryModel):
         chronological order.
         """
         logger = logging.getLogger('netbox_branching.branch.merge')
-        logger.info(f'Merging branch {self} ({self.schema_name})')
+        logger.info(f'Merging branch {self}')
 
         if not self.ready:
             raise Exception(f"Branch {self} is not ready to merge")
@@ -1176,7 +1055,7 @@ class Branch(JobsMixin, PrimaryModel):
         reverse order and calling undo() on each.
         """
         logger = logging.getLogger('netbox_branching.branch.revert')
-        logger.info(f'Reverting branch {self} ({self.schema_name})')
+        logger.info(f'Reverting branch {self}')
 
         if not self.merged:
             raise Exception("Only merged branches can be reverted.")
@@ -1248,36 +1127,12 @@ class Branch(JobsMixin, PrimaryModel):
 
     def provision(self, user):
         """
-        Create the schema & replicate main tables.
-
-        Five phases:
-          1. Metadata setup — create the schema, the ObjectChange skeleton, the
-             django_migrations copy, and the empty (no constraints, no indexes)
-             destination tables. The constraint and index maps for main are
-             also captured here for use in Phase 3.
-          2. Parallel data copy — export an MVCC snapshot from main and let a worker
-             pool run INSERT INTO branch.t SELECT * FROM main.t across tables.
-          3. Parallel constraint + index build — add PK/UNIQUE/EXCLUDE constraints
-             (each one builds its backing index implicitly under the original
-             name) and then replay every remaining indexdef against the populated
-             branch tables.
-          4. Replicate triggers — CREATE TABLE ... (LIKE ...) does not carry
-             triggers, so copy every non-internal trigger from main's copied
-             tables onto the branch tables. NetBox 4.7+ maintains ltree
-             path/sort_path columns and denormalized _site/_location/_rack columns
-             via per-table triggers (formerly Python signal handlers); without
-             them, writes inside a branch would leave those columns stale. Done
-             after Phase 2 so the triggers don't fire on the bulk snapshot load.
-          5. ANALYZE the populated tables so the planner has real statistics
-             immediately rather than waiting for autovacuum.
-
-        On any failure the (possibly partial) schema is dropped and the branch
-        is marked FAILED.
+        Create the isolated dataset backing this branch by delegating to the configured
+        branching backend. On failure the branch is marked FAILED; the backend is
+        responsible for cleaning up any partial state it created.
         """
         logger = logging.getLogger('netbox_branching.branch.provision')
-        logger.info(f'Provisioning branch {self} ({self.schema_name})')
-        main_schema = get_plugin_config('netbox_branching', 'main_schema')
-        workers = get_plugin_config('netbox_branching', 'provision_workers') or 1
+        logger.info(f'Provisioning branch {self}')
 
         # Emit pre-provision signal
         pre_provision.send(sender=self.__class__, branch=self, user=user)
@@ -1285,251 +1140,9 @@ class Branch(JobsMixin, PrimaryModel):
         # Update Branch status
         Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.PROVISIONING)
 
-        schema = self.schema_name
-        tables_to_replicate = get_tables_to_replicate()
-
         try:
-            # Phase 1: metadata setup. Done in a single committed transaction so
-            # the workers in Phase 2 (which run on separate connections) can see
-            # the newly-created schema and tables.
-            with connection.cursor() as cursor:
-                cursor.execute("BEGIN")
-                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
-
-                # A fresh branch's schema (a unique, randomly-named schema_id) should not
-                # already exist. If it does, it's an orphan left by a previous provision of
-                # THIS branch that was hard-killed (OOM, SIGKILL, lost connection) between
-                # Phase 1's commit and the cleanup path below; drop it so the CREATE doesn't
-                # fail with "schema already exists". Only drop when it actually exists, and
-                # log loudly when we do — this DROP ... CASCADE is the one place provisioning
-                # destroys data, so its (rare, expected-only-after-an-interrupted-provision)
-                # firing must be visible rather than silent and unconditional.
-                logger.debug(f'Creating schema {schema}')
-                cursor.execute(
-                    "SELECT 1 FROM information_schema.schemata WHERE schema_name = %s", [schema]
-                )
-                if cursor.fetchone():
-                    logger.warning(
-                        f"Schema {schema} already exists at provision time; dropping it before "
-                        f"recreating. This is expected only after a previously interrupted "
-                        f"provision of this branch."
-                    )
-                    cursor.execute(f"DROP SCHEMA IF EXISTS {quote_ident(schema)} CASCADE")
-                try:
-                    cursor.execute(f"CREATE SCHEMA {quote_ident(schema)}")
-                except ProgrammingError as e:
-                    if str(e).startswith('permission denied '):
-                        logger.critical(
-                            f"Provisioning failed due to insufficient database permissions. Ensure that the NetBox "
-                            f"role ({settings.DATABASE['USER']}) has permission to create new schemas on this "
-                            f"database ({settings.DATABASE['NAME']}). (Use the PostgreSQL command 'GRANT CREATE ON "
-                            f"DATABASE $database TO $role;' to grant the required permission.)"
-                        )
-                    raise
-
-                # Prefetch every index definition on main in one query — the per-table
-                # entries drive the post-data-load index build.
-                main_indexes_by_table = build_main_index_map(cursor, main_schema)
-                # Same for PRIMARY KEY / UNIQUE / EXCLUDE constraints. We replay
-                # these via ALTER TABLE ADD CONSTRAINT so the branch schema's
-                # pg_constraint mirrors main's — necessary for later migrations
-                # that drop or alter constraints by name.
-                main_constraints_by_table = build_main_constraint_map(cursor, main_schema)
-                # On-disk size per table, used to dispatch the heaviest tables first in
-                # each parallel phase so a single large table can't be picked up last and
-                # left running alone while every other worker sits idle.
-                main_table_sizes = build_main_table_sizes(cursor, main_schema)
-
-                # Empty copy of the global change log. Share the ID sequence from main
-                # so change record IDs stay globally unique.
-                objectchange_table = ObjectChange_._meta.db_table
-                main_objectchange = f'{quote_ident(main_schema)}.{quote_ident(objectchange_table)}'
-                branch_objectchange = f'{quote_ident(schema)}.{quote_ident(objectchange_table)}'
-                logger.debug(f'Creating table {schema}.{objectchange_table}')
-                cursor.execute(f"CREATE TABLE {branch_objectchange} ( LIKE {main_objectchange} )")
-                # Look the sequence up dynamically rather than assuming the
-                # <table>_id_seq naming convention (matches the Phase 2 copy).
-                cursor.execute("SELECT pg_get_serial_sequence(%s, 'id')", [main_objectchange])
-                row = cursor.fetchone()
-                if row and row[0]:
-                    cursor.execute(
-                        f"ALTER TABLE {branch_objectchange} ALTER COLUMN id SET DEFAULT nextval(%s)",
-                        [row[0]],
-                    )
-
-                # Copy the django_migrations table
-                branch_migrations = f'{quote_ident(schema)}.django_migrations'
-                main_migrations = f'{quote_ident(main_schema)}.django_migrations'
-                logger.debug(f'Creating table {schema}.django_migrations')
-                cursor.execute(f"CREATE TABLE {branch_migrations} ( LIKE {main_migrations} )")
-                cursor.execute(f"INSERT INTO {branch_migrations} SELECT * FROM {main_migrations}")
-                cursor.execute(
-                    f"ALTER TABLE {branch_migrations} ALTER COLUMN id ADD GENERATED BY DEFAULT AS IDENTITY"
-                )
-                # COALESCE guards against an empty django_migrations on main: MAX
-                # of no rows returns NULL, which would TypeError on + 1 below.
-                cursor.execute(f"SELECT COALESCE(MAX(id), 0) + 1 FROM {branch_migrations}")
-                starting_id = cursor.fetchone()[0]
-                cursor.execute(
-                    f"ALTER SEQUENCE {quote_ident(schema)}.django_migrations_id_seq RESTART WITH {starting_id}"
-                )
-
-                # Create empty destination tables (no indexes) for the parallel copy.
-                # Indexes are built in Phase 3 after the data is loaded — far cheaper
-                # than maintaining them row-by-row during INSERT.
-                for table in tables_to_replicate:
-                    logger.debug(f'Creating table {schema}.{table}')
-                    cursor.execute(
-                        f"CREATE TABLE {quote_ident(schema)}.{quote_ident(table)} "
-                        f"( LIKE {quote_ident(main_schema)}.{quote_ident(table)} )"
-                    )
-
-                cursor.execute("COMMIT")
-
-            # Order parallel work heaviest-table-first (longest-processing-time
-            # scheduling) so a single large table can't be dispatched last and left
-            # running alone while the other workers idle. Used by every phase below.
-            def by_size_desc(table_names):
-                return sorted(table_names, key=lambda t: main_table_sizes.get(t, 0), reverse=True)
-
-            # Phase 2: parallel data copy under a single MVCC snapshot.
-            # The coordinator transaction holds the exported snapshot alive while
-            # workers import it; do not commit until every worker has finished.
-            coordinator_commit_failed = False
-            with connection.cursor() as cursor:
-                cursor.execute("BEGIN")
-                cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
-                cursor.execute("SELECT pg_export_snapshot()")
-                snapshot_token = cursor.fetchone()[0]
-                logger.debug(f'Exported snapshot {snapshot_token} for {len(tables_to_replicate)} tables')
-
-                try:
-                    parallel_copy_tables(
-                        tables=by_size_desc(tables_to_replicate),
-                        snapshot_token=snapshot_token,
-                        schema=schema,
-                        main_schema=main_schema,
-                        workers=workers,
-                    )
-                finally:
-                    # Close the snapshot-exporting transaction. Swallow any error
-                    # here so it can't mask a worker exception that's already in
-                    # flight — the original traceback is what the operator needs.
-                    try:
-                        cursor.execute("COMMIT")
-                    except Exception:
-                        coordinator_commit_failed = True
-                        logger.exception(
-                            "Failed to COMMIT Phase 2 coordinator transaction"
-                        )
-
-            # The copied data is already durable (each worker committed its own
-            # transaction) and this coordinator transaction was read-only, so a failed
-            # COMMIT is not fatal. But it can leave the main connection in an aborted
-            # transaction, which would then break the success-path status=READY write
-            # (and the cleanup path) with "current transaction is aborted". Drop the
-            # connection so Django reconnects clean for the remaining ORM work.
-            if coordinator_commit_failed:
-                connection.close()
-
-            # Phase 3: rebuild constraints and indexes against the populated
-            # branch tables. PK/UNIQUE/EXCLUDE constraints are added via
-            # ALTER TABLE ADD CONSTRAINT — each one builds its backing index
-            # implicitly under the constraint's name, so we exclude those
-            # index names from the plain CREATE INDEX pass to avoid duplicates.
-            relevant_tables = {*tables_to_replicate, objectchange_table, 'django_migrations'}
-
-            sorted_relevant = by_size_desc(relevant_tables)
-
-            constraint_tasks = []
-            constraint_backed_indexes = set()
-            index_tasks = []
-            # Build both task lists heaviest-table-first so the constraint and index
-            # phases drain their largest work early rather than tailing on it.
-            for table_name in sorted_relevant:
-                for conname, condef, backing_indexname in main_constraints_by_table.get(table_name, ()):
-                    constraint_tasks.append((table_name, conname, condef))
-                    if backing_indexname:
-                        constraint_backed_indexes.add(backing_indexname)
-                for indexname, indexdef in main_indexes_by_table.get(table_name, ()):
-                    index_tasks.append((table_name, indexname, indexdef))
-
-            parallel_add_constraints(
-                constraint_tasks=constraint_tasks,
-                schema=schema,
-                workers=workers,
-            )
-
-            parallel_build_indexes(
-                index_tasks=index_tasks,
-                schema=schema,
-                main_schema=main_schema,
-                workers=workers,
-                skip_indexes={*SKIP_INDEXES, *constraint_backed_indexes},
-            )
-
-            # Phase 4: replicate triggers. CREATE TABLE ... (LIKE ...) does not
-            # copy triggers, and NetBox 4.7+ relies on per-table triggers to keep
-            # ltree path/sort_path and denormalized _site/_location/_rack columns
-            # up to date (both were previously maintained in Python). Install them
-            # only after the Phase 2 data copy so they don't fire per row on the
-            # bulk snapshot load, which already carries correct values from main.
-            self._replicate_triggers(schema, main_schema, relevant_tables)
-
-            # Phase 5: refresh planner statistics. After the bulk copy the branch
-            # tables have no statistics, so the first queries against the branch
-            # (sync, change-diff computation, etc.) would plan against empty-table
-            # estimates until autovacuum eventually catches up. ANALYZE is
-            # statistics-only and never affects correctness, so a failure here must
-            # not fail the provision — log it and leave the stats to autovacuum.
-            #
-            # Skip empty tables: a zero-size table's planner estimate is already
-            # correct (there is nothing to mis-estimate), and a typical install has
-            # hundreds of empty branchable tables — ANALYZE-ing every one of them adds
-            # a fixed hundreds-of-statements tax that can dominate a small provision.
-            analyze_tables = [t for t in sorted_relevant if main_table_sizes.get(t, 0) > 0]
-            try:
-                parallel_analyze_tables(
-                    tables=analyze_tables,
-                    schema=schema,
-                    workers=workers,
-                )
-            except JobTimeoutException:
-                # RQ is killing the job via its timeout (raised in this, the main,
-                # thread). It is an Exception subclass, so it would otherwise be
-                # swallowed by the best-effort handler below — let it propagate to
-                # the cleanup path instead of marking a half-provisioned branch READY.
-                raise
-            except Exception:
-                logger.warning(
-                    f"ANALYZE of branch schema {schema} failed; planner statistics will be "
-                    f"populated by autovacuum instead.",
-                    exc_info=True,
-                )
-
-        except Exception as e:
-            logger.error(e)
-            # If Phase 1 raised mid-transaction the connection is in an aborted
-            # state; clear it before running cleanup or the DROP SCHEMA and the
-            # status update below would both fail with "current transaction is
-            # aborted". A Phase 2/3 failure leaves the connection idle (the
-            # coordinator already committed and the workers use their own
-            # connections), so only issue the ROLLBACK when the server actually
-            # has an open transaction — an out-of-transaction ROLLBACK would emit
-            # a spurious "no transaction in progress" warning.
-            if connection.connection is not None and \
-                    connection.connection.info.transaction_status != TransactionStatus.IDLE:
-                try:
-                    with connection.cursor() as cursor:
-                        cursor.execute("ROLLBACK")
-                except Exception:
-                    logger.exception(f"Failed to roll back aborted transaction for {schema}")
-            # Clean up any partial state from the failed provision.
-            try:
-                with connection.cursor() as cursor:
-                    cursor.execute(f"DROP SCHEMA IF EXISTS {quote_ident(schema)} CASCADE")
-            except Exception:
-                logger.exception(f"Failed to drop schema {schema} during provision cleanup")
+            self.backend.provision(self, user)
+        except Exception:
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
             raise
 
@@ -1545,84 +1158,6 @@ class Branch(JobsMixin, PrimaryModel):
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.PROVISIONED)
 
     provision.alters_data = True
-
-    def _replicate_triggers(self, schema, main_schema, tables):
-        """
-        Copy user-defined triggers from the main schema's tables onto the branch
-        schema's copies of those tables.
-
-        ``CREATE TABLE ... (LIKE ...)`` does not carry triggers, and since NetBox
-        4.7 several behaviours that used to live in Python signal handlers are
-        implemented as per-table PostgreSQL triggers — ltree path/sort_path
-        maintenance and the denormalized _site/_location/_rack columns. Without
-        replicating them, a write inside a branch (reparenting a Region, moving a
-        Device between sites, etc.) would leave those columns stale.
-
-        The trigger functions are defined in the main schema and address their
-        target table by *unqualified* name, resolving it through ``search_path``
-        at execution time. Recreating a trigger under ``search_path =
-        <branch>,<main>`` therefore binds it to the branch table (searched first)
-        while still reusing the main schema's function (searched second) — so no
-        per-branch functions are created and the trigger operates only on branch
-        data. Internal (constraint/FK-enforcement) triggers are excluded; those
-        are rebuilt by the Phase 3 constraint pass.
-
-        Two consequences of resolving the target through ``search_path``:
-
-        * Any raw SQL which writes a branch table by *schema-qualified* name from a
-          connection whose ``search_path`` is the main schema (as the provisioning
-          copy statements do) would have its triggers read and write main's tables.
-          Such statements are only safe against tables which carry no triggers, or
-          when run on a connection with the branch schema searched first.
-        * NetBox's ltree triggers take a per-tree advisory lock keyed on
-          ``TG_TABLE_NAME``, which carries no schema. A branch and the main schema
-          therefore contend on the same key for the same tree, and because the
-          cross-tree path takes two locks, a branch operation and a main operation
-          touching the same pair of trees in opposite order can deadlock.
-        """
-        logger = logging.getLogger('netbox_branching.branch.provision')
-        with connection.cursor() as cursor:
-            cursor.execute("BEGIN")
-            try:
-                # Fetch trigger definitions with the main schema alone on the
-                # search_path so pg_get_triggerdef emits unqualified table and
-                # function names (both live in the main schema). Emitting them
-                # qualified would rebind the recreated trigger to the main table.
-                cursor.execute(f"SET LOCAL search_path = {quote_ident(main_schema)}")
-                cursor.execute(
-                    """
-                    SELECT c.relname, pg_get_triggerdef(t.oid, true)
-                    FROM pg_trigger t
-                    JOIN pg_class c ON t.tgrelid = c.oid
-                    JOIN pg_namespace n ON c.relnamespace = n.oid
-                    WHERE n.nspname = %s
-                      AND NOT t.tgisinternal
-                      AND c.relname = ANY(%s)
-                    """,
-                    [main_schema, list(tables)],
-                )
-                triggerdefs = cursor.fetchall()
-
-                if triggerdefs:
-                    # Recreate each trigger with the branch schema searched first so
-                    # the unqualified table name binds to the branch copy, while the
-                    # unqualified function name still resolves in the main schema.
-                    cursor.execute(
-                        f"SET LOCAL search_path = {quote_ident(schema)}, {quote_ident(main_schema)}"
-                    )
-                    for table, triggerdef in triggerdefs:
-                        logger.debug(f'Replicating trigger onto {schema}.{table}')
-                        cursor.execute(triggerdef)
-
-                cursor.execute("COMMIT")
-                logger.debug(f'Replicated {len(triggerdefs)} trigger(s) onto schema {schema}')
-            except Exception:
-                try:
-                    cursor.execute("ROLLBACK")
-                except Exception:
-                    # Don't let a broken connection mask the original failure
-                    logger.exception(f'Failed to roll back trigger replication for {schema}')
-                raise
 
     def archive(self, user):
         """
@@ -1642,20 +1177,16 @@ class Branch(JobsMixin, PrimaryModel):
 
     def deprovision(self):
         """
-        Delete the Branch's schema and all its tables from the database.
+        Destroy the isolated dataset backing this branch by delegating to the configured
+        branching backend.
         """
         logger = logging.getLogger('netbox_branching.branch.provision')
-        logger.info(f'Deprovisioning branch {self} ({self.schema_name})')
+        logger.info(f'Deprovisioning branch {self}')
 
         # Emit pre-deprovision signal
         pre_deprovision.send(sender=self.__class__, branch=self)
 
-        with connection.cursor() as cursor:
-            # Delete the schema and all its tables
-            logger.debug(f'Deleting schema {self.schema_name}')
-            cursor.execute(
-                f"DROP SCHEMA IF EXISTS {quote_ident(self.schema_name)} CASCADE"
-            )
+        self.backend.deprovision(self)
 
         # Emit post-deprovision signal
         post_deprovision.send(sender=self.__class__, branch=self)

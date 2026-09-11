@@ -23,6 +23,21 @@ A list of import paths to functions which validate whether a branch is permitted
 
 ---
 
+## `backend`
+
+Default: `"netbox_branching.backends.SchemaBranchingBackend"`
+
+The import path of the branching backend, which implements the mechanism by which each branch's data is isolated from main: how a branch's dataset is created and destroyed, how database connections addressing it are named and configured, and how outstanding migrations are applied to it.
+
+The default backend, `SchemaBranchingBackend`, replicates the main schema into a dedicated PostgreSQL schema for each branch. This is the only backend shipped with the plugin; there is no reason to change this setting unless you are running an alternative backend supplied elsewhere.
+
+See [Plugin Development: Branching Backends](./plugin-development.md#branching-backends) for the backend contract.
+
+!!! note
+    The [`main_schema`](#main_schema), [`schema_prefix`](#schema_prefix) and [`provision_workers`](#provision_workers) parameters are specific to `SchemaBranchingBackend` and have no effect under a different backend.
+
+---
+
 ## `auto_archive_days`
 
 Default: `None` (disabled)
@@ -167,6 +182,8 @@ Default: `"public"`
 
 The name of the main (primary) PostgreSQL schema. (Use the `\dn` command in the PostgreSQL CLI to list all schemas.)
 
+This parameter applies only to the default [`SchemaBranchingBackend`](#backend).
+
 ---
 
 ## `max_branches`
@@ -182,6 +199,8 @@ The maximum total number of branches that can exist simultaneously, including me
 Default: `4`
 
 The number of parallel workers used during branch provisioning to copy tables and build indexes. Each worker holds its own database connection for the duration of the provision and shares an MVCC snapshot of the main schema, ensuring every worker sees an identical view of the source data.
+
+This parameter applies only to the default [`SchemaBranchingBackend`](#backend).
 
 Increasing this value reduces wall-clock provisioning time on multi-GB databases by overlapping table copies and index builds. Scaling is bounded by both your storage subsystem (during the copy phase) and CPU (during the index-build phase); on modern NVMe-backed deployments, benefit tapers off above 4-8 workers. Set to `1` to disable parallelism entirely (e.g. for debugging).
 
@@ -246,7 +265,9 @@ Default: `"branch_"`
 
 The string to prefix to the unique branch ID when provisioning the PostgreSQL schema for a branch. Per [the PostgreSQL documentation](https://www.postgresql.org/docs/16/sql-syntax-lexical.html#SQL-SYNTAX-IDENTIFIERS), this string must begin with a letter or underscore.
 
-A non-empty prefix is required, because the randomly-generated branch ID alone may begin with a digit, which is not a valid PostgreSQL schema name.
+A non-empty prefix is required, because the randomly-generated [`backend_id`](./models/branch.md#backend-id) alone may begin with a digit, which is not a valid PostgreSQL schema name.
+
+This parameter applies only to the default [`SchemaBranchingBackend`](#backend).
 
 ---
 
@@ -317,7 +338,7 @@ EVENTS_PIPELINE = [
 ]
 ```
 
-When active, this injects an `active_branch` key into each queued event's data payload, with `id`, `name`, and `schema_id` fields (or `null` if the change was made on main). See [Event Rules](./event-rules.md) for usage details.
+When active, this injects an `active_branch` key into each queued event's data payload, with `id`, `name`, and `backend_id` fields (or `null` if the change was made on main). See [Event Rules](./event-rules.md) for usage details.
 
 !!! note
     This entry must be placed **before** `extras.events.process_event_queue` in the list to take effect.

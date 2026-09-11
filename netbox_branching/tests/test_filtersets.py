@@ -122,11 +122,12 @@ class BranchFilterSetTestCase(TestCase, BaseFilterSetTests):
 
     # Fields intentionally absent from BranchFilterSet
     ignore_fields = (
-        'schema_id',
+        'backend_id',
         'applied_migrations',
         'merged_time',
         'merged_by',
         'merge_strategy',
+        'connection_params',  # Opaque backend-owned JSON; not user-facing
     )
 
     @classmethod
@@ -137,9 +138,11 @@ class BranchFilterSetTestCase(TestCase, BaseFilterSetTests):
             User.objects.create_user(username='user2'),
         )
 
+        # Branches 1 and 2 stand in for provisioned branches, so they carry the backend
+        # ID provisioning would have assigned. Branch 3 stays NEW, and therefore has none.
         branches = (
-            Branch(name='Branch 1', description='foobar1', owner=cls.users[0]),
-            Branch(name='Branch 2', description='foobar2', owner=cls.users[1]),
+            Branch(name='Branch 1', description='foobar1', owner=cls.users[0], backend_id='branch01'),
+            Branch(name='Branch 2', description='foobar2', owner=cls.users[1], backend_id='branch02'),
             Branch(name='Branch 3', description='foobar3'),
         )
         for branch in branches:
@@ -219,9 +222,11 @@ class ChangeDiffFilterSetTestCase(TestCase, BaseFilterSetTests):
 
     @classmethod
     def setUpTestData(cls):
+        # The `branch` filter resolves against backend_id, which provisioning assigns,
+        # so pin one on each branch rather than provisioning for real.
         branches = (
-            Branch(name='Branch 1'),
-            Branch(name='Branch 2'),
+            Branch(name='Branch 1', backend_id='branch01'),
+            Branch(name='Branch 2', backend_id='branch02'),
         )
         for branch in branches:
             branch.save(provision=False)
@@ -267,7 +272,7 @@ class ChangeDiffFilterSetTestCase(TestCase, BaseFilterSetTests):
 
     def test_branch(self):
         branch = Branch.objects.get(name='Branch 1')
-        params = {'branch': [branch.schema_id]}
+        params = {'branch': [branch.backend_id]}
         self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
 
     def test_object_type_id(self):

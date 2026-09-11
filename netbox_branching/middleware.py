@@ -30,7 +30,7 @@ class BranchMiddleware:
         if branch:
             response.set_cookie(
                 COOKIE_NAME,
-                branch.schema_id,
+                branch.backend_id,
                 domain=settings.SESSION_COOKIE_DOMAIN,
                 path=settings.SESSION_COOKIE_PATH,
                 secure=settings.SESSION_COOKIE_SECURE,

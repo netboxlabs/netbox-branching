@@ -265,6 +265,9 @@ Since branching relies entirely on the `ObjectChange` log, anything that affects
 
 When a branch is migrated, NetBox Branching applies the same migration plan that's been applied to main, but it **fakes** (marks applied without running) any migration whose model-specific operations affect only non-branchable models. This prevents `RunSQL` and `RunPython` operations from inadvertently acting on the main schema via PostgreSQL's `search_path`.
 
+!!! note
+    Faking is a behaviour of the default [`SchemaBranchingBackend`](#branching-backends), because it exists specifically to keep `RunSQL` bodies from reaching the main schema through the branch connection's `search_path`. `fake_on_branch` therefore has no effect under a backend that does not share a `search_path` with main.
+
 The heuristic can't always determine intent. A migration with no model-specific operations — for example, a pure `RunPython` data backfill — runs on the branch by default, because the framework can't introspect what the function does. If your migration shouldn't run on branches (or should run when the heuristic would skip it), declare `fake_on_branch` at the top of the migration module:
 
 ```python
@@ -304,6 +307,100 @@ Use this only when the default heuristic would incorrectly fake a migration that
 ### When to leave it unset
 
 Pure schema migrations (`AddField`, `AlterField`, etc.) on branchable models don't need the flag — the heuristic handles them correctly by running them on every branch.
+
+## Branching Backends
+
+A **branching backend** owns the mechanism of branch isolation: how a branch's isolated dataset is created and destroyed, how the database connections addressing it are named and configured, and how outstanding Django migrations are applied to it. Everything layered above that — change tracking, conflict detection, merge strategies, branch status transitions, signals and events — is backend-agnostic.
+
+The plugin ships one backend, `netbox_branching.backends.SchemaBranchingBackend`, which replicates the main schema into a dedicated PostgreSQL schema per branch. It is selected by default and is what every existing installation uses. The seam exists so that an alternative isolation mechanism (for example, a storage-level copy-on-write clone) can be substituted without touching the machinery built on top of it.
+
+!!! warning
+    This is an advanced extension point. Writing a backend means taking responsibility for the invariants below; getting one wrong typically manifests only when a branch is merged, not when it is created.
+
+### The Contract
+
+Subclass `netbox_branching.backends.BranchingBackend` and implement the abstract methods:
+
+| Method | Responsibility |
+|---|---|
+| `provision(branch, user)` | Assign the branch an identifier (see below), then make the isolated dataset exist, or raise. On failure, clean up your own partial state before raising. |
+| `deprovision(branch)` | Destroy the isolated dataset. Must be safe to call for a branch that was never successfully provisioned, including one with no `backend_id`. |
+| `get_connection_alias(branch)` | Return the Django connection alias addressing the branch. Must begin with the backend's `connection_alias_prefix`. |
+| `get_connection_config(alias, default_config)` | Return the `DATABASES` entry for `alias`, or `None` if the alias isn't yours. |
+| `get_pending_migrations(branch)` | Return `(app_label, name)` tuples applied in main but not in the branch. |
+| `apply_migrations(branch, progress_callback=None)` | Apply outstanding migrations to the branch's dataset. |
+
+Four methods have useful defaults and only need overriding for specific needs:
+
+| Method | Default |
+|---|---|
+| `owns_connection_alias(alias)` | Prefix check against `connection_alias_prefix` |
+| `routes_model(model, branch)` | `supports_branching(model)` |
+| `allow_migrate(db, app_label, model_name=None, **hints)` | Refuses the plugin's own models and every non-branchable model; permits `core.ObjectChange` |
+| `validate_configuration()` | No-op; override to assert on required host settings at startup |
+
+`allow_migrate()` is reached from `BranchAwareRouter.allow_migrate()`, which has already
+established that `db` is an alias your backend owns. Its default is written for a branch holding
+only the branchable tables: migrations for the plugin's own models and for non-branchable models
+are refused, because those tables are not in the branch schema at all. **A backend whose branch is
+a full copy of main's database should override it to permit them** — there the tables do exist, and
+refusing their migrations lets them drift out of step with main until a query selecting a column
+main has and the branch lacks fails. Note that `model_name` is `None` for operations which name no
+model (`RunPython`, `RunSQL`); keeping the default in that case is what stops a data migration from
+being applied a second time to main, since under `activate_branch()` its ORM queries for
+non-branchable models route there.
+
+`Branch` retains all status transitions, [lifecycle signal](#lifecycle-signals) emission and `BranchEvent` creation around each of these calls, so those are unaffected by the backend in use.
+
+### Branch Identity
+
+A new `Branch` row has no `backend_id`. Assigning one is part of `provision()`'s contract, and must happen before the dataset is created, because the identifier is how every later connection addresses the branch:
+
+```python
+def provision(self, branch, user):
+    if not branch.backend_id:
+        branch.set_backend_id(self.generate_branch_id())
+    ...
+```
+
+The value must be unique across all branches and no longer than 255 characters. `Branch.set_backend_id()` persists it, scoping the write to that one column so it cannot clobber the status transition `Branch.provision()` is wrapped in.
+
+The identifier is **immutable once assigned** — it is what addresses the branch's dataset, so changing it would orphan the data the branch already holds. `set_backend_id()` raises `ValueError` on an attempt to change one, and assigning only when the field is empty means a re-provision — of an archived branch, or after a failed attempt — reuses the identifier the branch already had.
+
+`SchemaBranchingBackend` generates a random eight-character alphanumeric string, kept short because the schema name it produces (`schema_prefix` + `backend_id`) must fit within PostgreSQL's 63-byte limit on identifiers. A backend addressing a remote service is free to use whatever identifier that service assigns.
+
+### Connection Resolution
+
+The two connection methods have deliberately different contracts, and the distinction matters:
+
+- **`get_connection_alias(branch)`** is the single funnel every branch-aware query passes through, and a `Branch` row is always in hand. It **may** query the database. It is therefore the one place to read `branch.connection_params` (a nullable JSON field reserved for backend use — an out-of-tree backend cannot add its own migrations to this app) and hand the result to `register_connection_params()`.
+- **`get_connection_config(alias, default_config)`** is called from inside Django's `ConnectionHandler` *while a connection is being created*. It **must not** query the database — doing so recurses. Retrieve anything you need via `get_registered_connection_params()` instead.
+
+### Invariants
+
+These are requirements of the surrounding machinery, not of any particular storage mechanism:
+
+1. **Global primary key allocation.** Merge and revert replay each `ObjectChange.changed_object_id` verbatim against main, so the primary key of an object created within a branch must not collide with one allocated in main or in a sibling branch. `SchemaBranchingBackend` satisfies this by pointing each branch table's `id` default at main's sequence. A backend whose branches own independent sequences must partition the ID space between them.
+
+2. **Empty changelog on a fresh branch.** Every `core.ObjectChange` row visible on the branch connection is treated as an unmerged branch change. A backend that copies main wholesale must truncate that table during provisioning; otherwise the first merge replays main's entire change history.
+
+3. **Exempt-model visibility.** Non-branchable models (`auth.User`, `contenttypes`, `core.*`, the plugin's own models) are routed to main by `routes_model()`, but a join issued on the branch connection resolves against whatever *that* connection can see. A backend whose branch holds a point-in-time copy of those tables accepts display staleness there. Authentication and object permissions always evaluate against main, because those queries are routed there.
+
+4. **Branch identity is assigned at provisioning time.** A `Branch` row exists in status "new" with `backend_id` unset; `provision()` is what gives the branch an identifier. Nothing may address the branch's dataset before then, and UI or API code which reads a branch's identifier must tolerate its absence.
+
+### Registration
+
+Set the [`backend`](./configuration.md#backend) configuration parameter to the import path of your class:
+
+```python
+PLUGINS_CONFIG = {
+    'netbox_branching': {
+        'backend': 'my_plugin.backends.MyBranchingBackend',
+    }
+}
+```
+
+The path is resolved once at startup, and `validate_configuration()` is called immediately, so a missing or invalid backend surfaces as an `ImproperlyConfigured` error at boot rather than on the first branch-aware query.
 
 ## Branches and Plugin Upgrades
 
