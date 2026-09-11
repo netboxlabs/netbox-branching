@@ -15,8 +15,8 @@
 # NetBox ref override:
 #   A PR labelled `test-against:<ref>` swaps the `main` leg for that ref;
 #   workflow_dispatch takes an explicit ref. Both let a PR be validated
-#   against an unreleased NetBox branch. The checkout expression below is
-#   kept in the form this repo used before the scaffold migration.
+#   against an unreleased NetBox branch. All three sources are resolved and
+#   validated in one step, so the checkout consumes only its output.
 #
 # Coverage:
 #   Collected on a SINGLE matrix leg (see the matrix `include`). The suite is
@@ -156,7 +156,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           repository: netbox-community/netbox
-          ref: ${{ inputs.netbox_ref || steps.netbox-ref.outputs.ref }}
+          ref: ${{ steps.netbox-ref.outputs.ref }}
           path: netbox
           persist-credentials: false
 
