@@ -8,10 +8,9 @@ from functools import cached_property
 from asgiref.local import Local
 from core.choices import JobStatusChoices
 from django.contrib import messages
-from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
+from django.core.exceptions import BadRequest, FieldDoesNotExist, ObjectDoesNotExist
 from django.db import connections
 from django.db.models import ForeignKey, ManyToManyField
-from django.http import HttpResponseBadRequest
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext as _
@@ -544,7 +543,7 @@ def get_active_branch(request):
     if is_api_request(request) and BRANCH_HEADER in request.headers:
         branch = Branch.objects.get(schema_id=request.headers.get(BRANCH_HEADER))
         if not branch.ready:
-            return HttpResponseBadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
+            raise BadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
         return branch
 
     # Branch activated/deactivated by URL query parameter
