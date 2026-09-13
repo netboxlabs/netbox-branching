@@ -123,6 +123,30 @@ class APITestCase(BaseAPITestCase, TransactionTestCase):
         self.assertEqual(len(results), 1)
         self.assertEqual(results[0]['name'], 'Site 2')
 
+    def test_with_unready_branch_header(self):
+        branch = Branch.objects.first()
+        branch.status = BranchStatusChoices.PROVISIONING
+        branch.save(provision=False, update_fields=['status'])
+        header = {**self.header, 'HTTP_X_NETBOX_BRANCH': branch.schema_id}
+        url = reverse('dcim-api:site-list')
+        message = f"Branch {branch} is not ready for use (status: provisioning)"
+
+        response = self.client.get(url, **header)
+        self.assertContains(response, message, status_code=400)
+
+        response = self.client.post(
+            url,
+            data=json.dumps({'name': 'Site 3', 'slug': 'site-3'}),
+            content_type='application/json',
+            **header,
+        )
+        self.assertContains(response, message, status_code=400)
+        self.assertEqual(list(Site.objects.values_list('name', flat=True)), ['Site 1'])
+        self.assertEqual(
+            list(Site.objects.using(branch.connection_name).values_list('name', flat=True)),
+            ['Site 2'],
+        )
+
 
 class BranchArchiveAPITestCase(BaseAPITestCase, TestCase):
     # No branch provisioning here — every test creates a Branch row with
