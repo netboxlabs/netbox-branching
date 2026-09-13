@@ -1,10 +1,13 @@
-from django.test import override_settings
+from django.core.exceptions import BadRequest
+from django.test import RequestFactory, override_settings
 from django.urls import reverse
 from utilities.testing import TestCase
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
+from netbox_branching.middleware import BranchMiddleware
 from netbox_branching.models import Branch
+from netbox_branching.utilities import ActiveBranchContextManager
 
 
 class RequestTestCase(TestCase):
@@ -133,3 +136,27 @@ class RequestTestCase(TestCase):
             HTTP_X_NETBOX_BRANCH='nonexist',
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_api_header_rejection_survives_branch_becoming_ready(self):
+        branch = Branch.objects.first()
+        branch.status = BranchStatusChoices.PROVISIONING
+        branch.save(provision=False, update_fields=['status'])
+        request = RequestFactory().get(reverse('api-root'), HTTP_X_NETBOX_BRANCH=branch.schema_id)
+
+        # NetBox catches request-processor initialization errors before dispatching middleware.
+        with self.assertRaises(BadRequest):
+            ActiveBranchContextManager(request)
+
+        branch.status = BranchStatusChoices.READY
+        branch.save(provision=False, update_fields=['status'])
+
+        def get_response(request):
+            self.fail("A rejected branch request reached downstream middleware")
+
+        response = BranchMiddleware(get_response)(request)
+        self.assertContains(
+            response,
+            f"Branch {branch} is not ready for use (status: provisioning)",
+            status_code=400,
+        )
+        self.assertEqual(response['Content-Type'], 'text/plain')

@@ -541,9 +541,15 @@ def get_active_branch(request):
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
     from .models import Branch
     if is_api_request(request) and BRANCH_HEADER in request.headers:
+        if error := getattr(request, '_branch_activation_error', None):
+            raise error
         branch = Branch.objects.get(schema_id=request.headers.get(BRANCH_HEADER))
         if not branch.ready:
-            raise BadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
+            # Request processors may swallow this error before the middleware checks again.
+            request._branch_activation_error = BadRequest(
+                f"Branch {branch} is not ready for use (status: {branch.status})"
+            )
+            raise request._branch_activation_error
         return branch
 
     # Branch activated/deactivated by URL query parameter

@@ -129,9 +129,10 @@ class APITestCase(BaseAPITestCase, TransactionTestCase):
         branch.save(provision=False, update_fields=['status'])
         header = {**self.header, 'HTTP_X_NETBOX_BRANCH': branch.schema_id}
         url = reverse('dcim-api:site-list')
+        message = f"Branch {branch} is not ready for use (status: provisioning)"
 
         response = self.client.get(url, **header)
-        self.assertEqual(response.status_code, 400)
+        self.assertContains(response, message, status_code=400)
 
         response = self.client.post(
             url,
@@ -139,7 +140,7 @@ class APITestCase(BaseAPITestCase, TransactionTestCase):
             content_type='application/json',
             **header,
         )
-        self.assertEqual(response.status_code, 400)
+        self.assertContains(response, message, status_code=400)
         self.assertEqual(list(Site.objects.values_list('name', flat=True)), ['Site 1'])
         self.assertEqual(
             list(Site.objects.using(branch.connection_name).values_list('name', flat=True)),

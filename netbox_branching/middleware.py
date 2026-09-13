@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.contrib import messages
-from django.core.exceptions import ObjectDoesNotExist
+from django.core.exceptions import BadRequest, ObjectDoesNotExist
 from django.http import HttpResponseBadRequest, HttpResponseRedirect
 from django.utils.translation import gettext as _
 
@@ -53,6 +53,8 @@ class BranchMiddleware:
         # Set/clear the active Branch on the request
         try:
             branch = get_active_branch(request)
+        except BadRequest as error:
+            return HttpResponseBadRequest(str(error), content_type='text/plain')
         except ObjectDoesNotExist:
             return HttpResponseBadRequest("Invalid branch identifier")
         request.active_branch = branch
