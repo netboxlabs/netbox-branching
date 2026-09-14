@@ -3,6 +3,7 @@ from collections import namedtuple
 from typing import ClassVar
 
 from django.core.management import call_command
+from django.core.management.sql import emit_post_migrate_signal
 from django.db import DatabaseError, connections
 from django.test import TransactionTestCase
 
@@ -72,6 +73,11 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
     DELETE does not change sequence behaviour. If the database user may not set
     session_replication_role (it requires superuser), this falls back to Django's
     own flush.
+
+    serialized_rollback keeps working: Django restores the serialized migration data
+    in _fixture_setup, which this class does not override. Only the flush leg is
+    replaced, and the post_migrate signal Django's flush would have emitted is
+    emitted here under the same condition Django uses.
     """
     # Cached per connection alias: the probe is built from the table list, which
     # cannot change while the suite runs.
@@ -82,8 +88,24 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
         # super()._fixture_teardown() would re-flush aliases this loop had already
         # emptied, TRUNCATE-ing them a second time for nothing.
         for db_name in self._databases_names(include_mirrors=False):
-            if not self._fast_flush(db_name):
+            if self._fast_flush(db_name):
+                # Django's flush emits post_migrate unless inhibited, which is what
+                # recreates ContentType and Permission rows it just deleted. Every
+                # subclass today sets serialized_rollback, so Django inhibits the
+                # signal and restores that data in _fixture_setup instead — but a
+                # future subclass that does not would silently lose those rows here
+                # without this.
+                if not self._inhibit_post_migrate(db_name):
+                    emit_post_migrate_signal(verbosity=0, interactive=False, db=db_name)
+            else:
                 self._django_flush(db_name)
+
+    def _inhibit_post_migrate(self, db_name):
+        """Whether Django would suppress post_migrate for this alias after a flush."""
+        return self.available_apps is not None or (
+            self.serialized_rollback
+            and hasattr(connections[db_name], '_test_serialized_contents')
+        )
 
     def _django_flush(self, db_name):
         """Flush one alias exactly as TransactionTestCase._fixture_teardown would.
@@ -91,10 +113,6 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
         Mirrors Django's own call so the fallback path stays faithful to it; if
         Django changes the arguments it passes to `flush`, this needs to follow.
         """
-        inhibit_post_migrate = self.available_apps is not None or (
-            self.serialized_rollback
-            and hasattr(connections[db_name], '_test_serialized_contents')
-        )
         call_command(
             'flush',
             verbosity=0,
@@ -102,7 +120,7 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
             database=db_name,
             reset_sequences=False,
             allow_cascade=self.available_apps is not None,
-            inhibit_post_migrate=inhibit_post_migrate,
+            inhibit_post_migrate=self._inhibit_post_migrate(db_name),
         )
 
     def _fast_flush(self, db_name):
