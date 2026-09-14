@@ -35,6 +35,14 @@ logger = logging.getLogger('netbox_branching.branch.provision')
 # SNAPSHOT is a utility statement that does not accept bind parameters in all drivers.
 _SNAPSHOT_TOKEN_RE = re.compile(r'\A[A-Fa-f0-9\-]+\Z')
 
+# Constraint and index DDL is sent to the server in batches of roughly this many
+# statements rather than one statement per round trip. A branch schema on a stock
+# NetBox install needs ~900 such statements, and issuing each one on its own costs a
+# round trip plus a commit; batching them is the bulk of the provisioning cost on
+# schemas whose tables are small. The batch is kept well below the whole phase so the
+# worker pool still has several units of work to balance across its threads.
+BATCH_STATEMENTS = 100
+
 
 def quote_ident(identifier):
     """Quote a single SQL identifier for safe interpolation into a DDL string.
@@ -106,6 +114,57 @@ def _cancel_backends(pids):
                 conn.close()
             except Exception:
                 logger.debug("Ignoring error while closing cancellation connection", exc_info=True)
+
+
+def _make_batch_task(statements, label):
+    """Return a pool task that runs ``statements`` as one round trip in one transaction.
+
+    On failure the batch is replayed a statement at a time so the log names the
+    statement that actually broke — a batched execute reports only that something in
+    the batch failed, which would otherwise make a provisioning error much harder to
+    diagnose than it is today.
+    """
+    def run(cursor):
+        try:
+            cursor.execute("BEGIN")
+            cursor.execute('; '.join(statements))
+            cursor.execute("COMMIT")
+        except Exception:  # noqa: BLE001 — any batch failure is retried statement by statement
+            # Clear the aborted transaction before replaying; without this every
+            # statement below would fail with "current transaction is aborted".
+            try:
+                cursor.execute("ROLLBACK")
+            except Exception:
+                logger.debug(f'{label}: ROLLBACK after failed batch failed', exc_info=True)
+            for statement in statements:
+                try:
+                    cursor.execute(statement)
+                except Exception:
+                    logger.error(f'{label} failed executing: {statement}')
+                    raise
+            # Every statement succeeded on replay, so the batch failure was
+            # transient (a lock timeout, a cancelled backend). Nothing to re-raise.
+            logger.warning(f'{label}: batch failed but succeeded on individual replay')
+    return run
+
+
+def _batch_tasks(statements_by_table, label, batch_size=BATCH_STATEMENTS):
+    """Group per-table statement lists into ~``batch_size``-statement pool tasks.
+
+    A table's own statements are never split across batches, and the iteration order
+    of ``statements_by_table`` (heaviest table first, as the callers build it) is
+    preserved so the pool still drains its largest work early.
+    """
+    tasks = []
+    batch = []
+    for statements in statements_by_table.values():
+        batch.extend(statements)
+        if len(batch) >= batch_size:
+            tasks.append(_make_batch_task(batch, label))
+            batch = []
+    if batch:
+        tasks.append(_make_batch_task(batch, label))
+    return tasks
 
 
 def _run_pool(tasks, label, workers):
@@ -405,8 +464,8 @@ def parallel_build_indexes(
     main_target = f' ON {main_qident}.'
     schema_replacement = f' ON {schema_qident}.'
 
-    def make_build_task(item):
-        _tablename, indexname, indexdef = item
+    def rewritten(item):
+        tablename, indexname, indexdef = item
         if main_target not in indexdef:
             # pg_get_indexdef normally emits " ON <schema>.<table>"; if the
             # substring is absent the format has shifted in a way we can't
@@ -422,14 +481,15 @@ def parallel_build_indexes(
         # expression index (e.g. `... (public.func(col))`) is intentionally left
         # pointing at main_schema: branch schemas hold only tables, never functions,
         # so the function lives in main and must continue to be referenced there.
-        new_def = indexdef.replace(main_target, schema_replacement, 1)
+        return tablename, indexdef.replace(main_target, schema_replacement, 1)
 
-        def build(cursor):
-            logger.debug(f'Creating index {schema}.{indexname}')
-            cursor.execute(new_def)
-        return build
+    statements_by_table = defaultdict(list)
+    for task in tasks:
+        tablename, statement = rewritten(task)
+        statements_by_table[tablename].append(statement)
 
-    _run_pool([make_build_task(t) for t in tasks], 'branch-index', workers)
+    logger.debug(f'Creating {len(tasks)} indexes in schema {schema}')
+    _run_pool(_batch_tasks(statements_by_table, 'branch-index'), 'branch-index', workers)
 
 
 def parallel_add_constraints(constraint_tasks, schema, workers):
@@ -449,24 +509,20 @@ def parallel_add_constraints(constraint_tasks, schema, workers):
         schema: Destination branch schema the constraints are added to.
         workers: Maximum number of worker threads (and backends) to use.
     """
-    def make_add_task(item):
-        tablename, conname, condef = item
-        # Always-quote identifiers here — condef comes from pg_get_constraintdef
-        # which already quotes column references where needed, so we only need
-        # to handle the bare schema/table/constraint names we inject ourselves.
-        # (Named sql_text, not sql, to avoid shadowing the module-level
-        # `from psycopg import sql` import this module uses for quoting.)
-        sql_text = (
+    # Always-quote identifiers here — condef comes from pg_get_constraintdef
+    # which already quotes column references where needed, so we only need
+    # to handle the bare schema/table/constraint names we inject ourselves.
+    statements_by_table = defaultdict(list)
+    for tablename, conname, condef in constraint_tasks:
+        statements_by_table[tablename].append(
             f'ALTER TABLE {quote_ident(schema)}.{quote_ident(tablename)} '
             f'ADD CONSTRAINT {quote_ident(conname)} {condef}'
         )
 
-        def add(cursor):
-            logger.debug(f'Adding constraint {conname} on {schema}.{tablename}')
-            cursor.execute(sql_text)
-        return add
-
-    _run_pool([make_add_task(t) for t in constraint_tasks], 'branch-constraint', workers)
+    logger.debug(f'Adding constraints to schema {schema}')
+    _run_pool(
+        _batch_tasks(statements_by_table, 'branch-constraint'), 'branch-constraint', workers
+    )
 
 
 def parallel_analyze_tables(tables, schema, workers):
