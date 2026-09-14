@@ -117,21 +117,32 @@ def _cancel_backends(pids):
 
 
 def _make_batch_task(statements, label):
-    """Return a pool task that runs ``statements`` as one round trip in one transaction.
+    """Return a pool task that runs ``statements`` as a single round trip.
+
+    The statements are sent as one semicolon-separated simple-query message, which
+    PostgreSQL executes in an implicit transaction: either all of them apply or none
+    do. No explicit BEGIN/COMMIT is issued, deliberately — this helper is called with
+    whatever connection the pool hands it, so wrapping the batch itself would assume
+    that connection is in autocommit mode. Under Django's PostgreSQL default it is,
+    but an alias configured with AUTOCOMMIT = False would already have a transaction
+    open and the BEGIN would either warn and silently nest or raise. Relying on the
+    server's implicit transaction is correct in both modes.
 
     On failure the batch is replayed a statement at a time so the log names the
     statement that actually broke — a batched execute reports only that something in
     the batch failed, which would otherwise make a provisioning error much harder to
-    diagnose than it is today.
+    diagnose than it is today. Replay is safe precisely because the batch is atomic:
+    nothing from it has been applied, so no statement can fail as "already exists".
     """
     def run(cursor):
         try:
-            cursor.execute("BEGIN")
             cursor.execute('; '.join(statements))
-            cursor.execute("COMMIT")
         except Exception:  # noqa: BLE001 — any batch failure is retried statement by statement
-            # Clear the aborted transaction before replaying; without this every
-            # statement below would fail with "current transaction is aborted".
+            # Clear the transaction before replaying. In autocommit there is nothing
+            # to roll back and the server merely warns; with AUTOCOMMIT = False the
+            # failed batch has left Django's transaction aborted, and without this
+            # every statement below would fail with "current transaction is aborted"
+            # and the log would blame the first one rather than the culprit.
             try:
                 cursor.execute("ROLLBACK")
             except Exception:

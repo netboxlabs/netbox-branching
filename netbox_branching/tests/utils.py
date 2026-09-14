@@ -2,6 +2,7 @@ import logging
 from collections import namedtuple
 from typing import ClassVar
 
+from django.core.management import call_command
 from django.db import DatabaseError, connections
 from django.test import TransactionTestCase
 
@@ -77,11 +78,32 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
     _nonempty_probe: ClassVar[dict] = {}
 
     def _fixture_teardown(self):
+        # Fall back per alias rather than for all of them: deferring to
+        # super()._fixture_teardown() would re-flush aliases this loop had already
+        # emptied, TRUNCATE-ing them a second time for nothing.
         for db_name in self._databases_names(include_mirrors=False):
             if not self._fast_flush(db_name):
-                # Fall back to Django's flush for every alias.
-                super()._fixture_teardown()
-                return
+                self._django_flush(db_name)
+
+    def _django_flush(self, db_name):
+        """Flush one alias exactly as TransactionTestCase._fixture_teardown would.
+
+        Mirrors Django's own call so the fallback path stays faithful to it; if
+        Django changes the arguments it passes to `flush`, this needs to follow.
+        """
+        inhibit_post_migrate = self.available_apps is not None or (
+            self.serialized_rollback
+            and hasattr(connections[db_name], '_test_serialized_contents')
+        )
+        call_command(
+            'flush',
+            verbosity=0,
+            interactive=False,
+            database=db_name,
+            reset_sequences=False,
+            allow_cascade=self.available_apps is not None,
+            inhibit_post_migrate=inhibit_post_migrate,
+        )
 
     def _fast_flush(self, db_name):
         """Empty the non-empty tables on `db_name`. Returns False to defer to Django."""
