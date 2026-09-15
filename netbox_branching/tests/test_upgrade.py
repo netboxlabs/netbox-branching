@@ -121,9 +121,12 @@ class BranchUpgradeTestCase(TransactionTestCase):
         user, _ = User.objects.get_or_create(username='upgrade_user')
 
         Branch.objects.filter(name='upgrade-test').delete()
-        branch = Branch(name='upgrade-test')
+        # This test loads a fixture schema in place of provisioning it, so it pins the
+        # backend ID (and therefore the schema name) that provisioning would assign.
+        branch = Branch(name='upgrade-test', backend_id='upgradets')
         branch.save(provision=False)
-        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.READY)
+        # Standing in for provision(), which is what normally records both of these.
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.READY, provisioned=True)
         branch.refresh_from_db()
 
         self._load_fixture(branch.schema_name)

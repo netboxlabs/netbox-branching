@@ -4,8 +4,9 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import DEFAULT_DB_ALIAS, connections
-from django.test import TransactionTestCase, tag
+from django.test import TestCase, TransactionTestCase, tag
 
+from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
 from netbox_branching.signal_receivers import check_pending_migrations
 from netbox_branching.utilities import activate_branch, close_old_branch_connections
@@ -114,3 +115,25 @@ class BranchConnectionLifecycleTestCase(TransactionTestCase):
             close_old_branch_connections()
         except Exception as e:
             self.fail(f"cleanup should not raise exception for deleted branch: {e}")
+
+
+@tag('regression')  # netbox-branching #618
+class CheckPendingMigrationsUnprovisionedBranchTestCase(TestCase):
+    """
+    A READY branch whose backend_id is NULL — reachable from a restored fixture or a manual
+    status update — has no connection to close, and asking for its alias raises. Branch.
+    pending_migrations guards against this, but the sweep's connection close sits in a finally
+    outside that try/except: an exception escaping there aborts the whole `manage.py migrate`
+    run, and masks anything the except had just logged.
+    """
+
+    def test_sweep_tolerates_an_unprovisioned_branch(self):
+        branch = Branch(name='Never Provisioned')
+        branch.save(provision=False)
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.READY)
+        self.assertIsNone(Branch.objects.get(pk=branch.pk).backend_id)
+
+        # Fire the post_migrate handler as Django would during `manage.py migrate`.
+        check_pending_migrations(sender=apps.get_app_config('netbox_branching'), using=DEFAULT_DB_ALIAS)
+
+        self.assertEqual(Branch.objects.get(pk=branch.pk).status, BranchStatusChoices.READY)

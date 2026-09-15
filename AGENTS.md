@@ -42,6 +42,10 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 │   ├── utilities.py           — DynamicSchemaDict, branch activation helpers, change replay.
 │   ├── views.py               — All UI views.
 │   ├── webhook_callbacks.py   — Webhook/event rule integration.
+│   ├── backends/
+│   │   ├── __init__.py        — get_branching_backend() — resolves & caches the configured backend.
+│   │   ├── base.py            — BranchingBackend ABC (the branch-isolation contract).
+│   │   └── schema.py          — SchemaBranchingBackend (default; PostgreSQL schema replication).
 │   ├── api/
 │   │   ├── serializers.py
 │   │   ├── urls.py            — NetBoxRouter registrations.
@@ -56,7 +60,7 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 │   │   ├── strategy.py        — Abstract MergeStrategy base class.
 │   │   ├── iterative.py       — IterativeMergeStrategy (default).
 │   │   └── squash.py          — SquashMergeStrategy.
-│   ├── migrations/            — Django schema migrations (0001–0008).
+│   ├── migrations/            — Django schema migrations (0001–0010).
 │   ├── models/
 │   │   ├── __init__.py        — Star-imports every submodule.
 │   │   ├── branches.py        — Branch, BranchEvent.
@@ -73,6 +77,7 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 │   └── tests/
 │       ├── utils.py                    — Shared test utilities.
 │       ├── test_api.py
+│       ├── test_backends.py
 │       ├── test_branches.py
 │       ├── test_changediff.py
 │       ├── test_config.py
@@ -107,12 +112,20 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 
 ### Database Isolation
 
-The core mechanism uses PostgreSQL schemas. Each branch gets its own schema (e.g. `branch_abc123`). Two custom components make this work:
+The isolation *mechanism* lives behind a pluggable seam (`backends/`); everything above it — change tracking, merge strategies, status transitions, signals — is backend-agnostic.
 
-- **`DynamicSchemaDict`** (`utilities.py`): A `dict` subclass wrapping `DATABASES`. When Django looks up a `schema_<id>` database alias, it returns the standard DB config with a modified `search_path` pointing to that branch's schema — without requiring pre-registration of every alias.
-- **`BranchAwareRouter`** (`database.py`): A Django database router that intercepts all queries, checks the current `active_branch` context variable, and routes to the appropriate schema alias.
+- **`BranchingBackend`** (`backends/base.py`): The ABC. Six abstract methods (`provision`, `deprovision`, `get_connection_alias`, `get_connection_config`, `get_pending_migrations`, `apply_migrations`) plus four with defaults (`owns_connection_alias`, `routes_model`, `allow_migrate`, `validate_configuration`). Its docstring states the four invariants an implementation must satisfy (global PK allocation, empty changelog on a fresh branch, exempt-model visibility, and branch identity assigned at provisioning time — `provision()` must assign `Branch.backend_id`).
+- **`get_branching_backend()`** (`backends/__init__.py`): Resolves `PLUGINS_CONFIG['netbox_branching']['backend']`, caching one instance per import path and clearing the cache on Django's `setting_changed`.
+- **`SchemaBranchingBackend`** (`backends/schema.py`): The default and only shipped backend. Gives each branch its own PostgreSQL schema (e.g. `branch_abc123`) populated by replicating main's branchable tables, addressed by a `schema_<schema name>` connection alias whose `search_path` is `<branch>,<main>`. `generate_branch_id()` mints the short random identifier that names the schema; the 63-byte PostgreSQL identifier limit is enforced in `provision()`.
 
-Both must be configured in the host NetBox instance (`DATABASES = DynamicSchemaDict(...)` and `DATABASE_ROUTERS` containing `BranchAwareRouter`). The plugin validates these in `AppConfig.ready()` and raises `ImproperlyConfigured` if either is missing.
+Two components sit on top of the seam and must be configured in the host NetBox instance:
+
+- **`DynamicSchemaDict`** (`utilities.py`): A `dict` subclass wrapping `DATABASES`. Any lookup the backend claims via `owns_connection_alias()` is handed to `get_connection_config()`; anything else falls through to `dict.__getitem__`. Both methods resolve the backend lazily and no-op while `settings.configured` is False, because NetBox's settings module reads `DATABASES['default']` while still executing.
+- **`BranchAwareRouter`** (`database.py`): A Django database router that intercepts all queries, checks the current `active_branch` context variable, and returns `backend.get_connection_alias(branch)` for any model the backend `routes_model()`. Its `allow_migrate()` establishes that the alias belongs to the configured backend and then defers to `backend.allow_migrate()`, so which migrations run inside a branch is backend policy.
+
+`AppConfig.ready()` calls `get_branching_backend().validate_configuration()`, which for the schema backend raises `ImproperlyConfigured` if `DATABASES` is not a `DynamicSchemaDict`, if `BranchAwareRouter` is absent from `DATABASE_ROUTERS`, or if `provision_workers` is invalid.
+
+Note the split contract on the two connection methods: `get_connection_alias(branch)` always has a `Branch` row in hand and *may* query the database (it is where a backend reads `Branch.connection_params`); `get_connection_config(alias, default_config)` runs inside Django's connection-creation path and **must not**, since that recurses. `BranchingBackend` provides an `asgiref.local.Local`-backed registry (`register_connection_params` / `get_registered_connection_params`) to bridge the two.
 
 ### Context Management
 
@@ -168,7 +181,9 @@ Callable validators can be registered for each action (`sync`, `merge`, `migrate
 | File | Role |
 |---|---|
 | `netbox_branching/__init__.py` | Plugin AppConfig, settings validation, signal registration |
-| `netbox_branching/database.py` | `BranchAwareRouter` — schema routing |
+| `netbox_branching/backends/base.py` | `BranchingBackend` ABC — the branch-isolation contract and its invariants |
+| `netbox_branching/backends/schema.py` | `SchemaBranchingBackend` — default backend: schema provisioning, migration, connection config |
+| `netbox_branching/database.py` | `BranchAwareRouter` — branch connection routing |
 | `netbox_branching/middleware.py` | Request-level branch activation |
 | `netbox_branching/utilities.py` | `DynamicSchemaDict`, branch activation helpers, change replay |
 | `netbox_branching/models/branches.py` | `Branch` and `BranchEvent` models |
@@ -220,6 +235,7 @@ After model changes, generate a migration with `python netbox/manage.py makemigr
 | Module | Coverage area |
 |---|---|
 | `test_api.py` | REST API endpoints (CRUD, sync/merge/revert/migrate actions) |
+| `test_backends.py` | Branching backend resolution, the schema backend's connection addressing and config validation, and delegation from `Branch`/`BranchAwareRouter` |
 | `test_branches.py` | Branch model operations and lifecycle |
 | `test_changediff.py` | `ChangeDiff` conflict detection |
 | `test_config.py` | Plugin configuration validation |
@@ -306,14 +322,15 @@ To rehearse a publish without touching production PyPI, run the workflow manuall
 - **Search registration** lives in `search.py`.
 - **Permissions** use NetBox's standard model permissions (`netbox_branching.view_branch`, etc.).
 - **Exempt models.** Plugin models that should not be branched must be listed in `PLUGINS_CONFIG['netbox_branching']['exempt_models']`. Other plugin authors are responsible for configuring this for their own models.
-- **Migrations.** No squashing has been done; migrations are sequential (0001–0008). Write data migrations using `apps.get_model(...)` and `get_or_create` — ContentType rows may not exist at migration time.
+- **Migrations.** No squashing has been done; migrations are sequential (0001–0010). Write data migrations using `apps.get_model(...)` and `get_or_create` — ContentType rows may not exist at migration time.
 - **Connection cleanup.** Branch database aliases are dynamically created and not in `DATABASES.keys()`, so Django's built-in `close_old_connections()` misses them. `close_old_branch_connections()` in `utilities.py` is connected to `request_started`/`request_finished` signals to plug this leak (see issue #358).
 - **Linting.** Config in `ruff.toml`. Enabled groups: `E1`–`E3`, `E501`, `W`, `I`, `RET`, `UP`. Line length 120, single quotes, LF endings, `preview = true`. Ignored: `F403`, `F405`, `RET504`, `TRY002`, `UP032`. `netbox_branching` is treated as first-party for import sorting.
 
 ## Troubleshooting
 
-- **`DATABASES must be a DynamicSchemaDict instance`** — The host NetBox configuration has not wrapped `DATABASES` with `DynamicSchemaDict`. See the README installation instructions.
-- **`DATABASE_ROUTERS must contain 'netbox_branching.database.BranchAwareRouter'`** — Add the router string to `DATABASE_ROUTERS` in the NetBox configuration.
+- **`DATABASES must be a DynamicSchemaDict instance`** — Raised by `SchemaBranchingBackend.validate_configuration()`: the host NetBox configuration has not wrapped `DATABASES` with `DynamicSchemaDict`. See the README installation instructions.
+- **`DATABASE_ROUTERS must contain 'netbox_branching.database.BranchAwareRouter'`** — Also raised by `SchemaBranchingBackend.validate_configuration()`. Add the router string to `DATABASE_ROUTERS` in the NetBox configuration.
+- **`backend not found: <path>`** / **`is not a subclass of ... BranchingBackend`** — The `backend` config parameter names an unimportable path or a class that doesn't subclass `BranchingBackend`. Raised at startup by `get_branching_backend()`.
 - **Branch stuck in a transitional status** — A background job likely failed. Check the job log in the NetBox UI or database. The job timeout is configurable via `job_timeout` (default 3600 s).
 - **Conflict detected on merge** — `ChangeDiff` found that the same object was modified in both main and the branch since the last sync. Sync the branch first to incorporate main's changes, then re-attempt the merge.
 - **`PENDING_MIGRATIONS` status** — The branch schema is missing Django migrations that have been applied to main. Run `MigrateBranchJob` (or use the Migrate button in the UI) to apply them.

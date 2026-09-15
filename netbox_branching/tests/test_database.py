@@ -15,6 +15,7 @@ each primitive in isolation so regressions can be diagnosed quickly.
 from dcim.models import Site
 from django.test import TestCase, override_settings
 
+from netbox_branching.backends import SchemaBranchingBackend
 from netbox_branching.contextvars import active_branch
 from netbox_branching.database import BranchAwareRouter
 from netbox_branching.models import Branch
@@ -24,6 +25,19 @@ from netbox_branching.utilities import (
     close_old_branch_connections,
     track_branch_connection,
 )
+
+from .utils import plugin_disabled
+
+
+class PickyBackend(SchemaBranchingBackend):
+    """
+    A backend which owns every "schema_*" alias but declines to configure one of them,
+    standing in for any backend whose ownership test is broader than its config method.
+    """
+    def get_connection_config(self, alias, default_config):
+        if alias.endswith('_refused'):
+            return None
+        return super().get_connection_config(alias, default_config)
 
 
 class DynamicSchemaDictTestCase(TestCase):
@@ -64,6 +78,38 @@ class DynamicSchemaDictTestCase(TestCase):
         self.assertIn('default', databases)
         self.assertNotIn('something_else', databases)
 
+    def test_owned_but_unconfigurable_alias_is_not_claimed(self):
+        """
+        __contains__ and __getitem__ must give the same answer. Django's ConnectionHandler
+        tests membership and then indexes, so an alias claimed here but refused on lookup
+        raises a bare KeyError out of create_connection() instead of the
+        ConnectionDoesNotExist it raises for an alias reported unknown.
+
+        The bare prefix is the shipped backend's reachable case: it satisfies
+        owns_connection_alias()'s startswith test, but leaves get_connection_config() with
+        an empty schema name, which it declines to build a search_path from.
+        """
+        databases = self._make()
+        self.assertNotIn('schema_', databases)
+        with self.assertRaises(KeyError):
+            databases['schema_']
+
+    @override_settings(PLUGINS_CONFIG={
+        'netbox_branching': {'backend': 'netbox_branching.tests.test_database.PickyBackend'},
+    })
+    def test_alias_a_backend_owns_but_refuses_is_not_claimed(self):
+        """
+        The general case: a backend whose ownership test is broader than the set of aliases
+        it can actually configure. Both lookups must agree that such an alias is absent.
+        """
+        databases = self._make()
+        self.assertIn('schema_branch_ok', databases)
+        self.assertEqual(databases['schema_branch_ok']['NAME'], 'netbox')
+
+        self.assertNotIn('schema_branch_refused', databases)
+        with self.assertRaises(KeyError):
+            databases['schema_branch_refused']
+
     def test_lookup_registers_alias_for_cleanup_tracking(self):
         """
         Branch aliases are not in DATABASES.keys(), so close_old_connections()
@@ -78,19 +124,41 @@ class DynamicSchemaDictTestCase(TestCase):
         finally:
             _get_tracked_branch_aliases().discard(alias)
 
+    # Plugin disabled ----------------------------------------------------------
+    #
+    # DATABASES is host configuration: it stays wrapped in a DynamicSchemaDict when the
+    # operator drops netbox_branching from PLUGINS (to troubleshoot, say). With no plugin
+    # loaded, the wrapper must behave as the plain dict it subclasses rather than raising
+    # ImproperlyConfigured on NetBox's very first database lookup.
+    #
+    # The operator's PLUGINS_CONFIG block survives that removal, so these use
+    # plugin_disabled() rather than emptying PLUGINS_CONFIG — the latter describes a state
+    # NetBox cannot produce, and passes against a guard which never fires in production.
+
+    def test_default_key_works_with_plugin_disabled(self):
+        with plugin_disabled():
+            self.assertEqual(self._make()['default']['NAME'], 'netbox')
+
+    def test_schema_key_is_not_claimed_with_plugin_disabled(self):
+        with plugin_disabled():
+            databases = self._make()
+            self.assertNotIn('schema_branch_abc123', databases)
+            with self.assertRaises(KeyError):
+                databases['schema_branch_abc123']
+
 
 class BranchAwareRouterTestCase(TestCase):
     """
     BranchAwareRouter consults the active_branch ContextVar to decide whether
     queries should be routed to a branch schema. The router is purely a Python
     object — it can be unit-tested without provisioning a real schema, as long
-    as a Branch instance with a valid schema_name is available (auto-generated
-    in Branch.__init__).
+    as the Branch has a backend ID (assigned by the backend during provisioning,
+    so pinned explicitly here).
     """
 
     def setUp(self):
         self.router = BranchAwareRouter()
-        self.branch = Branch(name='Router Test Branch')
+        self.branch = Branch(name='Router Test Branch', backend_id='routertst')
 
     def _activate(self, branch):
         """Set active_branch and register a cleanup that restores it."""
@@ -180,6 +248,16 @@ class BranchAwareRouterTestCase(TestCase):
         self.assertFalse(
             self.router.allow_migrate('schema_branch_xxx', 'auth', 'user')
         )
+
+    def test_allow_migrate_has_no_opinion_with_plugin_disabled(self):
+        """
+        DATABASE_ROUTERS is host configuration that outlives PLUGINS, and Django consults
+        allow_migrate() for every model on every `migrate` — so this is the one router
+        method reachable with the plugin unloaded. It must abstain, not raise.
+        """
+        with plugin_disabled():
+            self.assertIsNone(self.router.allow_migrate('default', 'dcim', 'site'))
+            self.assertIsNone(self.router.allow_migrate('schema_branch_xxx', 'dcim', 'site'))
 
 
 class BranchConnectionTrackingTestCase(TestCase):
