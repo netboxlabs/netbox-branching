@@ -125,6 +125,13 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
                 )
                 schemas = [row[0] for row in cursor.fetchall()]
                 if schemas:
+                    # Sent as one semicolon-separated statement, which PostgreSQL runs in
+                    # a single implicit transaction — so a failure part-way leaves no
+                    # half-dropped schemas behind. This only works while the statement
+                    # carries no bind parameters: with parameters psycopg switches to the
+                    # extended protocol, which permits exactly one statement per execute.
+                    # Keep the schema names interpolated via quote_ident, not passed as
+                    # parameters (an identifier could not be a parameter anyway).
                     cursor.execute('; '.join(
                         f'DROP SCHEMA {quote_ident(s)} CASCADE' for s in schemas
                     ))
@@ -132,11 +139,29 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
             logger.warning('Failed to drop leftover branch schemas', exc_info=True)
 
     def _inhibit_post_migrate(self, db_name):
-        """Whether Django would suppress post_migrate for this alias after a flush."""
-        return self.available_apps is not None or (
-            self.serialized_rollback
-            and hasattr(connections[db_name], '_test_serialized_contents')
-        )
+        """Whether Django would suppress post_migrate for this alias after a flush.
+
+        Mirrors the condition in TransactionTestCase._fixture_teardown, including its
+        use of the private `_test_serialized_contents` attribute the test runner sets
+        when it serialises an alias. Nothing public exposes that state, so matching
+        Django means reaching for the same private name it does; if a Django upgrade
+        renames it this quietly flips to False, so warn rather than let the behaviour
+        change go unnoticed.
+        """
+        if self.available_apps is not None:
+            return True
+        if not self.serialized_rollback:
+            return False
+        if not hasattr(connections[db_name], '_test_serialized_contents'):
+            logger.warning(
+                "%s sets serialized_rollback but connection %r has no "
+                "_test_serialized_contents. Django's test runner normally sets this, so "
+                "it likely moved in a Django upgrade — %s needs to follow it, and until "
+                "then post_migrate fires where Django would have suppressed it.",
+                type(self).__name__, db_name, __name__,
+            )
+            return False
+        return True
 
     def _django_flush(self, db_name):
         """Flush one alias exactly as TransactionTestCase._fixture_teardown would.
@@ -183,6 +208,12 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
                 # too.
                 cursor.execute('SET session_replication_role = replica')
                 try:
+                    # One semicolon-separated statement, so PostgreSQL runs the whole
+                    # sweep in a single implicit transaction and a failure part-way
+                    # cannot leave the database half-emptied. As above, this holds only
+                    # while no bind parameters are used — adding one would switch psycopg
+                    # to the extended protocol, which allows a single statement per
+                    # execute and would break this silently.
                     cursor.execute('; '.join(
                         f'DELETE FROM {connection.ops.quote_name(table)}'
                         for table in nonempty
