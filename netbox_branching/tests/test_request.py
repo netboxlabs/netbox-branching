@@ -8,6 +8,8 @@ from netbox_branching.models import Branch
 
 
 class RequestTestCase(TestCase):
+    # Activating a branch requires permission to view it
+    user_permissions = ('netbox_branching.view_branch',)
 
     @classmethod
     def setUpTestData(cls):

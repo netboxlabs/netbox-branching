@@ -14,9 +14,11 @@ from django.db.models import ForeignKey, ManyToManyField
 from django.http import HttpResponseBadRequest
 from django.urls import reverse
 from django.utils import timezone
+from django.utils.functional import SimpleLazyObject
 from django.utils.translation import gettext as _
 from netbox.plugins import get_plugin_config
 from netbox.utils import register_request_processor
+from utilities.permissions import get_permission_for_model, permission_is_exempt
 
 from .constants import (
     _FILE_NOT_FOUND_EXCEPTIONS,
@@ -61,6 +63,7 @@ __all__ = (
     'full_clean_with_file_check',
     'get_active_branch',
     'get_branchable_object_types',
+    'get_branches_for_user',
     'get_sql_results',
     'get_tables_to_replicate',
     'is_api_request',
@@ -69,9 +72,11 @@ __all__ = (
     'register_branching_resolver',
     'register_objectchange_field_migrator',
     'resolve_changes_summary',
+    'resolve_request_user',
     'supports_branching',
     'track_branch_connection',
     'update_object',
+    'user_has_branch_permission',
 )
 
 
@@ -535,14 +540,65 @@ def is_api_request(request):
     return request.path_info.startswith(reverse('api-root')) or request.path_info.startswith(reverse('graphql'))
 
 
+def get_branches_for_user(user, action='view'):
+    """
+    Return the Branches on which the given user has been granted the specified permission. Honors any
+    object-level constraints defined for the permission, so an administrator can scope branches to their
+    owner (e.g. {"owner": "$user"}) or to any other attribute.
+    """
+    from .models import Branch
+    return Branch.objects.restrict(user, action)
+
+
+def user_has_branch_permission(user, action='view'):
+    """
+    Return True if the given user holds the specified Branch permission at the model level, honoring the
+    same exemptions as get_branches_for_user().
+    """
+    from .models import Branch
+    permission = get_permission_for_model(Branch, action)
+    return permission_is_exempt(permission) or (user is not None and user.has_perm(permission))
+
+
+def resolve_request_user(request):
+    """
+    Return the user making the request. API requests are authenticated by REST framework during view
+    dispatch, which happens after the active branch has been resolved, so for those the configured API
+    authentication classes are run here (once per request) to identify the user.
+    """
+    user = getattr(request, 'user', None)
+    if (user is not None and user.is_authenticated) or not is_api_request(request):
+        return user
+    if (cached := getattr(request, '_branching_api_user', None)) is not None:
+        return cached
+
+    from rest_framework.request import Request as DRFRequest
+    from rest_framework.settings import api_settings
+
+    try:
+        user = DRFRequest(
+            request,
+            authenticators=[auth() for auth in api_settings.DEFAULT_AUTHENTICATION_CLASSES],
+        ).user
+    except Exception:
+        # Leave the user unresolved; the view will report the authentication failure itself
+        logger.debug('Unable to authenticate API request while resolving the active branch', exc_info=True)
+    request._branching_api_user = user
+
+    return user
+
+
 def get_active_branch(request):
     """
-    Return the active Branch (if any).
+    Return the active Branch (if any). Only branches which the requesting user is permitted to view are
+    eligible for activation.
     """
+    # Resolved lazily: a request which names no branch should not incur the cost of identifying the user.
+    branches = SimpleLazyObject(lambda: get_branches_for_user(resolve_request_user(request)))
+
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
-    from .models import Branch
     if is_api_request(request) and BRANCH_HEADER in request.headers:
-        branch = Branch.objects.get(schema_id=request.headers.get(BRANCH_HEADER))
+        branch = branches.get(schema_id=request.headers.get(BRANCH_HEADER))
         if not branch.ready:
             return HttpResponseBadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
         return branch
@@ -550,7 +606,7 @@ def get_active_branch(request):
     # Branch activated/deactivated by URL query parameter
     if QUERY_PARAM in request.GET:
         if schema_id := request.GET.get(QUERY_PARAM):
-            branch = Branch.objects.get(schema_id=schema_id)
+            branch = branches.get(schema_id=schema_id)
             if branch.ready:
                 if (
                     schema_id != request.COOKIES.get(COOKIE_NAME)
@@ -574,7 +630,7 @@ def get_active_branch(request):
     # Branch set by cookie
     if schema_id := request.COOKIES.get(COOKIE_NAME):
         try:
-            branch = Branch.objects.get(schema_id=schema_id)
+            branch = branches.get(schema_id=schema_id)
             if branch.ready:
                 return branch
         except ObjectDoesNotExist:

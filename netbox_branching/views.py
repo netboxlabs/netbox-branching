@@ -633,9 +633,16 @@ class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
     def get(self, request):
         return redirect(self.get_return_url(request))
 
+    def _get_form(self, data=None, initial=None):
+        # self.queryset is already restricted to the branches the user may migrate; binding it to the
+        # form makes it reject any other PK rather than migrate it.
+        form = forms.BulkMigrateBranchForm(data, initial=initial)
+        form.fields['pk'].queryset = self.queryset
+        return form
+
     def post(self, request):
         if '_confirm' in request.POST:
-            form = forms.BulkMigrateBranchForm(request.POST)
+            form = self._get_form(request.POST)
             if form.is_valid():
                 branches = [
                     branch for branch in form.cleaned_data['pk']
@@ -658,7 +665,7 @@ class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
             return redirect(self.get_return_url(request))
 
         # Show confirmation page — validate PKs through the form, filter to branches that can actually be migrated
-        form = forms.BulkMigrateBranchForm(request.POST)
+        form = self._get_form(request.POST)
         if not form.is_valid():
             return redirect(self.get_return_url(request))
 
@@ -672,7 +679,7 @@ class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
             messages.warning(request, _('No branches with pending migrations were selected.'))
             return redirect(self.get_return_url(request))
 
-        form = forms.BulkMigrateBranchForm(initial={'pk': [b.pk for b in branches]})
+        form = self._get_form(initial={'pk': [b.pk for b in branches]})
 
         return render(request, self.template_name, {
             'form': form,
