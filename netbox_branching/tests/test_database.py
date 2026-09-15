@@ -25,6 +25,8 @@ from netbox_branching.utilities import (
     track_branch_connection,
 )
 
+from .utils import plugin_disabled
+
 
 class DynamicSchemaDictTestCase(TestCase):
     """
@@ -82,19 +84,23 @@ class DynamicSchemaDictTestCase(TestCase):
     #
     # DATABASES is host configuration: it stays wrapped in a DynamicSchemaDict when the
     # operator drops netbox_branching from PLUGINS (to troubleshoot, say). With no plugin
-    # config to resolve, the wrapper must behave as the plain dict it subclasses rather
-    # than raising ImproperlyConfigured on NetBox's very first database lookup.
+    # loaded, the wrapper must behave as the plain dict it subclasses rather than raising
+    # ImproperlyConfigured on NetBox's very first database lookup.
+    #
+    # The operator's PLUGINS_CONFIG block survives that removal, so these use
+    # plugin_disabled() rather than emptying PLUGINS_CONFIG — the latter describes a state
+    # NetBox cannot produce, and passes against a guard which never fires in production.
 
-    @override_settings(PLUGINS_CONFIG={})
     def test_default_key_works_with_plugin_disabled(self):
-        self.assertEqual(self._make()['default']['NAME'], 'netbox')
+        with plugin_disabled():
+            self.assertEqual(self._make()['default']['NAME'], 'netbox')
 
-    @override_settings(PLUGINS_CONFIG={})
     def test_schema_key_is_not_claimed_with_plugin_disabled(self):
-        databases = self._make()
-        self.assertNotIn('schema_branch_abc123', databases)
-        with self.assertRaises(KeyError):
-            databases['schema_branch_abc123']
+        with plugin_disabled():
+            databases = self._make()
+            self.assertNotIn('schema_branch_abc123', databases)
+            with self.assertRaises(KeyError):
+                databases['schema_branch_abc123']
 
 
 class BranchAwareRouterTestCase(TestCase):
@@ -199,15 +205,15 @@ class BranchAwareRouterTestCase(TestCase):
             self.router.allow_migrate('schema_branch_xxx', 'auth', 'user')
         )
 
-    @override_settings(PLUGINS_CONFIG={})
     def test_allow_migrate_has_no_opinion_with_plugin_disabled(self):
         """
         DATABASE_ROUTERS is host configuration that outlives PLUGINS, and Django consults
         allow_migrate() for every model on every `migrate` — so this is the one router
         method reachable with the plugin unloaded. It must abstain, not raise.
         """
-        self.assertIsNone(self.router.allow_migrate('default', 'dcim', 'site'))
-        self.assertIsNone(self.router.allow_migrate('schema_branch_xxx', 'dcim', 'site'))
+        with plugin_disabled():
+            self.assertIsNone(self.router.allow_migrate('default', 'dcim', 'site'))
+            self.assertIsNone(self.router.allow_migrate('schema_branch_xxx', 'dcim', 'site'))
 
 
 class BranchConnectionTrackingTestCase(TestCase):

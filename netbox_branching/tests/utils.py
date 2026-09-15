@@ -1,12 +1,33 @@
 from collections import namedtuple
+from contextlib import contextmanager
+from unittest import mock
+
+from netbox.registry import registry
 
 from netbox_branching.models import Branch
 
 __all__ = (
     'fetchall',
     'fetchone',
+    'plugin_disabled',
     'provision_branch',
 )
+
+
+@contextmanager
+def plugin_disabled():
+    """
+    Simulate the plugin having been dropped from the host's PLUGINS setting.
+
+    What actually changes when an operator comments netbox_branching out of PLUGINS is
+    that NetBox never registers it as installed. Their PLUGINS_CONFIG block survives —
+    NetBox only ever adds entries to that dict, never removes them — so a test which
+    empties PLUGINS_CONFIG instead is pinning a state that cannot occur, and would pass
+    against a guard that never fires in production.
+    """
+    installed = [name for name in registry['plugins']['installed'] if name != 'netbox_branching']
+    with mock.patch.dict(registry['plugins'], {'installed': installed}):
+        yield
 
 
 def provision_branch(*, user, name='Test Branch', **kwargs):

@@ -23,7 +23,12 @@ from django.core.exceptions import ImproperlyConfigured
 from django.test import TestCase, override_settings
 
 from netbox_branching import backends
-from netbox_branching.backends import BranchingBackend, SchemaBranchingBackend, get_branching_backend
+from netbox_branching.backends import (
+    PLUGIN_NAME,
+    BranchingBackend,
+    SchemaBranchingBackend,
+    get_branching_backend,
+)
 from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.contextvars import active_branch
 from netbox_branching.database import BranchAwareRouter
@@ -37,6 +42,8 @@ from netbox_branching.signals import (
     pre_provision,
 )
 from netbox_branching.utilities import supports_branching
+
+from .utils import plugin_disabled
 
 DUMMY_BACKEND = 'netbox_branching.tests.test_backends.DummyBranchingBackend'
 
@@ -128,17 +135,29 @@ class GetBranchingBackendTestCase(TestCase):
     def test_not_required_matches_required_when_plugin_enabled(self):
         self.assertIs(get_branching_backend(required=False), get_branching_backend())
 
-    @override_settings(PLUGINS_CONFIG={})
-    def test_not_required_returns_none_when_plugin_disabled(self):
+    def test_not_required_returns_none_when_plugin_is_not_installed(self):
         """
         DATABASES and DATABASE_ROUTERS are host configuration and stay wired up when the
         plugin is dropped from PLUGINS, so the shims that read them must be able to ask
-        for a backend and be told there isn't one — rather than get_plugin_config()'s
-        "Plugin netbox_branching is not registered."
+        for a backend and be told there isn't one.
+
+        Note what is *not* overridden here: the plugin's PLUGINS_CONFIG block. NetBox never
+        clears one, so it outlives the removal, and a guard which tested PLUGINS_CONFIG
+        would answer "enabled" in exactly this situation.
+        """
+        with plugin_disabled():
+            self.assertIn(PLUGIN_NAME, settings.PLUGINS_CONFIG, msg="Precondition: config survives")
+            self.assertIsNone(get_branching_backend(required=False))
+
+    @override_settings(PLUGINS_CONFIG={})
+    def test_missing_plugin_config_raises_when_required(self):
+        """
+        The strict path has no graceful degradation: without a config block to read,
+        get_plugin_config() raises "Plugin netbox_branching is not registered." This is what
+        required=False exists to spare the host-configuration shims from.
         """
         with self.assertRaises(ImproperlyConfigured):
             get_branching_backend()
-        self.assertIsNone(get_branching_backend(required=False))
 
     @override_settings(PLUGINS_CONFIG={'netbox_branching': {'backend': 'nonexistent.module.Backend'}})
     def test_not_required_still_raises_on_a_bad_backend(self):

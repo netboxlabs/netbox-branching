@@ -12,6 +12,7 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.signals import setting_changed
 from django.utils.module_loading import import_string
 from netbox.plugins import get_plugin_config
+from netbox.registry import registry
 
 from .base import BranchingBackend
 from .schema import SchemaBranchingBackend
@@ -35,9 +36,9 @@ _backends = {}
 
 def _plugin_is_enabled():
     """
-    Return True if netbox_branching is registered in the host configuration.
+    Return True if NetBox actually loaded netbox_branching.
     """
-    return settings.configured and PLUGIN_NAME in getattr(settings, 'PLUGINS_CONFIG', {})
+    return settings.configured and PLUGIN_NAME in registry['plugins']['installed']
 
 
 def get_branching_backend(required=True):
