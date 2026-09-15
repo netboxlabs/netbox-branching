@@ -6,8 +6,10 @@ from django.core.management import call_command
 from django.core.management.sql import emit_post_migrate_signal
 from django.db import DatabaseError, connections
 from django.test import TransactionTestCase
+from netbox.plugins import get_plugin_config
 
 from netbox_branching.models import Branch
+from netbox_branching.provisioning import quote_ident
 
 __all__ = (
     'FastTeardownTransactionTestCase',
@@ -99,6 +101,35 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
                     emit_post_migrate_signal(verbosity=0, interactive=False, db=db_name)
             else:
                 self._django_flush(db_name)
+            self._drop_branch_schemas(db_name)
+
+    def _drop_branch_schemas(self, db_name):
+        """Drop any branch schemas the test left behind.
+
+        Deleting a Branch through the ORM deprovisions its schema, but the flush above
+        removes the rows directly, so every branch a test provisions leaks its schema.
+        Roughly 150 tables and 1,000 indexes each, which accumulate in pg_class for the
+        rest of the run and make every subsequent provision slower — a full suite leaks
+        ~25,000 relations, and a --keepdb database keeps them across runs.
+
+        Anything still matching the prefix at teardown is by definition left over, so
+        this also clears orphans stranded by earlier interrupted runs.
+        """
+        prefix = get_plugin_config('netbox_branching', 'schema_prefix')
+        connection = connections[db_name]
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    'SELECT nspname FROM pg_namespace WHERE nspname LIKE %s',
+                    [f'{prefix}%'],
+                )
+                schemas = [row[0] for row in cursor.fetchall()]
+                if schemas:
+                    cursor.execute('; '.join(
+                        f'DROP SCHEMA {quote_ident(s)} CASCADE' for s in schemas
+                    ))
+        except DatabaseError:
+            logger.warning('Failed to drop leftover branch schemas', exc_info=True)
 
     def _inhibit_post_migrate(self, db_name):
         """Whether Django would suppress post_migrate for this alias after a flush."""
