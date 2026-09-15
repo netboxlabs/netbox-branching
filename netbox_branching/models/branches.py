@@ -376,9 +376,11 @@ class Branch(JobsMixin, PrimaryModel):
             raise AbortRequest(_("The active branch cannot be deleted."))
 
         # Row delete and schema drop must succeed or fail together — see #445.
+        # Deprovision first: super().delete() nulls self.pk, and post_deprovision
+        # receivers serialize the branch, which fails on a pk-less instance (#641).
         with transaction.atomic():
-            result = super().delete(*args, **kwargs)
             self.deprovision()
+            result = super().delete(*args, **kwargs)
 
         return result
 
