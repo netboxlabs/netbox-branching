@@ -3,7 +3,7 @@ from datetime import timedelta
 
 from django.core.exceptions import ValidationError
 from django.db import connection
-from django.test import SimpleTestCase, TransactionTestCase, override_settings
+from django.test import SimpleTestCase, override_settings
 from django.utils import timezone
 from extras.validators import CustomValidator
 from netbox.plugins import get_plugin_config
@@ -15,12 +15,13 @@ from netbox_branching.forms import BranchForm
 from netbox_branching.models import Branch
 from netbox_branching.provisioning import quote_ident
 from netbox_branching.signals import post_deprovision, pre_deprovision
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase
 from netbox_branching.utilities import BranchActionIndicator, get_tables_to_replicate
 
 from .utils import fetchall, fetchone
 
 
-class BranchTestCase(TransactionTestCase):
+class BranchTestCase(FastTeardownTransactionTestCase):
     serialized_rollback = True
 
     def test_create_branch(self):
@@ -472,7 +473,7 @@ class BranchStatusDescriptionTestCase(SimpleTestCase):
         self.assertEqual(branch.get_status_description(), '')
 
 
-class BranchProvisionPipelineTestCase(TransactionTestCase):
+class BranchProvisionPipelineTestCase(FastTeardownTransactionTestCase):
     """
     Targeted coverage of the parallel provisioning pipeline. The end-to-end
     happy path is exercised by BranchTestCase.test_create_branch; these tests
