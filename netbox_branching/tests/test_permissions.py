@@ -158,8 +158,10 @@ class BranchAPIPermissionTestCase(_TestCase):
         cls.theirs.save(provision=False)
 
         object_type = ObjectType.objects.get_for_model(Branch)
+        # 'add' is required for any POST to the viewset: NetBox's TokenPermissions maps the method to
+        # the add permission before the action's own check is reached.
         obj_perm = ObjectPermission(
-            name='Own branches', actions=['view', 'sync'], constraints={'owner': '$user'}
+            name='Own branches', actions=['view', 'add', 'sync'], constraints={'owner': '$user'}
         )
         obj_perm.save()
         obj_perm.users.add(cls.user)
@@ -181,7 +183,17 @@ class BranchAPIPermissionTestCase(_TestCase):
         response = self.client.get(url, HTTP_ACCEPT='application/json')
         self.assertEqual(response.status_code, 404)
 
-    def test_action_denied_on_unpermitted_branch(self):
+    def test_action_on_unpermitted_branch_is_indistinguishable_from_missing(self):
+        # A branch outside the user's constraint must not be distinguishable from one which does not
+        # exist, so both report 404 rather than 403.
         url = reverse('plugins-api:netbox_branching-api:branch-sync', kwargs={'pk': self.theirs.pk})
+        self.assertEqual(self.client.post(url, HTTP_ACCEPT='application/json').status_code, 404)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-sync', kwargs={'pk': 99999})
+        self.assertEqual(self.client.post(url, HTTP_ACCEPT='application/json').status_code, 404)
+
+    def test_action_without_permission_is_forbidden(self):
+        # The user holds no merge permission at all, which is reported as such
+        url = reverse('plugins-api:netbox_branching-api:branch-merge', kwargs={'pk': self.mine.pk})
         response = self.client.post(url, HTTP_ACCEPT='application/json')
         self.assertEqual(response.status_code, 403)

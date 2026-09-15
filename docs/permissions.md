@@ -14,11 +14,16 @@ granted:
 | `sync` | `netbox_branching.sync_branch` | Pull changes from main into the branch |
 | `merge` | `netbox_branching.merge_branch` | Apply the branch's changes to main |
 | `revert` | `netbox_branching.revert_branch` | Undo a merged branch's changes |
-| `migrate` | `netbox_branching.migrate_branch` | Apply outstanding migrations to the branch schema |
+| `migrate` | `netbox_branching.migrate_branch` | Apply outstanding migrations to the branch schema (UI only — the REST API exposes no migrate endpoint) |
 | `archive` | `netbox_branching.archive_branch` | Deprovision a merged branch's schema |
 
 A user who has not been granted `view` on any branch sees neither the **Branching** navigation menu nor the branch
 selector in the header, and cannot activate a branch.
+
+!!! note
+    The REST API's action endpoints (`/sync/`, `/merge/`, ...) are POSTs, which NetBox maps to the `add` permission
+    before the action's own permission is evaluated. A user calling them therefore needs `add` on Branch in addition
+    to the action itself. The equivalent UI views require only the action.
 
 ## Restricting Which Branches a User Can See
 

@@ -37,6 +37,9 @@ logger = logging.getLogger(__name__)
 # without its NetBox Job record ever being terminated.
 RQ_JOB_MISSING = 'missing'
 
+# Distinguishes "not yet resolved" from a resolved-but-empty user in resolve_request_user()
+_UNRESOLVED = object()
+
 # RQ statuses which indicate that a job will not run (or run again)
 RQ_DEAD_STATUSES = ('failed', 'stopped', 'canceled')
 
@@ -569,7 +572,7 @@ def resolve_request_user(request):
     user = getattr(request, 'user', None)
     if (user is not None and user.is_authenticated) or not is_api_request(request):
         return user
-    if (cached := getattr(request, '_branching_api_user', None)) is not None:
+    if (cached := getattr(request, '_branching_api_user', _UNRESOLVED)) is not _UNRESOLVED:
         return cached
 
     from rest_framework.request import Request as DRFRequest

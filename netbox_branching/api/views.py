@@ -48,8 +48,19 @@ class BranchViewSet(
     serializer_class = serializers.BranchSerializer
     filterset_class = filtersets.BranchFilterSet
 
-    # The custom actions below are POSTs, which BaseViewSet restricts to "add"; each therefore resolves
-    # its branch independently and checks its own action permission against it (cf. DataSource.sync).
+    def _get_branch(self, request, pk, action, verb):
+        """
+        Resolve the branch targeted by a custom action. These are POSTs, which BaseViewSet restricts to
+        the "add" permission, so the action's own permission is evaluated here instead: a user holding
+        none of it gets a 403, and one whose grant is constrained gets a 404 for any branch outside it.
+        This mirrors what ObjectPermissionRequiredMixin does for the equivalent UI view, and keeps a
+        branch the user may not act on indistinguishable from one which does not exist.
+        """
+        permission = f'netbox_branching.{action}_branch'
+        if not request.user.has_perm(permission):
+            raise PermissionDenied(f"This user does not have permission to {verb} branches.")
+
+        return get_object_or_404(Branch.objects.restrict(request.user, action), pk=pk)
 
     def _check_conflicts(self, branch, serializer):
         """
@@ -81,9 +92,7 @@ class BranchViewSet(
         """
         Enqueue a background job to synchronize a branch from main.
         """
-        branch = get_object_or_404(Branch, pk=pk)
-        if not request.user.has_perm('netbox_branching.sync_branch', obj=branch):
-            raise PermissionDenied("This user does not have permission to sync this branch.")
+        branch = self._get_branch(request, pk, 'sync', 'sync')
 
         if not branch.ready:
             return HttpResponseBadRequest("Branch is not ready to sync.")
@@ -113,9 +122,7 @@ class BranchViewSet(
         """
         Enqueue a background job to merge a branch.
         """
-        branch = get_object_or_404(Branch, pk=pk)
-        if not request.user.has_perm('netbox_branching.merge_branch', obj=branch):
-            raise PermissionDenied("This user does not have permission to merge this branch.")
+        branch = self._get_branch(request, pk, 'merge', 'merge')
 
         if not branch.ready:
             return HttpResponseBadRequest("Branch is not ready to merge.")
@@ -145,9 +152,7 @@ class BranchViewSet(
         """
         Enqueue a background job to revert a merged branch.
         """
-        branch = get_object_or_404(Branch, pk=pk)
-        if not request.user.has_perm('netbox_branching.revert_branch', obj=branch):
-            raise PermissionDenied("This user does not have permission to revert this branch.")
+        branch = self._get_branch(request, pk, 'revert', 'revert')
 
         if not branch.merged:
             return HttpResponseBadRequest("Only merged branches can be reverted.")
@@ -173,9 +178,7 @@ class BranchViewSet(
         """
         Archive a merged branch, deprovisioning its schema.
         """
-        branch = get_object_or_404(Branch, pk=pk)
-        if not request.user.has_perm('netbox_branching.archive_branch', obj=branch):
-            raise PermissionDenied("This user does not have permission to archive this branch.")
+        branch = self._get_branch(request, pk, 'archive', 'archive')
 
         if not branch.merged:
             return HttpResponseBadRequest("Only merged branches can be archived.")
@@ -199,9 +202,7 @@ class BranchViewSet(
         Reset a branch which is stuck in a transitional status because the job responsible for it is
         no longer running (e.g. its worker was killed).
         """
-        branch = get_object_or_404(Branch, pk=pk)
-        if not request.user.has_perm('netbox_branching.change_branch', obj=branch):
-            raise PermissionDenied("This user does not have permission to modify this branch.")
+        branch = self._get_branch(request, pk, 'change', 'modify')
 
         if branch.status not in BranchStatusChoices.TRANSITIONAL:
             return HttpResponseBadRequest("Branch is not in a transitional status.")
