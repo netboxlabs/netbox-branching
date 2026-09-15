@@ -184,14 +184,16 @@
               {% endif %}
             </td>
           </tr>
-          <tr>
-            <th scope="row">{% trans "Database schema" %}</th>
-            {% if object.backend_id %}
-              <td class="font-monospace">{{ object.schema_name }}</td>
-            {% else %}
-              <td>{{ ''|placeholder }}</td>
-            {% endif %}
-          </tr>
+          {% for label, value in backend_detail_fields %}
+            <tr>
+              <th scope="row">{{ label }}</th>
+              {% if value %}
+                <td class="font-monospace">{{ value }}</td>
+              {% else %}
+                <td>{{ ''|placeholder }}</td>
+              {% endif %}
+            </tr>
+          {% endfor %}
         </table>
       </div>
       {% include 'inc/panels/tags.html' %}

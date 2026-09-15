@@ -59,10 +59,14 @@ class BranchingBackend(ABC):
        before then.
     """
 
-    # Prefix identifying connection aliases owned by this backend. Retained as
-    # 'schema_' by the default backend for backward compatibility with existing
-    # installs; a backend must not reuse another backend's prefix.
-    connection_alias_prefix = 'schema_'
+    # Prefix identifying connection aliases owned by this backend. Every backend must
+    # declare its own, and must not reuse another's: owns_connection_alias() claims every
+    # alias carrying it, so two backends sharing a prefix would each claim the other's
+    # aliases — including ones left behind by a previous install. Deliberately has no
+    # usable default, so that omitting it fails loudly at startup (get_branching_backend()
+    # rejects a backend which has not set it) rather than silently inheriting someone
+    # else's namespace.
+    connection_alias_prefix = None
 
     #
     # Provisioning lifecycle
@@ -268,6 +272,28 @@ class BranchingBackend(ABC):
         """
 
     #
+    # Presentation
+    #
+
+    def get_detail_fields(self, branch):
+        """
+        Return extra rows to render on the branch detail page, as a sequence of
+        ``(label, value)`` pairs. A value of None renders as a placeholder.
+
+        This is where a backend surfaces facts only it knows — where the branch's dataset
+        actually lives, for instance. It defaults to nothing because nothing above this
+        seam can know what a given backend's dataset looks like: the page must show what
+        the configured backend volunteers, not what the default backend would have done.
+
+        Args:
+            branch: The Branch being displayed
+
+        Returns:
+            Sequence of (label, value) pairs
+        """
+        return ()
+
+    #
     # Per-branch connection parameter registry
     #
 
@@ -284,6 +310,12 @@ class BranchingBackend(ABC):
         retrieve them. Intended to be called from ``get_connection_alias()``.
         """
         self._get_connection_params_registry()[alias] = params
+
+    def unregister_connection_params(self, alias):
+        """
+        Discard any connection parameters registered for ``alias``.
+        """
+        self._get_connection_params_registry().pop(alias, None)
 
     def get_registered_connection_params(self, alias):
         """

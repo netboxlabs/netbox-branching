@@ -330,7 +330,9 @@ Subclass `netbox_branching.backends.BranchingBackend` and implement the abstract
 | `get_pending_migrations(branch)` | Return `(app_label, name)` tuples applied in main but not in the branch. |
 | `apply_migrations(branch, progress_callback=None)` | Apply outstanding migrations to the branch's dataset. |
 
-Four methods have useful defaults and only need overriding for specific needs:
+You must also declare a `connection_alias_prefix`: a non-empty string, unique to your backend, identifying the connection aliases it owns. There is no default — a backend which leaves it unset is rejected at startup — because silently inheriting another backend's prefix would have `owns_connection_alias()` claim that backend's aliases, including any left behind by a previous install.
+
+Five methods have useful defaults and only need overriding for specific needs:
 
 | Method | Default |
 |---|---|
@@ -338,6 +340,7 @@ Four methods have useful defaults and only need overriding for specific needs:
 | `routes_model(model, branch)` | `supports_branching(model)` |
 | `allow_migrate(db, app_label, model_name=None, **hints)` | Refuses the plugin's own models and every non-branchable model; permits `core.ObjectChange` |
 | `validate_configuration()` | No-op; override to assert on required host settings at startup |
+| `get_detail_fields(branch)` | No rows; override to add `(label, value)` rows to the branch detail page |
 
 `allow_migrate()` is reached from `BranchAwareRouter.allow_migrate()`, which has already
 established that `db` is an alias your backend owns. Its default is written for a branch holding
@@ -375,6 +378,23 @@ The two connection methods have deliberately different contracts, and the distin
 
 - **`get_connection_alias(branch)`** is the single funnel every branch-aware query passes through, and a `Branch` row is always in hand. It **may** query the database. It is therefore the one place to read `branch.connection_params` (a nullable JSON field reserved for backend use — an out-of-tree backend cannot add its own migrations to this app) and hand the result to `register_connection_params()`.
 - **`get_connection_config(alias, default_config)`** is called from inside Django's `ConnectionHandler` *while a connection is being created*. It **must not** query the database — doing so recurses. Retrieve anything you need via `get_registered_connection_params()` instead.
+
+`Branch.deprovision()` calls `unregister_connection_params()` for the branch's alias, so a backend which registers real endpoints or credentials does not hold them for the life of the process once the dataset is gone. The registry is thread-local, so that clears the calling thread's entry only — another thread which had addressed the same branch keeps its copy until that thread ends.
+
+`owns_connection_alias()` may be broader than the set of aliases `get_connection_config()` can actually build a config for; returning `None` from the latter is how a backend declines one. `DynamicSchemaDict` resolves membership and lookup through the same call, so a declined alias is simply absent from `DATABASES` and Django raises its usual `ConnectionDoesNotExist` rather than a bare `KeyError` from inside connection creation.
+
+### Presenting Backend-Specific Detail
+
+The branch detail page shows only what the configured backend volunteers. Override `get_detail_fields(branch)` to return `(label, value)` pairs — a `None` value renders as a placeholder:
+
+```python
+def get_detail_fields(self, branch):
+    if not branch.provisioned:
+        return ((_('Cluster endpoint'), None),)
+    return ((_('Cluster endpoint'), branch.connection_params['host']),)
+```
+
+Gate anything describing a live dataset on `branch.provisioned`: `backend_id` outlives the dataset, so a branch that has been archived still has an identifier to build a name from. `SchemaBranchingBackend` uses this to show its "Database schema" row, which is why that row does not appear under a backend that has no schema.
 
 ### Invariants
 

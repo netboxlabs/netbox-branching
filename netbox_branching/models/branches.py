@@ -198,12 +198,19 @@ class Branch(JobsMixin, PrimaryModel):
 
     @cached_property
     def schema_name(self):
+        """
+        The PostgreSQL schema housing this branch.
+
+        Specific to SchemaBranchingBackend, which is what derives the name; another
+        backend has no schema and does not define get_schema_name(). Nothing
+        backend-agnostic may read this — the branch detail page asks the configured
+        backend for its own detail rows via get_detail_fields() instead.
+        """
         if not self.backend_id:
             raise ValueError(
                 f"Branch {self} has no backend ID; it has not yet been provisioned."
             )
-        schema_prefix = get_plugin_config('netbox_branching', 'schema_prefix')
-        return f'{schema_prefix}{self.backend_id}'
+        return self.backend.get_schema_name(self.backend_id)
 
     @cached_property
     def connection_name(self):
@@ -1202,6 +1209,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         # Emit pre-deprovision signal
         pre_deprovision.send(sender=self.__class__, branch=self)
+
+        # Drop any connection parameters the backend registered for this branch
+        if self.backend_id:
+            self.backend.unregister_connection_params(self.connection_name)
 
         self.backend.deprovision(self)
 

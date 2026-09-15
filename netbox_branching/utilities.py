@@ -105,20 +105,25 @@ class DynamicSchemaDict(dict):
         from netbox_branching.backends import get_branching_backend
         return get_branching_backend(required=False)
 
-    def __getitem__(self, item):
+    def _backend_config(self, alias):
+        """
+        Return the connection config the configured backend derives for `alias`, or None
+        if no backend claims it — either because there is no backend to resolve, or
+        because the configured one owns the alias but declines to configure it.
+        """
         backend = self._branching_backend()
-        if backend is not None and backend.owns_connection_alias(item):
-            default_config = super().__getitem__('default')
-            if (config := backend.get_connection_config(item, default_config)) is not None:
-                track_branch_connection(item)
-                return config
+        if backend is None or not backend.owns_connection_alias(alias):
+            return None
+        return backend.get_connection_config(alias, super().__getitem__('default'))
+
+    def __getitem__(self, item):
+        if (config := self._backend_config(item)) is not None:
+            track_branch_connection(item)
+            return config
         return super().__getitem__(item)
 
     def __contains__(self, item):
-        backend = self._branching_backend()
-        if backend is not None and backend.owns_connection_alias(item):
-            return True
-        return super().__contains__(item)
+        return self._backend_config(item) is not None or super().__contains__(item)
 
 
 def close_old_branch_connections(**kwargs):

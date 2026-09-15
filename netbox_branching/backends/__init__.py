@@ -69,6 +69,12 @@ def get_branching_backend(required=True):
             raise ImproperlyConfigured(
                 f"netbox_branching: backend {path} is not a subclass of netbox_branching.backends.BranchingBackend."
             )
+        prefix = backend_class.connection_alias_prefix
+        if not isinstance(prefix, str) or not prefix:
+            raise ImproperlyConfigured(
+                f"netbox_branching: backend {path} does not declare a connection_alias_prefix. Set a non-empty "
+                f"string unique to this backend; it is what identifies the connection aliases the backend owns."
+            )
         _backends[path] = backend_class()
 
     return _backends[path]

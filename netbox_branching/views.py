@@ -74,6 +74,7 @@ class BranchView(generic.ObjectView):
 
         return {
             'stats': stats,
+            'backend_detail_fields': instance.backend.get_detail_fields(instance),
             'is_stuck': is_stuck,
             'stuck_job': stuck_job,
             'recovery_status': recovery_status,

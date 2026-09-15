@@ -98,6 +98,14 @@ class NotABackend:
     pass
 
 
+class PrefixlessBackend(DummyBranchingBackend):
+    """
+    A fully-implemented backend whose author simply forgot to declare a
+    connection_alias_prefix.
+    """
+    connection_alias_prefix = None
+
+
 class GetBranchingBackendTestCase(TestCase):
 
     def test_default_backend_is_the_schema_backend(self):
@@ -130,6 +138,19 @@ class GetBranchingBackendTestCase(TestCase):
     })
     def test_non_backend_class_raises(self):
         with self.assertRaises(ImproperlyConfigured):
+            get_branching_backend()
+
+    @override_settings(PLUGINS_CONFIG={
+        'netbox_branching': {'backend': 'netbox_branching.tests.test_backends.PrefixlessBackend'},
+    })
+    def test_backend_without_a_connection_alias_prefix_raises(self):
+        """
+        A backend which forgets to declare a prefix must fail at startup rather than
+        inherit one. Silently inheriting the shipped backend's 'schema_' would have it
+        claim every schema_* alias left behind by a previous install, and satisfy
+        get_connection_alias()'s "must begin with this backend's prefix" rule vacuously.
+        """
+        with self.assertRaisesRegex(ImproperlyConfigured, 'connection_alias_prefix'):
             get_branching_backend()
 
     def test_not_required_matches_required_when_plugin_enabled(self):
@@ -233,6 +254,43 @@ class SchemaBackendIdentityTestCase(TestCase):
         branch.save(provision=False)
         with self.assertRaisesRegex(ImproperlyConfigured, 'exceeds'):
             self.backend.provision(branch, user=None)
+
+    @override_settings(PLUGINS_CONFIG={'netbox_branching': {'schema_prefix': 'x' * 100}})
+    def test_overlong_prefix_leaves_the_branch_retryable(self):
+        """
+        The name is checked before the identifier is committed. An identifier is immutable
+        once assigned, so a branch which had been given one would re-derive the same
+        over-long schema name on every retry and fail identically, even once the operator
+        had shortened schema_prefix — leaving no way out but deleting the branch.
+        """
+        branch = Branch(name='Long Prefix Branch')
+        branch.save(provision=False)
+
+        with self.assertRaisesRegex(ImproperlyConfigured, 'exceeds'):
+            self.backend.provision(branch, user=None)
+
+        # No identifier was committed, so a retry under a corrected schema_prefix mints a
+        # fresh one instead of inheriting the doomed one.
+        branch.refresh_from_db()
+        self.assertIsNone(branch.backend_id, msg="An unusable identifier was committed")
+
+    def test_detail_fields_report_no_schema_once_deprovisioned(self):
+        """
+        schema_name is derived from backend_id, which archive() deliberately retains after
+        dropping the schema. The detail page must not present the name of a schema that no
+        longer exists as though it were live.
+        """
+        provisioned = Branch(name='Live', backend_id='live1234', provisioned=True)
+        ((label, value),) = self.backend.get_detail_fields(provisioned)
+        self.assertEqual(str(label), 'Database schema')
+        self.assertEqual(value, provisioned.schema_name)
+
+        archived = Branch(
+            name='Archived', backend_id='arch1234', provisioned=False,
+            status=BranchStatusChoices.ARCHIVED,
+        )
+        ((_label, value),) = self.backend.get_detail_fields(archived)
+        self.assertIsNone(value, msg="A dropped schema was reported as the branch's own")
 
 
 class SchemaBackendConnectionTestCase(TestCase):
@@ -425,6 +483,25 @@ class BackendDelegationTestCase(TestCase):
         self.assertIn(('deprovision', self.branch.pk), self.backend.calls)
         self.assertEqual(len(pre), 1)
         self.assertEqual(len(post), 1)
+
+    def test_deprovision_evicts_registered_connection_params(self):
+        """
+        register_connection_params() is how a backend carries per-branch endpoints and
+        credentials from get_connection_alias() (which may query) to
+        get_connection_config() (which must not). Nothing evicted those entries, so a
+        long-lived RQ worker accumulated one per branch it had ever addressed and held a
+        dead branch's credentials for the life of the process.
+        """
+        alias = self.branch.connection_name
+        self.backend.register_connection_params(alias, {'HOST': 'branch.example.com'})
+        self.assertIsNotNone(self.backend.get_registered_connection_params(alias))
+
+        self.branch.deprovision()
+
+        self.assertIsNone(
+            self.backend.get_registered_connection_params(alias),
+            msg="Connection params survived the destruction of the branch they addressed",
+        )
 
     def test_pending_migrations_delegates(self):
         # Only a provisioned branch can have migrations outstanding; while the branch is

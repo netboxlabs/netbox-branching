@@ -15,6 +15,7 @@ each primitive in isolation so regressions can be diagnosed quickly.
 from dcim.models import Site
 from django.test import TestCase, override_settings
 
+from netbox_branching.backends import SchemaBranchingBackend
 from netbox_branching.contextvars import active_branch
 from netbox_branching.database import BranchAwareRouter
 from netbox_branching.models import Branch
@@ -26,6 +27,17 @@ from netbox_branching.utilities import (
 )
 
 from .utils import plugin_disabled
+
+
+class PickyBackend(SchemaBranchingBackend):
+    """
+    A backend which owns every "schema_*" alias but declines to configure one of them,
+    standing in for any backend whose ownership test is broader than its config method.
+    """
+    def get_connection_config(self, alias, default_config):
+        if alias.endswith('_refused'):
+            return None
+        return super().get_connection_config(alias, default_config)
 
 
 class DynamicSchemaDictTestCase(TestCase):
@@ -65,6 +77,38 @@ class DynamicSchemaDictTestCase(TestCase):
         self.assertIn('schema_branch_unseen', databases)
         self.assertIn('default', databases)
         self.assertNotIn('something_else', databases)
+
+    def test_owned_but_unconfigurable_alias_is_not_claimed(self):
+        """
+        __contains__ and __getitem__ must give the same answer. Django's ConnectionHandler
+        tests membership and then indexes, so an alias claimed here but refused on lookup
+        raises a bare KeyError out of create_connection() instead of the
+        ConnectionDoesNotExist it raises for an alias reported unknown.
+
+        The bare prefix is the shipped backend's reachable case: it satisfies
+        owns_connection_alias()'s startswith test, but leaves get_connection_config() with
+        an empty schema name, which it declines to build a search_path from.
+        """
+        databases = self._make()
+        self.assertNotIn('schema_', databases)
+        with self.assertRaises(KeyError):
+            databases['schema_']
+
+    @override_settings(PLUGINS_CONFIG={
+        'netbox_branching': {'backend': 'netbox_branching.tests.test_database.PickyBackend'},
+    })
+    def test_alias_a_backend_owns_but_refuses_is_not_claimed(self):
+        """
+        The general case: a backend whose ownership test is broader than the set of aliases
+        it can actually configure. Both lookups must agree that such an alias is absent.
+        """
+        databases = self._make()
+        self.assertIn('schema_branch_ok', databases)
+        self.assertEqual(databases['schema_branch_ok']['NAME'], 'netbox')
+
+        self.assertNotIn('schema_branch_refused', databases)
+        with self.assertRaises(KeyError):
+            databases['schema_branch_refused']
 
     def test_lookup_registers_alias_for_cleanup_tracking(self):
         """
