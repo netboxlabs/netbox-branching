@@ -3,15 +3,22 @@ from typing import ClassVar
 from core.api.serializers import JobSerializer
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseBadRequest
+from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired
 from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
 from rest_framework import status
 from rest_framework.decorators import action
-from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
+from rest_framework.mixins import (
+    CreateModelMixin,
+    DestroyModelMixin,
+    ListModelMixin,
+    RetrieveModelMixin,
+    UpdateModelMixin,
+)
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
-from rest_framework.viewsets import ModelViewSet, ViewSet
+from rest_framework.viewsets import ViewSet
 
 from netbox_branching import filtersets
 from netbox_branching.choices import BranchStatusChoices
@@ -27,10 +34,33 @@ class RootView(APIRootView):
         return 'Branching'
 
 
-class BranchViewSet(ModelViewSet):
+class BranchViewSet(
+    CreateModelMixin,
+    RetrieveModelMixin,
+    UpdateModelMixin,
+    DestroyModelMixin,
+    ListModelMixin,
+    BaseViewSet,
+):
+    # BaseViewSet restricts the queryset to the objects on which the user holds the permission implied
+    # by the HTTP method, so branches scoped by an ObjectPermission constraint are invisible to others.
     queryset = Branch.objects.all()
     serializer_class = serializers.BranchSerializer
     filterset_class = filtersets.BranchFilterSet
+
+    def _get_branch(self, request, pk, action, verb):
+        """
+        Resolve the branch targeted by a custom action. These are POSTs, which BaseViewSet restricts to
+        the "add" permission, so the action's own permission is evaluated here instead: a user holding
+        none of it gets a 403, and one whose grant is constrained gets a 404 for any branch outside it.
+        This mirrors what ObjectPermissionRequiredMixin does for the equivalent UI view, and keeps a
+        branch the user may not act on indistinguishable from one which does not exist.
+        """
+        permission = f'netbox_branching.{action}_branch'
+        if not request.user.has_perm(permission):
+            raise PermissionDenied(f"This user does not have permission to {verb} branches.")
+
+        return get_object_or_404(Branch.objects.restrict(request.user, action), pk=pk)
 
     def _check_conflicts(self, branch, serializer):
         """
@@ -62,10 +92,8 @@ class BranchViewSet(ModelViewSet):
         """
         Enqueue a background job to synchronize a branch from main.
         """
-        if not request.user.has_perm('netbox_branching.sync_branch'):
-            raise PermissionDenied("This user does not have permission to sync branches.")
+        branch = self._get_branch(request, pk, 'sync', 'sync')
 
-        branch = self.get_object()
         if not branch.ready:
             return HttpResponseBadRequest("Branch is not ready to sync.")
 
@@ -94,10 +122,8 @@ class BranchViewSet(ModelViewSet):
         """
         Enqueue a background job to merge a branch.
         """
-        if not request.user.has_perm('netbox_branching.merge_branch'):
-            raise PermissionDenied("This user does not have permission to merge branches.")
+        branch = self._get_branch(request, pk, 'merge', 'merge')
 
-        branch = self.get_object()
         if not branch.ready:
             return HttpResponseBadRequest("Branch is not ready to merge.")
 
@@ -126,10 +152,8 @@ class BranchViewSet(ModelViewSet):
         """
         Enqueue a background job to revert a merged branch.
         """
-        if not request.user.has_perm('netbox_branching.revert_branch'):
-            raise PermissionDenied("This user does not have permission to revert branches.")
+        branch = self._get_branch(request, pk, 'revert', 'revert')
 
-        branch = self.get_object()
         if not branch.merged:
             return HttpResponseBadRequest("Only merged branches can be reverted.")
 
@@ -154,10 +178,8 @@ class BranchViewSet(ModelViewSet):
         """
         Archive a merged branch, deprovisioning its schema.
         """
-        if not request.user.has_perm('netbox_branching.archive_branch'):
-            raise PermissionDenied("This user does not have permission to archive branches.")
+        branch = self._get_branch(request, pk, 'archive', 'archive')
 
-        branch = self.get_object()
         if not branch.merged:
             return HttpResponseBadRequest("Only merged branches can be archived.")
         if not branch.can_archive:
@@ -180,10 +202,8 @@ class BranchViewSet(ModelViewSet):
         Reset a branch which is stuck in a transitional status because the job responsible for it is
         no longer running (e.g. its worker was killed).
         """
-        if not request.user.has_perm('netbox_branching.change_branch'):
-            raise PermissionDenied("This user does not have permission to modify branches.")
+        branch = self._get_branch(request, pk, 'change', 'modify')
 
-        branch = self.get_object()
         if branch.status not in BranchStatusChoices.TRANSITIONAL:
             return HttpResponseBadRequest("Branch is not in a transitional status.")
 
