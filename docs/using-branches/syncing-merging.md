@@ -120,6 +120,8 @@ The good news is that you will be able to proceed with synchronizing or merging 
 
 Alternatively, if the conflicting changes are problematic, you can go back and make the necessary changes in main to avoid overwriting data within your branch.
 
+Syncing a branch also clears the conflict: the branch adopts main's value and its conflict baseline moves with it, so any subsequent change you make in the branch to that attribute is not flagged again unless main changes it once more.
+
 ## Dry Runs
 
 By default, NetBox will perform a "dry run" when synchronizing or merging a branch through the web UI. This means that it will replicate all the relevant changes to check for errors before ultimately aborting the operation and returning the branch to its original state. To permanently apply the changes instead, check the **Commit changes** checkbox before submitting the form.
