@@ -182,7 +182,10 @@ class BranchDeprovisionedEventRuleTestCase(TransactionTestCase):
         with mock.patch('netbox_branching.signal_receivers.process_event_rules') as mock_process:
             branch.delete()
 
-        self.assertEqual(mock_process.call_count, 1)
+        self.assertEqual(
+            mock_process.call_count, 1,
+            msg="Expected exactly one dispatch; 0 means the EventRule did not match the event type"
+        )
         kwargs = mock_process.call_args.kwargs
         # NetBox 4.5.2+ nests the payload under `event`; older versions pass it flat.
         data = kwargs['event']['data'] if 'event' in kwargs else kwargs['data']
