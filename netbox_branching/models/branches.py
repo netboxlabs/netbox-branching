@@ -854,18 +854,35 @@ class Branch(JobsMixin, PrimaryModel):
         could not be applied (e.g. one the branch has deleted) is never buffered, and
         moving its baseline would hide a real conflict.
         """
-        for (content_type_id, object_id), entry in sync_buffer.items():
+        if not sync_buffer:
+            return
+
+        # Fetch every relevant ChangeDiff in one query rather than one per buffered
+        # object. The paired __in filters form a cross product, so this can return
+        # diffs for pairs not in the buffer; they are simply never looked up. The
+        # over-fetch is bounded by the branch's own ChangeDiff count.
+        diffs = {}
+        for diff in ChangeDiff.objects.filter(
+            branch=self,
+            object_type_id__in={key[0] for key in sync_buffer},
+            object_id__in={key[1] for key in sync_buffer},
+        ):
+            # setdefault preserves the "most recently updated wins" semantics of the
+            # per-object .first() this replaced (ChangeDiff orders by -last_updated).
+            diffs.setdefault((diff.object_type_id, diff.object_id), diff)
+
+        for key, entry in sync_buffer.items():
             if not (baseline := entry['main_postchange_data']):
                 continue
-            diff = ChangeDiff.objects.filter(
-                branch=self, object_type_id=content_type_id, object_id=object_id
-            ).first()
+            diff = diffs.get(key)
             if diff is None or diff.action != ObjectChangeActionChoices.ACTION_UPDATE or diff.original is None:
                 # A CREATE diff has no baseline, and a branch DELETE against a main update
                 # is a genuine conflict that must survive the sync.
                 continue
             diff.original = baseline
-            # object_repr is excluded because save() would recompute it from the
+            # 'conflicts' is listed because ChangeDiff.save() recomputes it from the new
+            # baseline; without it in update_fields the recomputed value would not be
+            # written. object_repr is excluded because save() would recompute it from the
             # GenericForeignKey, which resolves against the branch schema here.
             diff.save(update_fields=('original', 'conflicts', 'last_updated'))
             logger.debug(
