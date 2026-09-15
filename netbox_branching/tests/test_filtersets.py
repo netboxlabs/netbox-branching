@@ -128,6 +128,7 @@ class BranchFilterSetTestCase(TestCase, BaseFilterSetTests):
         'merged_by',
         'merge_strategy',
         'connection_params',  # Opaque backend-owned JSON; not user-facing
+        'provisioned',  # Internal lifecycle state; status answers the user-facing question
     )
 
     @classmethod

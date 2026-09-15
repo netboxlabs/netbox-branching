@@ -350,7 +350,7 @@ model (`RunPython`, `RunSQL`); keeping the default in that case is what stops a 
 being applied a second time to main, since under `activate_branch()` its ORM queries for
 non-branchable models route there.
 
-`Branch` retains all status transitions, [lifecycle signal](#lifecycle-signals) emission and `BranchEvent` creation around each of these calls, so those are unaffected by the backend in use.
+`Branch` retains all status transitions, [lifecycle signal](#lifecycle-signals) emission and `BranchEvent` creation around each of these calls, so those are unaffected by the backend in use. It also records whether a dataset currently exists: `provision()` returning without raising sets [`Branch.provisioned`](./models/branch.md#provisioned), and `deprovision()` clears it. A backend never writes that field itself, but everything which reaches for a branch connection reads it, so `provision()` must raise if it did not leave a usable dataset behind.
 
 ### Branch Identity
 
@@ -386,7 +386,7 @@ These are requirements of the surrounding machinery, not of any particular stora
 
 3. **Exempt-model visibility.** Non-branchable models (`auth.User`, `contenttypes`, `core.*`, the plugin's own models) are routed to main by `routes_model()`, but a join issued on the branch connection resolves against whatever *that* connection can see. A backend whose branch holds a point-in-time copy of those tables accepts display staleness there. Authentication and object permissions always evaluate against main, because those queries are routed there.
 
-4. **Branch identity is assigned at provisioning time.** A `Branch` row exists in status "new" with `backend_id` unset; `provision()` is what gives the branch an identifier. Nothing may address the branch's dataset before then, and UI or API code which reads a branch's identifier must tolerate its absence.
+4. **Branch identity is assigned at provisioning time.** A `Branch` row exists in status "new" with `backend_id` unset; `provision()` is what gives the branch an identifier. Nothing may address the branch's dataset before then, and UI or API code which reads a branch's identifier must tolerate its absence. Note that the identifier outlives the dataset — it survives deprovisioning, and a failed `provision()` leaves behind whatever it had already assigned — so code asking whether a branch can be connected to must test `Branch.provisioned`, never `backend_id`.
 
 ### Registration
 

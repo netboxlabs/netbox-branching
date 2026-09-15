@@ -2,8 +2,8 @@ import re
 from datetime import timedelta
 
 from django.core.exceptions import ValidationError
-from django.db import connection
-from django.test import SimpleTestCase, TransactionTestCase, override_settings
+from django.db import IntegrityError, connection, transaction
+from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from extras.validators import CustomValidator
 from netbox.plugins import get_plugin_config
@@ -562,43 +562,81 @@ class BranchStatusDescriptionTestCase(SimpleTestCase):
 
 class BranchProvisionedStateTestCase(SimpleTestCase):
     """
-    Branch.is_provisioned reports whether a live branch dataset exists to connect to.
+    Branch.provisioned gates every code path which reaches for a branch connection.
 
-    It must be False after archiving as well as before provisioning: archive() destroys
-    the dataset but retains backend_id, so callers which tested backend_id alone went on
-    reaching for Branch.connection_name on a branch that no longer had one.
+    The gate is the recorded flag alone, deliberately independent of both other candidates.
+    backend_id outlives the dataset: archive() drops the schema but keeps the identifier,
+    and a provision which fails part-way drops the schema it had begun building while
+    keeping the identifier it had already committed. Status cannot stand in either, because
+    FAILED spans a provision which left no dataset and a migrate which left one intact.
+
+    get_changes() and pending_migrations are what the branch detail page reads, so an
+    ungated one resolves a search_path naming a schema that is gone — and reads main.
     """
 
-    def test_new_branch_is_not_provisioned(self):
-        branch = Branch(name='Branch 1', status=BranchStatusChoices.NEW)
-        self.assertFalse(branch.is_provisioned)
-
-    def test_branch_without_backend_id_is_not_provisioned(self):
-        branch = Branch(name='Branch 1', status=BranchStatusChoices.READY)
-        self.assertFalse(branch.is_provisioned)
-
-    def test_ready_branch_is_provisioned(self):
-        branch = Branch(name='Branch 1', status=BranchStatusChoices.READY, backend_id='branch1')
-        self.assertTrue(branch.is_provisioned)
-
-    def test_merged_branch_is_still_provisioned(self):
-        # Merging leaves the dataset in place; only archiving destroys it.
-        branch = Branch(name='Branch 1', status=BranchStatusChoices.MERGED, backend_id='branch1')
-        self.assertTrue(branch.is_provisioned)
-
-    def test_archived_branch_is_not_provisioned(self):
-        branch = Branch(name='Branch 1', status=BranchStatusChoices.ARCHIVED, backend_id='branch1')
-        self.assertFalse(branch.is_provisioned)
+    def _branch(self, status, provisioned):
+        return Branch(name='Branch 1', status=status, backend_id='branch1', provisioned=provisioned)
 
     def test_archived_branch_asks_for_no_connection(self):
-        """
-        get_changes() and pending_migrations are what the branch detail page reads. Both
-        must short-circuit for an archived branch: resolving connection_name would ask the
-        configured backend for an endpoint that was deliberately destroyed.
-        """
-        branch = Branch(name='Branch 1', status=BranchStatusChoices.ARCHIVED, backend_id='branch1')
+        branch = self._branch(BranchStatusChoices.ARCHIVED, provisioned=False)
         self.assertEqual(branch.get_changes().count(), 0)
+        self.assertEqual(branch.get_unmerged_changes().count(), 0)
         self.assertEqual(branch.pending_migrations, [])
+
+    def test_failed_provision_asks_for_no_connection(self):
+        """
+        The regression this flag exists for. Such a branch's connection would name a schema
+        which no longer exists, so its search_path falls through to main and the query
+        returns main's entire changelog dressed up as the branch's own.
+        """
+        branch = self._branch(BranchStatusChoices.FAILED, provisioned=False)
+        self.assertEqual(branch.get_changes().count(), 0)
+        self.assertEqual(branch.get_unmerged_changes().count(), 0)
+        self.assertEqual(branch.pending_migrations, [])
+
+    def test_failed_migration_still_reads_its_own_dataset(self):
+        """
+        The other half of FAILED: migrate() marks a branch FAILED without touching its
+        dataset, which is still there and still worth reading. Pins that the gate is the
+        flag and not the status — widening the set of statuses meaning "no dataset" would
+        silently blind the branch detail page to this branch's changes.
+        """
+        branch = self._branch(BranchStatusChoices.FAILED, provisioned=True)
+        changes = branch.get_changes()
+        self.assertFalse(changes.query.is_empty(), msg="get_changes() short-circuited to none()")
+        self.assertEqual(changes.db, branch.connection_name)
+
+
+class BranchProvisionedConstraintTestCase(TestCase):
+    """
+    A branch which claims a dataset must have the identifier that dataset is addressed by.
+
+    The invariant is held by a database CHECK constraint rather than by clean(), because
+    provision() and deprovision() write the flag with queryset update()s — which bypass
+    model validation, and are exactly the writes worth guarding.
+    """
+
+    def test_claiming_a_dataset_without_an_identifier_is_rejected(self):
+        branch = Branch(name='No Identifier')
+        branch.save(provision=False)
+        self.assertIsNone(branch.backend_id)
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Branch.objects.filter(pk=branch.pk).update(provisioned=True)
+
+    def test_dropping_the_identifier_of_a_claimed_dataset_is_rejected(self):
+        branch = Branch(name='Has Identifier', backend_id='branch01')
+        branch.save(provision=False)
+        Branch.objects.filter(pk=branch.pk).update(provisioned=True)
+
+        with self.assertRaises(IntegrityError), transaction.atomic():
+            Branch.objects.filter(pk=branch.pk).update(backend_id=None)
+
+    def test_an_unprovisioned_branch_may_have_no_identifier(self):
+        # The common case: a branch exists in status NEW before provisioning assigns one.
+        branch = Branch(name='Brand New')
+        branch.save(provision=False)
+        self.assertFalse(Branch.objects.get(pk=branch.pk).provisioned)
 
 
 class BranchProvisionPipelineTestCase(TransactionTestCase):
@@ -728,6 +766,10 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
 
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.FAILED)
+        self.assertFalse(
+            branch.provisioned,
+            msg="Branch still claims a dataset after its schema was dropped",
+        )
 
         # The (partial) schema must have been dropped.
         with connection.cursor() as cursor:
@@ -763,6 +805,10 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
 
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.FAILED)
+        self.assertFalse(
+            branch.provisioned,
+            msg="Branch still claims a dataset after its schema was dropped",
+        )
 
         # The committed-then-populated schema must have been dropped.
         with connection.cursor() as cursor:
@@ -771,6 +817,24 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
                 [branch.schema_name],
             )
             self.assertIsNone(cursor.fetchone(), msg="Populated schema was not cleaned up")
+
+    def test_deprovision_clears_the_provisioned_flag(self):
+        """
+        backend_id is deliberately retained when a branch is deprovisioned, so the recorded
+        flag is the only thing left saying the dataset is gone. archive() and delete() both
+        route through deprovision(), so clearing it there covers both.
+        """
+        branch = self._track(Branch(name='DeprovisionFlag'))
+        branch.save(provision=False)
+        branch.provision(user=None)
+        self.assertTrue(Branch.objects.get(pk=branch.pk).provisioned)
+
+        branch.deprovision()
+
+        self.assertFalse(branch.provisioned, msg="In-memory instance still claims a dataset")
+        reloaded = Branch.objects.get(pk=branch.pk)
+        self.assertIsNotNone(reloaded.backend_id, msg="backend_id must be retained by deprovisioning")
+        self.assertFalse(reloaded.provisioned, msg="Persisted branch still claims a dataset")
 
     def test_provision_analyze_failure_is_non_fatal(self):
         """

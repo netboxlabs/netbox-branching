@@ -125,7 +125,8 @@ class BranchUpgradeTestCase(TransactionTestCase):
         # backend ID (and therefore the schema name) that provisioning would assign.
         branch = Branch(name='upgrade-test', backend_id='upgradets')
         branch.save(provision=False)
-        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.READY)
+        # Standing in for provision(), which is what normally records both of these.
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.READY, provisioned=True)
         branch.refresh_from_db()
 
         self._load_fixture(branch.schema_name)

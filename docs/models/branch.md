@@ -25,6 +25,16 @@ The default [`SchemaBranchingBackend`](../plugin-development.md#branching-backen
 !!! warning "Renamed in v2.0"
     This field was named `schema_id` in earlier releases. The old name has been removed with no compatibility alias; update any code, event rule scripts, or webhook consumers which reference it.
 
+### Provisioned
+
+!!! info "This field was added in v2.0."
+
+Whether a live dataset backing the branch currently exists. It is set when provisioning completes successfully and cleared when the branch is deprovisioned (by archiving or deleting it). The field is not editable and is not exposed via the REST API.
+
+A database constraint requires a [Backend ID](#backend-id) whenever this is true, since that identifier is what the dataset is addressed by.
+
+This is recorded rather than inferred because neither of the other fields can answer the question. [Backend ID](#backend-id) outlives the dataset: archiving retains the identifier so that the branch keeps its name in the changelog, and a provisioning run which fails part-way drops the schema it had begun building while keeping the identifier it had already assigned. Status cannot stand in for it either, because "failed" covers both a provisioning failure, which leaves no dataset, and a migration failure, which leaves one fully intact.
+
 ### Status
 
 The current status of the branch. This must be one of the following values:

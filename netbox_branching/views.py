@@ -225,7 +225,7 @@ class BranchJobReportView(generic.ObjectView):
                         # Object may only exist in the branch schema (e.g. created in branch, conflicts on merge).
                         # An archived branch has been deprovisioned, so there is nothing left to look in; let the
                         # object stay unresolved rather than asking the backend for a connection it cannot give.
-                        if not instance.is_provisioned:
+                        if not instance.provisioned:
                             raise
                         obj = ct.model_class()._default_manager.using(instance.connection_name).get(pk=obj_id)
                     if hasattr(obj, 'get_absolute_url'):

@@ -85,6 +85,12 @@ class Branch(JobsMixin, PrimaryModel):
         editable=False,
         help_text=_('Unique identifier assigned by the branching backend during provisioning')
     )
+    provisioned = models.BooleanField(
+        verbose_name=_('provisioned'),
+        default=False,
+        editable=False,
+        help_text=_('A live dataset backing this branch exists and can be connected to')
+    )
     status = models.CharField(
         verbose_name=_('status'),
         max_length=50,
@@ -142,6 +148,12 @@ class Branch(JobsMixin, PrimaryModel):
 
     class Meta:
         ordering = ('name',)
+        constraints = [
+            models.CheckConstraint(
+                name='%(app_label)s_%(class)s_provisioned_requires_backend_id',
+                condition=models.Q(provisioned=False) | models.Q(backend_id__isnull=False),
+            ),
+        ]
         permissions = [
             ('sync', 'Synchronize branch with main schema'),
             ('merge', 'Merge branch changes into main'),
@@ -175,22 +187,6 @@ class Branch(JobsMixin, PrimaryModel):
     @property
     def merged(self):
         return self.status == BranchStatusChoices.MERGED
-
-    @property
-    def is_provisioned(self):
-        """
-        Whether a live branch dataset exists to connect to.
-
-        False both before provisioning and after archiving. The distinction matters
-        because archive() deprovisions the branch but deliberately retains backend_id, so
-        testing backend_id alone answers "not provisioned yet" and misses "no longer
-        provisioned". Anything which reaches for connection_name must consult this first:
-        a backend that resolves a real endpoint fails loudly for a branch with no
-        dataset, and one that only builds a search_path silently reads main instead.
-        """
-        return bool(self.backend_id) and self.status not in (
-            BranchStatusChoices.NEW, BranchStatusChoices.ARCHIVED
-        )
 
     @cached_property
     def backend(self):
@@ -241,8 +237,8 @@ class Branch(JobsMixin, PrimaryModel):
     # Fields owned by background jobs and by the branching backend; excluded from save() by default to
     # avoid clobbering.
     LIFECYCLE_FIELDS = (
-        'status', 'last_sync', 'merged_time', 'merged_by', 'applied_migrations', 'backend_id',
-        'connection_params',
+        'status', 'provisioned', 'last_sync', 'merged_time', 'merged_by', 'applied_migrations',
+        'backend_id', 'connection_params',
     )
 
     def save(self, provision=True, update_merge_sync_fields=False, *args, **kwargs):
@@ -333,7 +329,7 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all ObjectChange records created within the Branch.
         """
-        if not self.is_provisioned:
+        if not self.provisioned:
             return ObjectChange.objects.none()
         return ObjectChange.objects.using(self.connection_name)
 
@@ -358,7 +354,7 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all unmerged ObjectChange records within the Branch schema.
         """
-        if self.status == BranchStatusChoices.READY and self.backend_id:
+        if self.status == BranchStatusChoices.READY and self.provisioned:
             return ObjectChange.objects.using(self.connection_name)
         return ObjectChange.objects.none()
 
@@ -431,7 +427,7 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a list of database migrations which have been applied in main but not in the branch.
         """
-        if not self.is_provisioned:
+        if not self.provisioned:
             # No branch dataset exists, so nothing can be outstanding
             return []
         return self.backend.get_pending_migrations(self)
@@ -1159,7 +1155,10 @@ class Branch(JobsMixin, PrimaryModel):
         try:
             self.backend.provision(self, user)
         except Exception:
-            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
+            # The backend cleans up whatever partial dataset it created, but it may already
+            # have committed this branch's identifier, so record that no dataset is left.
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED, provisioned=False)
+            self.provisioned = False
             raise
 
         # Emit post-provision signal
@@ -1169,8 +1168,10 @@ class Branch(JobsMixin, PrimaryModel):
 
         Branch.objects.filter(pk=self.pk).update(
             status=BranchStatusChoices.READY,
+            provisioned=True,
             last_sync=timezone.now(),
         )
+        self.provisioned = True
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.PROVISIONED)
 
     provision.alters_data = True
@@ -1203,6 +1204,13 @@ class Branch(JobsMixin, PrimaryModel):
         pre_deprovision.send(sender=self.__class__, branch=self)
 
         self.backend.deprovision(self)
+
+        # The dataset is gone; the branch must say so even though backend_id is
+        # deliberately retained. Skipped when the row itself has already been deleted
+        # (delete() deprovisions after the row is gone), where there is nothing to record.
+        self.provisioned = False
+        if self.pk:
+            Branch.objects.filter(pk=self.pk).update(provisioned=False)
 
         # Emit post-deprovision signal
         post_deprovision.send(sender=self.__class__, branch=self)

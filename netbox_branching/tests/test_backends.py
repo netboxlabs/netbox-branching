@@ -410,8 +410,10 @@ class BackendDelegationTestCase(TestCase):
     def test_pending_migrations_delegates(self):
         # Only a provisioned branch can have migrations outstanding; while the branch is
         # still NEW, Branch.pending_migrations short-circuits to [] without consulting the
-        # backend at all (that short-circuit is pinned by BranchTestCase).
+        # backend at all (that short-circuit is pinned by BranchTestCase). Stand in for the
+        # provision this test does not run by recording what it would have recorded.
         self.branch.status = BranchStatusChoices.READY
+        self.branch.provisioned = True
         self.branch.save(update_merge_sync_fields=True)
 
         self.assertEqual(self.branch.pending_migrations, [('dcim', '9999_dummy')])
