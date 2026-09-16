@@ -5,7 +5,6 @@ from django.http import HttpResponseBadRequest, HttpResponseRedirect
 from django.utils.translation import gettext as _
 
 from .constants import COOKIE_NAME, EXEMPT_PATHS, QUERY_PARAM
-from .exceptions import BranchNotReady
 from .utilities import get_active_branch, is_api_request
 
 __all__ = (
@@ -56,8 +55,10 @@ class BranchMiddleware:
             branch = get_active_branch(request)
         except ObjectDoesNotExist:
             return HttpResponseBadRequest("Invalid branch identifier")
-        except BranchNotReady as e:
-            return HttpResponseBadRequest(str(e))
+        if not_ready := getattr(request, '_branch_not_ready', None):
+            return HttpResponseBadRequest(
+                f"Branch {not_ready} is not ready for use (status: {not_ready.status})"
+            )
         request.active_branch = branch
 
         response = self.get_response(request)
