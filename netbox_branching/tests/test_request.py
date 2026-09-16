@@ -153,7 +153,9 @@ class RequestTestCase(TestCase):
             HTTP_X_NETBOX_BRANCH=branch.schema_id,
         )
         self.assertEqual(response.status_code, 400)
-        self.assertIn('is not ready for use', response.content.decode())
+        content = response.content.decode()
+        self.assertIn(f'status: {BranchStatusChoices.PROVISIONING}', content)
+        self.assertNotIn(branch.name, content, msg="Branch name exposed ahead of API authentication")
 
     @override_settings(LOGIN_REQUIRED=False)
     def test_non_ready_branch_not_activated(self):

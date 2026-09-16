@@ -56,9 +56,8 @@ class BranchMiddleware:
         except ObjectDoesNotExist:
             return HttpResponseBadRequest("Invalid branch identifier")
         if not_ready := getattr(request, '_branch_not_ready', None):
-            return HttpResponseBadRequest(
-                f"Branch {not_ready} is not ready for use (status: {not_ready.status})"
-            )
+            # The branch name is omitted: this response precedes REST API authentication
+            return HttpResponseBadRequest(f"Branch is not ready for use (status: {not_ready.status})")
         request.active_branch = branch
 
         response = self.get_response(request)
