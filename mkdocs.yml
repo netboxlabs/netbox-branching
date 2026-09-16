@@ -42,7 +42,6 @@ nav:
         - Creating a Branch: 'using-branches/creating-a-branch.md'
         - Syncing & Merging: 'using-branches/syncing-merging.md'
         - Reverting a Branch: 'using-branches/reverting-a-branch.md'
-    - Permissions: 'permissions.md'
     - Best Practices: 'best-practices.md'
     - Plugin Development: 'plugin-development.md'
     - NetBox Docker: 'netbox-docker.md'
