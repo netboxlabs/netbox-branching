@@ -227,6 +227,25 @@ class BranchAPIPermissionTestCase(_TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.wsgi_request.active_branch, self.mine)
 
+    def test_rejected_token_reports_the_authentication_failure(self):
+        # A token which fails authentication leaves the user unresolved, which would make every branch
+        # invisible and so report the branch as invalid. The caller must see the authentication error
+        # explaining the real problem instead of a 400 blaming the branch identifier. (DRF answers 403
+        # rather than 401 because NetBox's TokenAuthentication supplies no WWW-Authenticate header.)
+        from users.constants import TOKEN_PREFIX
+        from users.models import Token
+
+        token = Token.objects.create(user=self.user, enabled=False)
+        self.client.logout()
+        response = self.client.get(
+            reverse('api-root'),
+            HTTP_ACCEPT='application/json',
+            HTTP_AUTHORIZATION=f'Bearer {TOKEN_PREFIX}{token.key}.{token.token}',
+            HTTP_X_NETBOX_BRANCH=self.mine.schema_id,
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn('Token disabled', response.json()['detail'])
+
     def test_resolving_the_token_user_leaves_the_request_untouched(self):
         # DRF assigns request.user itself during view dispatch; identifying the user early must not
         # pre-empt that, so the probe is required to leave the incoming request exactly as it found it.
