@@ -9,7 +9,7 @@ from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
 from netbox_branching.models import Branch
 from netbox_branching.template_content import BranchSelector
-from netbox_branching.utilities import get_active_branch, get_branches_for_user
+from netbox_branching.utilities import get_active_branch, get_branches_for_user, resolve_request_user
 
 User = get_user_model()
 
@@ -197,3 +197,57 @@ class BranchAPIPermissionTestCase(_TestCase):
         url = reverse('plugins-api:netbox_branching-api:branch-merge', kwargs={'pk': self.mine.pk})
         response = self.client.post(url, HTTP_ACCEPT='application/json')
         self.assertEqual(response.status_code, 403)
+
+    #
+    # Branch activation by header
+    #
+    # The middleware resolves the active branch before REST framework has authenticated the request,
+    # so request.user is still anonymous here: the permitted branches must be looked up against the
+    # user identified from the token instead.
+    #
+
+    def _token_header(self):
+        from users.constants import TOKEN_PREFIX
+        from users.models import Token
+
+        token = Token.objects.create(user=self.user)
+        return f'Bearer {TOKEN_PREFIX}{token.key}.{token.token}'
+
+    def test_token_request_activates_permitted_branch(self):
+        self.client.logout()
+        response = self.client.get(
+            reverse('api-root'),
+            HTTP_ACCEPT='application/json',
+            HTTP_AUTHORIZATION=self._token_header(),
+            HTTP_X_NETBOX_BRANCH=self.mine.schema_id,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.wsgi_request.active_branch, self.mine)
+
+    def test_resolving_the_token_user_leaves_the_request_untouched(self):
+        # DRF assigns request.user itself during view dispatch; identifying the user early must not
+        # pre-empt that, so the probe is required to leave the incoming request exactly as it found it.
+        from django.contrib.auth.models import AnonymousUser
+        from users.constants import TOKEN_PREFIX
+        from users.models import Token
+
+        token = Token.objects.create(user=self.user)
+        request = RequestFactory().get(
+            reverse('api-root'),
+            HTTP_AUTHORIZATION=f'Bearer {TOKEN_PREFIX}{token.key}.{token.token}',
+        )
+        anonymous = AnonymousUser()
+        request.user = anonymous
+
+        self.assertEqual(resolve_request_user(request), self.user)
+        self.assertIs(request.user, anonymous)
+
+    def test_token_request_rejects_unpermitted_branch(self):
+        self.client.logout()
+        response = self.client.get(
+            reverse('api-root'),
+            HTTP_ACCEPT='application/json',
+            HTTP_AUTHORIZATION=self._token_header(),
+            HTTP_X_NETBOX_BRANCH=self.theirs.schema_id,
+        )
+        self.assertEqual(response.status_code, 400)

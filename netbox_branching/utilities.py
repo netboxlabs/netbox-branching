@@ -14,7 +14,6 @@ from django.db.models import ForeignKey, ManyToManyField
 from django.http import HttpResponseBadRequest
 from django.urls import reverse
 from django.utils import timezone
-from django.utils.functional import SimpleLazyObject
 from django.utils.translation import gettext as _
 from netbox.plugins import get_plugin_config
 from netbox.utils import register_request_processor
@@ -578,11 +577,17 @@ def resolve_request_user(request):
     from rest_framework.request import Request as DRFRequest
     from rest_framework.settings import api_settings
 
+    # The authenticators are invoked directly rather than through DRFRequest.user, whose setter writes the
+    # result back onto the underlying request; identifying the user here must not alter what the view sees.
+    probe = DRFRequest(
+        request,
+        authenticators=[auth() for auth in api_settings.DEFAULT_AUTHENTICATION_CLASSES],
+    )
     try:
-        user = DRFRequest(
-            request,
-            authenticators=[auth() for auth in api_settings.DEFAULT_AUTHENTICATION_CLASSES],
-        ).user
+        for authenticator in probe.authenticators:
+            if (result := authenticator.authenticate(probe)) is not None:
+                user = result[0]
+                break
     except Exception:
         # Leave the user unresolved; the view will report the authentication failure itself
         logger.debug('Unable to authenticate API request while resolving the active branch', exc_info=True)
@@ -596,12 +601,13 @@ def get_active_branch(request):
     Return the active Branch (if any). Only branches which the requesting user is permitted to view are
     eligible for activation.
     """
-    # Resolved lazily: a request which names no branch should not incur the cost of identifying the user.
-    branches = SimpleLazyObject(lambda: get_branches_for_user(resolve_request_user(request)))
+    def permitted_branches():
+        # Called only where a branch is named, so a request which names none doesn't pay to identify the user
+        return get_branches_for_user(resolve_request_user(request))
 
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
     if is_api_request(request) and BRANCH_HEADER in request.headers:
-        branch = branches.get(schema_id=request.headers.get(BRANCH_HEADER))
+        branch = permitted_branches().get(schema_id=request.headers.get(BRANCH_HEADER))
         if not branch.ready:
             return HttpResponseBadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
         return branch
@@ -609,7 +615,7 @@ def get_active_branch(request):
     # Branch activated/deactivated by URL query parameter
     if QUERY_PARAM in request.GET:
         if schema_id := request.GET.get(QUERY_PARAM):
-            branch = branches.get(schema_id=schema_id)
+            branch = permitted_branches().get(schema_id=schema_id)
             if branch.ready:
                 if (
                     schema_id != request.COOKIES.get(COOKIE_NAME)
@@ -633,7 +639,7 @@ def get_active_branch(request):
     # Branch set by cookie
     if schema_id := request.COOKIES.get(COOKIE_NAME):
         try:
-            branch = branches.get(schema_id=schema_id)
+            branch = permitted_branches().get(schema_id=schema_id)
             if branch.ready:
                 return branch
         except ObjectDoesNotExist:
