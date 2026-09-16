@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.contrib.auth.context_processors import PermWrapper
 from django.test import RequestFactory
 from django.test import TestCase as _TestCase
 from django.urls import reverse
@@ -65,10 +66,12 @@ class BranchPermissionTestCase(TestCase):
     def _render_selector(self, user):
         request = RequestFactory().get('/')
         request.user = user
-        return BranchSelector(context={'request': request}).navbar()
+        # Mirrors the context NetBox passes to template extensions, which includes `perms`
+        return BranchSelector(context={'request': request, 'perms': PermWrapper(user)}).navbar()
 
     def test_selector_hidden_without_permission(self):
-        self.assertEqual(self._render_selector(self.user), '')
+        # The template renders only whitespace when the selector is gated out
+        self.assertEqual(self._render_selector(self.user).strip(), '')
 
     def test_selector_lists_only_permitted_branches(self):
         mine = Branch.objects.get(name='Branch 1')

@@ -4,7 +4,7 @@ from netbox.plugins import PluginTemplateExtension
 from .choices import BranchStatusChoices
 from .contextvars import active_branch
 from .models import ChangeDiff
-from .utilities import get_branches_for_user, user_has_branch_permission
+from .utilities import get_branches_for_user
 
 __all__ = (
     'BranchNotification',
@@ -20,10 +20,8 @@ class BranchSelector(PluginTemplateExtension):
     def navbar(self):
         user = self.context['request'].user
 
-        # Hide the selector entirely from users who cannot view any branches
-        if not user_has_branch_permission(user):
-            return ''
-
+        # The template hides the selector from users without view permission; the queryset is lazy, so
+        # nothing is fetched in that case.
         return self.render('netbox_branching/inc/branch_selector.html', extra_context={
             'active_branch': active_branch.get(),
             'branches': get_branches_for_user(user).filter(status__in=BranchStatusChoices.WORKING),

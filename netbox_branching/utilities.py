@@ -17,7 +17,6 @@ from django.utils import timezone
 from django.utils.translation import gettext as _
 from netbox.plugins import get_plugin_config
 from netbox.utils import register_request_processor
-from utilities.permissions import get_permission_for_model, permission_is_exempt
 
 from .constants import (
     _FILE_NOT_FOUND_EXCEPTIONS,
@@ -78,7 +77,6 @@ __all__ = (
     'supports_branching',
     'track_branch_connection',
     'update_object',
-    'user_has_branch_permission',
 )
 
 
@@ -550,16 +548,6 @@ def get_branches_for_user(user, action='view'):
     """
     from .models import Branch
     return Branch.objects.restrict(user, action)
-
-
-def user_has_branch_permission(user, action='view'):
-    """
-    Return True if the given user holds the specified Branch permission at the model level, honoring the
-    same exemptions as get_branches_for_user().
-    """
-    from .models import Branch
-    permission = get_permission_for_model(Branch, action)
-    return permission_is_exempt(permission) or (user is not None and user.has_perm(permission))
 
 
 def resolve_request_user(request):
