@@ -3,12 +3,12 @@ from typing import ClassVar
 from core.api.serializers import JobSerializer
 from django.core.exceptions import PermissionDenied
 from django.http import HttpResponseBadRequest
-from django.shortcuts import get_object_or_404
 from drf_spectacular.utils import extend_schema
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired
 from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
 from rest_framework import status
 from rest_framework.decorators import action
+from rest_framework.generics import get_object_or_404
 from rest_framework.mixins import (
     CreateModelMixin,
     DestroyModelMixin,

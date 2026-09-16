@@ -201,6 +201,13 @@ class BranchAPIPermissionTestCase(_TestCase):
         response = self.client.post(url, HTTP_ACCEPT='application/json')
         self.assertEqual(response.status_code, 403)
 
+    def test_malformed_pk_is_reported_as_missing(self):
+        # The router's pk pattern admits any non-separator characters, so a value the database cannot
+        # compare must be reported as a missing branch rather than raised as a server error.
+        url = reverse('plugins-api:netbox_branching-api:branch-sync', kwargs={'pk': self.mine.pk})
+        url = url.replace(f'/{self.mine.pk}/', '/not-a-pk/')
+        self.assertEqual(self.client.post(url, HTTP_ACCEPT='application/json').status_code, 404)
+
     #
     # Branch activation by header
     #
