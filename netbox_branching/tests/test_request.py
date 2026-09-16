@@ -4,6 +4,7 @@ from utilities.testing import TestCase
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
+from netbox_branching.contextvars import active_branch
 from netbox_branching.models import Branch
 
 
@@ -133,3 +134,36 @@ class RequestTestCase(TestCase):
             HTTP_X_NETBOX_BRANCH='nonexist',
         )
         self.assertEqual(response.status_code, 400)
+
+    @override_settings(LOGIN_REQUIRED=False)
+    def test_api_header_with_non_ready_branch_returns_400(self):
+        """
+        An API request naming a branch which is not ready must be rejected with an
+        explanatory 400. Previously get_active_branch() returned an HttpResponseBadRequest
+        object, which the request processor then activated as if it were a Branch, blowing
+        up with an AttributeError (HTTP 500) on the first branch-aware query (#642).
+        """
+        branch = Branch.objects.first()
+        branch.status = BranchStatusChoices.PROVISIONING
+        branch.save(provision=False, update_merge_sync_fields=True)
+        self.add_permissions('dcim.view_site')
+
+        response = self.client.get(
+            reverse('dcim-api:site-list'),
+            HTTP_X_NETBOX_BRANCH=branch.schema_id,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('is not ready for use', response.content.decode())
+
+    @override_settings(LOGIN_REQUIRED=False)
+    def test_non_ready_branch_not_activated(self):
+        """
+        A rejected branch must not leak into the active_branch context variable.
+        """
+        branch = Branch.objects.first()
+        branch.status = BranchStatusChoices.PROVISIONING
+        branch.save(provision=False, update_merge_sync_fields=True)
+
+        response = self.client.get(reverse('api-root'), HTTP_X_NETBOX_BRANCH=branch.schema_id)
+        self.assertEqual(response.status_code, 400)
+        self.assertIsNone(active_branch.get())

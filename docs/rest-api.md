@@ -72,6 +72,8 @@ http://netbox:8000/api/dcim/sites/
 
 The branch is effectively "deactivated" for future API requests by simply omitting the header.
 
+A request naming a branch which is not yet ready for use — one still provisioning, for example — is rejected with an HTTP 400 response identifying the branch's current status. Wait for the branch to reach the `ready` status before making requests against it.
+
 !!! note
     The `X-NetBox-Branch` header is required only when making changes to NetBox objects within the context of an active branch. It is **not** required when creating, modifying, or deleting a branch itself.
 

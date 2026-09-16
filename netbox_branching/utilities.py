@@ -11,7 +11,6 @@ from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db import connections
 from django.db.models import ForeignKey, ManyToManyField
-from django.http import HttpResponseBadRequest
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext as _
@@ -28,6 +27,7 @@ from .constants import (
     QUERY_PARAM,
 )
 from .contextvars import active_branch
+from .exceptions import BranchNotReady
 
 logger = logging.getLogger(__name__)
 
@@ -544,7 +544,7 @@ def get_active_branch(request):
     if is_api_request(request) and BRANCH_HEADER in request.headers:
         branch = Branch.objects.get(schema_id=request.headers.get(BRANCH_HEADER))
         if not branch.ready:
-            return HttpResponseBadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
+            raise BranchNotReady(branch)
         return branch
 
     # Branch activated/deactivated by URL query parameter
@@ -625,7 +625,14 @@ def ActiveBranchContextManager(request):
     """
     Activate a branch if indicated by the request (except for exempt paths).
     """
-    if request and request.path not in EXEMPT_PATHS and (branch := get_active_branch(request)):
+    if not request or request.path in EXEMPT_PATHS:
+        return nullcontext()
+    try:
+        branch = get_active_branch(request)
+    except BranchNotReady:
+        # BranchMiddleware runs after this processor and returns a 400 for the request
+        return nullcontext()
+    if branch:
         return activate_branch(branch)
     return nullcontext()
 
