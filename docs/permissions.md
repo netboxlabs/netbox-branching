@@ -17,8 +17,9 @@ granted:
 | `migrate` | `netbox_branching.migrate_branch` | Apply outstanding migrations to the branch schema (UI only — the REST API exposes no migrate endpoint) |
 | `archive` | `netbox_branching.archive_branch` | Deprovision a merged branch's schema |
 
-A user who has not been granted `view` on any branch sees neither the **Branching** navigation menu nor the branch
-selector in the header, and cannot activate a branch.
+A user who has not been granted `view` on any branch sees no branch selector in the header, cannot activate a branch,
+and loses the **Branches** item from the **Branching** menu. The menu itself remains visible if they can view change
+diffs (`netbox_branching.view_changediff`), as NetBox renders a menu whenever any of its items is permitted.
 
 !!! note
     The REST API's action endpoints (`/sync/`, `/merge/`, ...) are POSTs, which NetBox maps to the `add` permission
