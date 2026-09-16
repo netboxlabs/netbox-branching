@@ -124,12 +124,12 @@ Alternatively, if the conflicting changes are problematic, you can go back and m
 
 Conflicts are detected by comparing the same object in your branch and in main, so a collision between two *different* objects cannot be flagged in advance — for example, a device you place in rack unit 12 in your branch and a different device someone places in that slot in main. Both writes are valid in their own schema; the collision surfaces only when the merge replays your change against main.
 
-The job report identifies these as a collision with the main schema and quotes the underlying error ("U12 is already occupied…"). Two ways forward:
+The job report quotes the underlying error ("U12 is already occupied…"), which names whatever blocked the change. Two ways forward:
 
 - Resolve it in main: move or delete whatever already claims the resource, then retry. Works under either strategy.
 - Change the value in your branch, then merge using **squash**.
 
-The second requires squash because iterative replays your original colliding value before reaching the change that fixed it. Squash does not help with a collision you have not resolved — both strategies then apply the same value and fail. Same recovery pattern as [Recovering from Duplicate Object Conflicts](#recovering-from-duplicate-object-conflicts).
+The second requires squash because iterative replays the value recorded in your original change before reaching the change that fixed it, so a branch-side fix on its own leaves the merge failing identically. Squash does not help with a collision you have not resolved — both strategies then apply the same value and fail. Same recovery pattern as [Recovering from Duplicate Object Conflicts](#recovering-from-duplicate-object-conflicts).
 
 ## Dry Runs
 
