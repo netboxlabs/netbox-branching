@@ -124,6 +124,43 @@ class APITestCase(BaseAPITestCase, TransactionTestCase):
         self.assertEqual(results[0]['name'], 'Site 2')
 
 
+class BranchProvisionedAPITestCase(BaseAPITestCase, TestCase):
+    # No branch provisioning here — every test creates a Branch row with
+    # provision=False and sets the flag directly.
+
+    def test_provisioned_is_returned(self):
+        branch = Branch(name='Test Branch')
+        branch.save(provision=False)
+        Branch.objects.filter(pk=branch.pk).update(provisioned=True)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-detail', kwargs={'pk': branch.pk})
+        response = self.client.get(url, **self.header)
+
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertIs(data['provisioned'], True)
+
+    def test_provisioned_is_read_only(self):
+        """
+        provisioned is declared editable=False, so DRF must treat it as read-only: a value
+        supplied by a client is ignored rather than written. See #665.
+        """
+        branch = Branch(name='Test Branch')
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-detail', kwargs={'pk': branch.pk})
+        response = self.client.patch(
+            url,
+            data=json.dumps({'provisioned': True}),
+            content_type='application/json',
+            **self.header,
+        )
+
+        self.assertEqual(response.status_code, 200)
+        branch.refresh_from_db()
+        self.assertFalse(branch.provisioned)
+
+
 class BranchArchiveAPITestCase(BaseAPITestCase, TestCase):
     # No branch provisioning here — every test creates a Branch row with
     # provision=False, so the outer transaction TestCase provides is sufficient.

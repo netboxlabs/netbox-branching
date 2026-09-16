@@ -13,10 +13,10 @@ def provision_branch(*, user, name='Test Branch', **kwargs):
     """
     Create and provision a Branch, returning it with status READY.
 
-    Branch.provision() runs synchronously in the calling thread; it updates
-    the row via Branch.objects.filter(pk=...).update(...), which bypasses
-    the in-memory instance, so the caller needs refresh_from_db() to see
-    the post-provision status.
+    Branch.provision() runs synchronously in the calling thread; it writes the
+    row via Branch.objects.filter(pk=...).update(...) and mirrors those fields
+    onto the in-memory instance. The refresh_from_db() below is belt and braces
+    for anything a future provisioning step writes without mirroring.
 
     Any extra kwargs (e.g. merge_strategy) are passed through to the Branch
     constructor.

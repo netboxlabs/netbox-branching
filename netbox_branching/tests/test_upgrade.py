@@ -14,8 +14,12 @@ and then exercises a user-driven create + merge + revert cycle.
 ORM writes inside data migrations must not create ``ObjectChange`` records in
 the branch schema, and the signal handlers disconnected during the job must
 be reconnected afterwards.
+
+``ProvisionedBackfillTestCase`` covers the data migration which populates
+``Branch.provisioned`` on upgrade.
 """
 import gzip
+import importlib
 import uuid
 import weakref
 from pathlib import Path
@@ -24,11 +28,13 @@ from unittest.mock import patch
 
 from core.signals import handle_changed_object, handle_deleted_object
 from dcim.models import Manufacturer
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import connection, connections
 from django.db.models.signals import m2m_changed, post_save, pre_delete
-from django.test import RequestFactory, TransactionTestCase
+from django.test import RequestFactory, TestCase, TransactionTestCase
 from django.urls import reverse
+from django.utils import timezone
 from netbox.context_managers import event_tracking
 from netbox.signals import post_clean
 from utilities.exceptions import AbortTransaction
@@ -37,6 +43,7 @@ from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.contextvars import active_branch as active_branch_var
 from netbox_branching.jobs import MigrateBranchJob
 from netbox_branching.models import Branch
+from netbox_branching.provisioning import quote_ident
 from netbox_branching.signal_receivers import validate_branching_operations
 from netbox_branching.tests.utils import provision_branch
 
@@ -274,3 +281,71 @@ class MigrateBranchSignalTestCase(TransactionTestCase):
 
         self.assertEqual(branch.get_unmerged_changes().count(), 0)
         self.assertTrue(_signal_handlers_connected())
+
+
+class ProvisionedBackfillTestCase(TestCase):
+    """
+    Migration 0010 backfills Branch.provisioned for branches which predate the field, by
+    asking the database which branch schemas actually exist. The backfill function is called
+    directly here: it takes only (apps, schema_editor), and the schemas it looks for are
+    ordinary ones this test can create itself — provisioning a real branch would cost minutes
+    and prove nothing extra. See #665.
+    """
+    def setUp(self):
+        self.backfill = importlib.import_module(
+            'netbox_branching.migrations.0010_branch_provisioned'
+        ).set_provisioned
+
+    def _make_branch(self, name, status, *, with_schema, synced=False):
+        branch = Branch(name=name, status=status)
+        branch.save(provision=False)
+        if synced:
+            # last_sync is shielded from save() as a lifecycle field; write it directly.
+            Branch.objects.filter(pk=branch.pk).update(last_sync=timezone.now())
+        if with_schema:
+            with connection.cursor() as cursor:
+                cursor.execute(f'CREATE SCHEMA {quote_ident(branch.schema_name)}')
+            # The schema is created inside the test's transaction, so TestCase rollback
+            # removes it; DROP it anyway in case this runs where that isn't true.
+            self.addCleanup(self._drop_schema, branch.schema_name)
+        return branch
+
+    @staticmethod
+    def _drop_schema(schema_name):
+        with connection.cursor() as cursor:
+            cursor.execute(f'DROP SCHEMA IF EXISTS {quote_ident(schema_name)} CASCADE')
+
+    def test_backfill_follows_the_schemas_which_exist(self):
+        ready = self._make_branch('Ready', BranchStatusChoices.READY, with_schema=True, synced=True)
+        # FAILED is the ambiguous one, covering three states a schema alone cannot tell apart:
+        # a failed migrate (schema intact), a failed provision (schema dropped), and a
+        # provisioning run whose worker was killed, which the stuck-branch watchdog moves here
+        # from PROVISIONING with its partial phase-1 schema left behind. Only the first is a
+        # dataset; last_sync is what distinguishes it, being written when provisioning
+        # completes and on every sync after that.
+        failed_migrate = self._make_branch(
+            'Failed migrate', BranchStatusChoices.FAILED, with_schema=True, synced=True
+        )
+        failed_provision = self._make_branch('Failed provision', BranchStatusChoices.FAILED, with_schema=False)
+        recovered_stuck = self._make_branch('Recovered stuck', BranchStatusChoices.FAILED, with_schema=True)
+        # A branch still in PROVISIONING is either mid-run or not yet recovered; phase 1 commits
+        # CREATE SCHEMA before any data is copied, so its schema is no evidence of a dataset.
+        stuck = self._make_branch('Stuck', BranchStatusChoices.PROVISIONING, with_schema=True)
+        new = self._make_branch('New', BranchStatusChoices.NEW, with_schema=False)
+        archived = self._make_branch('Archived', BranchStatusChoices.ARCHIVED, with_schema=False)
+
+        self.backfill(apps, SimpleNamespace(connection=connection))
+
+        expected = {
+            ready.pk: True,
+            failed_migrate.pk: True,
+            failed_provision.pk: False,
+            recovered_stuck.pk: False,
+            stuck.pk: False,
+            new.pk: False,
+            archived.pk: False,
+        }
+        self.assertEqual(
+            dict(Branch.objects.filter(pk__in=expected).values_list('pk', 'provisioned')),
+            expected,
+        )

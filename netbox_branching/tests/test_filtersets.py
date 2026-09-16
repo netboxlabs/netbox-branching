@@ -145,9 +145,13 @@ class BranchFilterSetTestCase(TestCase, BaseFilterSetTests):
         for branch in branches:
             branch.save(provision=False)
 
-        Branch.objects.filter(name='Branch 1').update(status=BranchStatusChoices.READY)
-        Branch.objects.filter(name='Branch 2').update(status=BranchStatusChoices.MERGED)
-        # Branch 3 remains NEW
+        Branch.objects.filter(name='Branch 1').update(
+            status=BranchStatusChoices.READY, provisioned=True
+        )
+        Branch.objects.filter(name='Branch 2').update(
+            status=BranchStatusChoices.MERGED, provisioned=True
+        )
+        # Branch 3 remains NEW, and so was never provisioned
 
     def test_id(self):
         params = {'id': [b.pk for b in Branch.objects.all()[:2]]}
@@ -172,6 +176,12 @@ class BranchFilterSetTestCase(TestCase, BaseFilterSetTests):
     def test_owner(self):
         params = {'owner': [self.users[0].username, self.users[1].username]}
         self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    def test_provisioned(self):
+        params = {'provisioned': True}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+        params = {'provisioned': False}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 1)
 
     def test_q_name(self):
         params = {'q': 'Branch 1'}

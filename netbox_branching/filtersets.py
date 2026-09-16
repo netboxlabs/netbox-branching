@@ -37,7 +37,7 @@ class BranchFilterSet(NetBoxModelFilterSet):
 
     class Meta:
         model = Branch
-        fields = ('id', 'name', 'description')
+        fields = ('id', 'name', 'description', 'provisioned')
 
     def search(self, queryset, name, value):
         if not value.strip():
