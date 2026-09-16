@@ -4,6 +4,7 @@ from django import forms
 from django.contrib.auth import get_user_model
 from django.utils.translation import gettext as _
 from netbox.forms import NetBoxModelFilterSetForm
+from utilities.forms import BOOLEAN_WITH_BLANK_CHOICES
 from utilities.forms.fields import ContentTypeMultipleChoiceField, DynamicModelMultipleChoiceField, TagFilterField
 from utilities.forms.rendering import FieldSet
 
@@ -20,12 +21,17 @@ class BranchFilterForm(NetBoxModelFilterSetForm):
     model = Branch
     fieldsets = (
         FieldSet('q', 'filter_id', 'tag'),
-        FieldSet('status', 'last_sync', 'owner_id', name=_('Branch')),
+        FieldSet('status', 'provisioned', 'last_sync', 'owner_id', name=_('Branch')),
     )
     status = forms.MultipleChoiceField(
         label=_('Status'),
         choices=BranchStatusChoices,
         required=False
+    )
+    provisioned = forms.NullBooleanField(
+        label=_('Provisioned'),
+        required=False,
+        widget=forms.Select(choices=BOOLEAN_WITH_BLANK_CHOICES)
     )
     owner_id = DynamicModelMultipleChoiceField(
         queryset=get_user_model().objects.all(),

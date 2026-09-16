@@ -38,6 +38,14 @@ The current status of the branch. This must be one of the following values:
 | Archived           | A merged branch whose PostgreSQL schema has been deprovisioned to reclaim space            |
 | Failed             | An operation against this branch (typically provisioning or migration) has failed          |
 
+### Provisioned
+
+!!! info "This field was introduced in v2.0."
+
+Whether the branch is currently provisioned in the backend. It is set when provisioning completes successfully, and cleared when provisioning fails or when the branch is deprovisioned (by archiving or deleting it). The field is not editable; it is maintained automatically by the backend.
+
+This is recorded rather than inferred because [Status](#status) cannot answer the question reliably: "failed" covers both a provisioning failure, which leaves no schema, and a migration failure, which leaves one fully intact.
+
 ### Applied Migrations
 
 A list of database migrations which have been applied to the branch since it was created. This is used to keep track of which migrations a branch has seen so that historical data can be migrated forward when the branch is synced, merged, or reverted.

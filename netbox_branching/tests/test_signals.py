@@ -23,6 +23,7 @@ from django.urls import reverse
 from netbox.context_managers import event_tracking
 
 from netbox_branching import signals as branch_signals
+from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
 from netbox_branching.tests.utils import provision_branch
 from netbox_branching.utilities import activate_branch
@@ -76,11 +77,34 @@ class BranchSignalTestCase(TransactionTestCase):
     # -------------------------------------------------------------------------
 
     def test_provision_fires_pre_and_post(self):
-        with (
-            capture_signal(branch_signals.pre_provision) as pre,
-            capture_signal(branch_signals.post_provision) as post,
-        ):
-            branch = provision_branch(user=self.user)
+        # Snapshot the branch as receivers actually see it at emission time: post_provision
+        # must fire *after* the branch has been recorded as provisioned and ready, so that
+        # receivers querying the branch (and the event payload serialized from it) describe
+        # the state the signal announces. See #665.
+        snapshots = []
+        fields = ('provisioned', 'status', 'last_sync')
+
+        def snapshot(sender, branch, **kwargs):
+            row = Branch.objects.filter(pk=branch.pk).values(*fields).first()
+            # last_sync is compared as a boolean: the instance and the row hold the same
+            # timestamp, and what matters here is that neither is still empty.
+            snapshots.append({
+                'instance': (branch.provisioned, branch.status, branch.last_sync is not None),
+                'database': (row['provisioned'], row['status'], row['last_sync'] is not None),
+            })
+
+        branch_signals.post_provision.connect(snapshot, weak=False, dispatch_uid='provision_state_test')
+        try:
+            with (
+                capture_signal(branch_signals.pre_provision) as pre,
+                capture_signal(branch_signals.post_provision) as post,
+            ):
+                branch = provision_branch(user=self.user)
+        finally:
+            branch_signals.post_provision.disconnect(dispatch_uid='provision_state_test')
+
+        ready = (True, BranchStatusChoices.READY, True)
+        self.assertEqual(snapshots, [{'instance': ready, 'database': ready}])
 
         self.assertEqual(len(pre), 1)
         self.assertEqual(len(post), 1)

@@ -93,6 +93,9 @@ class BranchTable(NetBoxTable):
     status = columns.ChoiceFieldColumn(
         verbose_name=_('Status')
     )
+    provisioned = columns.BooleanColumn(
+        verbose_name=_('Provisioned')
+    )
     is_stale = columns.BooleanColumn(
         true_mark=mark_safe('<span class="text-danger"><i class="mdi mdi-alert-circle"></i></span>'),
         false_mark=None,
@@ -111,8 +114,8 @@ class BranchTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = Branch
         fields = (
-            'pk', 'id', 'name', 'is_active', 'status', 'is_stale', 'conflicts', 'schema_id', 'description', 'owner',
-            'tags', 'created', 'last_updated',
+            'pk', 'id', 'name', 'is_active', 'status', 'provisioned', 'is_stale', 'conflicts', 'schema_id',
+            'description', 'owner', 'tags', 'created', 'last_updated',
         )
         default_columns = (
             'pk', 'name', 'is_active', 'status', 'is_stale', 'owner', 'conflicts', 'schema_id', 'description',

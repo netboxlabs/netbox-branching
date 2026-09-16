@@ -26,7 +26,17 @@ class BranchTestCase(TransactionTestCase):
     def test_create_branch(self):
         branch = Branch(name='Branch 1')
         branch.save(provision=False)
+        self.assertFalse(branch.provisioned)
+
         branch.provision(user=None)
+
+        # A dataset now exists. provision() writes the row with queryset .update(), but
+        # mirrors the new state onto the instance too. See #665.
+        self.assertTrue(branch.provisioned)
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+        branch.refresh_from_db()
+        self.assertTrue(branch.provisioned)
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
 
         main_schema = get_plugin_config('netbox_branching', 'main_schema')
         tables_to_replicate = get_tables_to_replicate()
@@ -235,6 +245,7 @@ class BranchTestCase(TransactionTestCase):
         sync_time = timezone.now() - timedelta(minutes=1)
         Branch.objects.filter(pk=branch.pk).update(
             status=BranchStatusChoices.READY,
+            provisioned=True,
             last_sync=sync_time,
         )
 
@@ -250,6 +261,7 @@ class BranchTestCase(TransactionTestCase):
         updated = Branch.objects.get(pk=branch.pk)
         self.assertEqual(updated.name, 'Renamed Branch')
         self.assertEqual(updated.status, BranchStatusChoices.READY)
+        self.assertTrue(updated.provisioned)
         self.assertEqual(updated.last_sync, sync_time)
 
     def test_delete_transitional_branch_preserves_schema(self):
@@ -342,10 +354,11 @@ class BranchTestCase(TransactionTestCase):
     # -------------------------------------------------------------------------
     # Lifecycle action guards
     #
-    # sync/merge/revert all check the branch's status and (for sync) staleness
-    # before doing any work. The checks fire before pre_X signals, so a wrong
-    # status raises an exception immediately. These tests pin down the guards
-    # so a refactor of the lifecycle methods cannot silently relax them.
+    # sync/merge/revert all check the branch's status, (for sync) staleness, and
+    # the existence of a dataset before doing any work. The checks fire before
+    # pre_X signals, so a wrong status raises an exception immediately. These
+    # tests pin down the guards so a refactor of the lifecycle methods cannot
+    # silently relax them.
     # -------------------------------------------------------------------------
 
     def test_sync_raises_when_branch_not_ready(self):
@@ -365,6 +378,25 @@ class BranchTestCase(TransactionTestCase):
         branch.save(provision=False)
         with self.assertRaisesRegex(Exception, 'Only merged branches can be reverted'):
             branch.revert(user=None)
+
+    def test_lifecycle_actions_raise_when_branch_has_no_dataset(self):
+        """
+        Status and `provisioned` should never disagree, but if they do, every action which
+        reads or writes the branch schema must say so. Each of these would otherwise find no
+        changes — the branch's ObjectChange records are unreachable — and return quietly,
+        reporting a successful no-op rather than the missing dataset. See #665.
+        """
+        for status, action in (
+            (BranchStatusChoices.READY, 'sync'),
+            (BranchStatusChoices.READY, 'merge'),
+            (BranchStatusChoices.MERGED, 'revert'),
+        ):
+            with self.subTest(action=action):
+                branch = Branch(name=f'Branch {action}', status=status)
+                branch.save(provision=False)
+                self.assertFalse(branch.provisioned)
+                with self.assertRaisesRegex(Exception, 'has no dataset provisioned'):
+                    getattr(branch, action)(user=None)
 
     @override_settings(CHANGELOG_RETENTION=10)
     def test_sync_raises_when_branch_is_stale(self):
@@ -501,6 +533,39 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         self._provisioned_schemas.append(branch.schema_name)
         return branch
 
+    def test_deprovision_clears_provisioned_flag(self):
+        """
+        Deprovisioning drops the schema, so the flag must be cleared. This is the case status
+        alone cannot express: an archived branch and a failed-to-provision branch both have no
+        dataset, but so does a branch whose migrate failed with its schema fully intact.
+        """
+        branch = self._track(Branch(name='DeprovisionedFlag'))
+        branch.save(provision=False)
+        branch.provision(user=None)
+        self.assertTrue(branch.provisioned)
+
+        branch.deprovision()
+
+        self.assertFalse(branch.provisioned)
+        branch.refresh_from_db()
+        self.assertFalse(branch.provisioned)
+
+    def test_archive_clears_provisioned_flag(self):
+        """
+        archive() deprovisions the branch, so it must clear the flag too.
+        """
+        branch = self._track(Branch(name='ArchivedFlag'))
+        branch.save(provision=False)
+        branch.provision(user=None)
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.MERGED)
+        branch.refresh_from_db()
+
+        branch.archive(user=None)
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.ARCHIVED)
+        self.assertFalse(branch.provisioned)
+
     def test_provision_preserves_every_main_schema_index(self):
         branch = self._track(Branch(name='IndexParity'))
         branch.save(provision=False)
@@ -571,7 +636,8 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         """
         Any exception out of the parallel pipeline must trigger DROP SCHEMA
         CASCADE and a FAILED branch status — matching the rollback semantics
-        of the previous single-transaction implementation.
+        of the previous single-transaction implementation. No dataset survives,
+        so the branch must not be left claiming one (#665).
         """
         from netbox_branching.models import branches as branches_module
 
@@ -589,8 +655,10 @@ class BranchProvisionPipelineTestCase(TransactionTestCase):
         finally:
             branches_module.parallel_copy_tables = original
 
+        self.assertFalse(branch.provisioned)
         branch.refresh_from_db()
         self.assertEqual(branch.status, BranchStatusChoices.FAILED)
+        self.assertFalse(branch.provisioned)
 
         # The (partial) schema must have been dropped.
         with connection.cursor() as cursor:

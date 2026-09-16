@@ -25,6 +25,7 @@ http://netbox:8000/api/plugins/branching/branches/ \
     "display": "Branch 1",
     "name": "Branch 1",
     "status": "new",
+    "provisioned": false,
     "owner": {
         "id": 1,
         "url": "http://netbox:8000/api/users/users/1/",

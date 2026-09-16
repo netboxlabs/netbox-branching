@@ -212,6 +212,12 @@ class Branch(JobsMixin, PrimaryModel):
         default=BranchStatusChoices.NEW,
         editable=False
     )
+    provisioned = models.BooleanField(
+        verbose_name=_('provisioned'),
+        default=False,
+        editable=False,
+        help_text=_('A live dataset backing this branch exists and can be connected to')
+    )
     applied_migrations = ArrayField(
         verbose_name=_('applied migrations'),
         base_field=models.CharField(max_length=200),
@@ -332,7 +338,7 @@ class Branch(JobsMixin, PrimaryModel):
 
     # Fields owned by background jobs; excluded from save() by default to avoid clobbering. See #445.
     LIFECYCLE_FIELDS = (
-        'status', 'last_sync', 'merged_time', 'merged_by', 'applied_migrations',
+        'status', 'provisioned', 'last_sync', 'merged_time', 'merged_by', 'applied_migrations',
     )
 
     def save(self, provision=True, update_merge_sync_fields=False, *args, **kwargs):
@@ -403,7 +409,8 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all ObjectChange records created within the Branch.
         """
-        if self.status == BranchStatusChoices.NEW:
+        if not self.provisioned:
+            # No branch dataset exists, so there is nothing to read
             return ObjectChange.objects.none()
         return ObjectChange.objects.using(self.connection_name)
 
@@ -411,6 +418,10 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all ObjectChange records created in main since the Branch was last synced or created.
         """
+        # Unlike its siblings this reads main, not the branch schema, so it is keyed on status
+        # alone; whether a dataset exists says nothing about what main has recorded since the
+        # last sync. sync() checks for the dataset it would apply these changes to.
+        #
         # TODO: Remove this fallback logic in a future release
         # Backward compatibility for branches created before v0.5.6, which did not have last_sync set automatically
         # upon provisioning. Defaults to the branch creation time.
@@ -428,7 +439,7 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a queryset of all unmerged ObjectChange records within the Branch schema.
         """
-        if self.status == BranchStatusChoices.READY:
+        if self.status == BranchStatusChoices.READY and self.provisioned:
             return ObjectChange.objects.using(self.connection_name)
         return ObjectChange.objects.none()
 
@@ -501,6 +512,9 @@ class Branch(JobsMixin, PrimaryModel):
         """
         Return a list of database migrations which have been applied in main but not in the branch.
         """
+        if not self.provisioned:
+            # No branch dataset exists, so nothing can be outstanding
+            return []
         connection = connections[self.connection_name]
         executor = MigrationExecutor(connection)
         targets = executor.loader.graph.leaf_nodes()
@@ -912,6 +926,8 @@ class Branch(JobsMixin, PrimaryModel):
             raise Exception(f"Branch {self} is stale and can no longer be synced")
         if commit and not self.can_sync:
             raise Exception("Syncing this branch is not permitted.")
+        if not self.provisioned:
+            raise Exception(f"Branch {self} has no dataset provisioned")
 
         # Emit pre-sync signal
         pre_sync.send(sender=self.__class__, branch=self, user=user)
@@ -1109,6 +1125,8 @@ class Branch(JobsMixin, PrimaryModel):
             raise Exception(f"Branch {self} is not ready to merge")
         if commit and not self.can_merge:
             raise Exception("Merging this branch is not permitted.")
+        if not self.provisioned:
+            raise Exception(f"Branch {self} has no dataset provisioned")
 
         # Emit pre-merge signal
         pre_merge.send(sender=self.__class__, branch=self, user=user)
@@ -1182,6 +1200,8 @@ class Branch(JobsMixin, PrimaryModel):
             raise Exception("Only merged branches can be reverted.")
         if commit and not self.can_revert:
             raise Exception("Reverting this branch is not permitted.")
+        if not self.provisioned:
+            raise Exception(f"Branch {self} has no dataset provisioned")
 
         # Emit pre-revert signal
         pre_revert.send(sender=self.__class__, branch=self, user=user)
@@ -1530,19 +1550,36 @@ class Branch(JobsMixin, PrimaryModel):
                     cursor.execute(f"DROP SCHEMA IF EXISTS {quote_ident(schema)} CASCADE")
             except Exception:
                 logger.exception(f"Failed to drop schema {schema} during provision cleanup")
-            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
+            Branch.objects.filter(pk=self.pk).update(
+                status=BranchStatusChoices.FAILED,
+                provisioned=False,
+            )
+            self.provisioned = False
             raise
+
+        # Record the branch's dataset & update its status. This must happen before the
+        # post-provision signal is emitted: receivers see the branch as it now is, with a
+        # schema they can query, and the serialized branch attached to the resulting event
+        # reports the state that the event announces.
+        logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
+        now = timezone.now()
+        self.status = BranchStatusChoices.READY
+        self.provisioned = True
+        self.last_sync = now
+        Branch.objects.filter(pk=self.pk).update(
+            status=BranchStatusChoices.READY,
+            provisioned=True,
+            last_sync=now,
+        )
+
+        # Record a branch event for the provision
+        logger.debug(f"Recording branch event: {BranchEventTypeChoices.PROVISIONED}")
+        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.PROVISIONED)
 
         # Emit post-provision signal
         post_provision.send(sender=self.__class__, branch=self, user=user)
 
         logger.info('Provisioning completed')
-
-        Branch.objects.filter(pk=self.pk).update(
-            status=BranchStatusChoices.READY,
-            last_sync=timezone.now(),
-        )
-        BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.PROVISIONED)
 
     provision.alters_data = True
 
@@ -1656,6 +1693,13 @@ class Branch(JobsMixin, PrimaryModel):
             cursor.execute(
                 f"DROP SCHEMA IF EXISTS {quote_ident(self.schema_name)} CASCADE"
             )
+
+        # The dataset is gone; the branch must say so. Skipped when the row itself has already
+        # been deleted (delete() deprovisions after the row is gone), where there is nothing
+        # left to record it on.
+        self.provisioned = False
+        if self.pk:
+            Branch.objects.filter(pk=self.pk).update(provisioned=False)
 
         # Emit post-deprovision signal
         post_deprovision.send(sender=self.__class__, branch=self)
