@@ -28,7 +28,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import connections
-from django.test import RequestFactory, SimpleTestCase, TransactionTestCase
+from django.test import RequestFactory, SimpleTestCase
 from django.urls import reverse
 from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomField, Tag
@@ -38,7 +38,7 @@ from utilities.exceptions import AbortTransaction
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.error_report import build_error_report, get_entry_message, get_merge_recommendations
 from netbox_branching.models import Branch, ChangeDiff
-from netbox_branching.tests.utils import provision_branch
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import DELETED, _deep_merge_dict, _strip_deleted, activate_branch, diff_for_merge
 
 User = get_user_model()
@@ -48,11 +48,12 @@ class BaseMergeTests:
     """
     Mixin with common merge tests for all merge strategies.
 
-    Subclasses should inherit from both this mixin and TransactionTestCase, and must
+    Subclasses should inherit from both this mixin and FastTeardownTransactionTestCase,
+    and must
     define a MERGE_STRATEGY class attribute using BranchMergeStrategyChoices.
 
     Example:
-        class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
+        class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
             MERGE_STRATEGY = BranchMergeStrategyChoices.ITERATIVE
     """
 
@@ -1767,7 +1768,7 @@ class BaseMergeTests:
         self.assertIn('face', str(get_merge_recommendations(entry, merge_strategy=self.MERGE_STRATEGY)[0]))
 
 
-class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
+class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
     """Test cases for Branch merge using iterative merge strategy."""
 
     MERGE_STRATEGY = BranchMergeStrategyChoices.ITERATIVE

@@ -3,7 +3,8 @@ from datetime import timedelta
 
 from django.core.exceptions import ValidationError
 from django.db import connection
-from django.test import SimpleTestCase, TransactionTestCase, override_settings
+from django.db.models.signals import pre_delete
+from django.test import SimpleTestCase, override_settings
 from django.utils import timezone
 from extras.validators import CustomValidator
 from netbox.plugins import get_plugin_config
@@ -14,13 +15,12 @@ from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.forms import BranchForm
 from netbox_branching.models import Branch
 from netbox_branching.provisioning import quote_ident
-from netbox_branching.signals import post_deprovision, pre_deprovision
+from netbox_branching.signals import post_deprovision
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase, fetchall, fetchone
 from netbox_branching.utilities import BranchActionIndicator, get_tables_to_replicate
 
-from .utils import fetchall, fetchone
 
-
-class BranchTestCase(TransactionTestCase):
+class BranchTestCase(FastTeardownTransactionTestCase):
     serialized_rollback = True
 
     def test_create_branch(self):
@@ -288,10 +288,10 @@ class BranchTestCase(TransactionTestCase):
             )
             self.assertIsNotNone(cursor.fetchone(), msg="Schema unexpectedly missing")
 
-    def test_delete_rolls_back_row_when_deprovision_raises(self):
+    def test_delete_rolls_back_schema_drop_when_row_delete_raises(self):
         """
-        A failure raised inside deprovision() (before DROP SCHEMA runs) must roll back
-        the row delete that super().delete() already performed, leaving both intact.
+        Since #641 the schema is dropped before the row is deleted, so a failure
+        raised during the ORM delete must roll the DROP SCHEMA back.
         """
         branch = Branch(name='Branch 1')
         branch.save(provision=False)
@@ -303,16 +303,39 @@ class BranchTestCase(TransactionTestCase):
         schema_name = branch.schema_name
 
         def boom(sender, **kwargs):
-            raise RuntimeError("simulated deprovision failure")
+            raise RuntimeError("simulated row delete failure")
 
-        pre_deprovision.connect(boom, sender=Branch, weak=False)
+        pre_delete.connect(boom, sender=Branch, weak=False)
         try:
             with self.assertRaises(RuntimeError):
                 branch.delete()
         finally:
-            pre_deprovision.disconnect(boom, sender=Branch)
+            pre_delete.disconnect(boom, sender=Branch)
 
         self._assert_branch_and_schema_intact(branch_pk, schema_name)
+
+    def test_deprovision_receivers_see_a_branch_with_its_pk(self):
+        """
+        Regression test for #641: post_deprovision receivers (notably the event-rule
+        handler, which serializes the branch) must not be handed a pk-less instance.
+        """
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+        branch.provision(user=None)
+        branch_pk = branch.pk
+
+        seen = []
+
+        def record(sender, branch, **kwargs):
+            seen.append((branch.pk, branch.tags.count()))
+
+        post_deprovision.connect(record, sender=Branch, weak=False)
+        try:
+            branch.delete()
+        finally:
+            post_deprovision.disconnect(record, sender=Branch)
+
+        self.assertEqual(seen, [(branch_pk, 0)])
 
     def test_delete_rolls_back_schema_drop_when_failure_follows(self):
         """
@@ -472,7 +495,7 @@ class BranchStatusDescriptionTestCase(SimpleTestCase):
         self.assertEqual(branch.get_status_description(), '')
 
 
-class BranchProvisionPipelineTestCase(TransactionTestCase):
+class BranchProvisionPipelineTestCase(FastTeardownTransactionTestCase):
     """
     Targeted coverage of the parallel provisioning pipeline. The end-to-end
     happy path is exercised by BranchTestCase.test_create_branch; these tests

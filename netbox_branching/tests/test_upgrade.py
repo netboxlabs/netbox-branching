@@ -27,7 +27,7 @@ from dcim.models import Manufacturer
 from django.contrib.auth import get_user_model
 from django.db import connection, connections
 from django.db.models.signals import m2m_changed, post_save, pre_delete
-from django.test import RequestFactory, TransactionTestCase
+from django.test import RequestFactory
 from django.urls import reverse
 from netbox.context_managers import event_tracking
 from netbox.signals import post_clean
@@ -38,7 +38,7 @@ from netbox_branching.contextvars import active_branch as active_branch_var
 from netbox_branching.jobs import MigrateBranchJob
 from netbox_branching.models import Branch
 from netbox_branching.signal_receivers import validate_branching_operations
-from netbox_branching.tests.utils import provision_branch
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 
 User = get_user_model()
 
@@ -78,7 +78,7 @@ def _signal_handlers_connected():
     )
 
 
-class BranchUpgradeTestCase(TransactionTestCase):
+class BranchUpgradeTestCase(FastTeardownTransactionTestCase):
     serialized_rollback = True
 
     def tearDown(self):
@@ -175,7 +175,7 @@ class BranchUpgradeTestCase(TransactionTestCase):
         )
 
 
-class MigrateBranchSignalTestCase(TransactionTestCase):
+class MigrateBranchSignalTestCase(FastTeardownTransactionTestCase):
     """
     Regression test for GitHub issue #542.
 
