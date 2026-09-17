@@ -35,6 +35,9 @@ logger = logging.getLogger(__name__)
 # without its NetBox Job record ever being terminated.
 RQ_JOB_MISSING = 'missing'
 
+# Distinguishes "not yet resolved" from a resolved-but-empty user in resolve_request_user()
+_UNRESOLVED = object()
+
 # RQ statuses which indicate that a job will not run (or run again)
 RQ_DEAD_STATUSES = ('failed', 'stopped', 'canceled')
 
@@ -61,6 +64,7 @@ __all__ = (
     'full_clean_with_file_check',
     'get_active_branch',
     'get_branchable_object_types',
+    'get_branches_for_user',
     'get_sql_results',
     'get_tables_to_replicate',
     'is_api_request',
@@ -69,6 +73,7 @@ __all__ = (
     'register_branching_resolver',
     'register_objectchange_field_migrator',
     'resolve_changes_summary',
+    'resolve_request_user',
     'supports_branching',
     'track_branch_connection',
     'update_object',
@@ -535,14 +540,76 @@ def is_api_request(request):
     return request.path_info.startswith(reverse('api-root')) or request.path_info.startswith(reverse('graphql'))
 
 
+def get_branches_for_user(user, action='view'):
+    """
+    Return the Branches on which the given user has been granted the specified permission. Honors any
+    object-level constraints defined for the permission, so an administrator can scope branches to their
+    owner (e.g. {"owner": "$user"}) or to any other attribute.
+    """
+    from .models import Branch
+    return Branch.objects.restrict(user, action)
+
+
+def resolve_request_user(request):
+    """
+    Return the user making the request. API requests are authenticated by REST framework during view
+    dispatch, which happens after the active branch has been resolved, so for those the configured API
+    authentication classes are run here (once per request) to identify the user.
+    """
+    user = getattr(request, 'user', None)
+    if (user is not None and user.is_authenticated) or not is_api_request(request):
+        return user
+    if (cached := getattr(request, '_branching_api_user', _UNRESOLVED)) is not _UNRESOLVED:
+        return cached
+
+    from rest_framework.exceptions import APIException
+    from rest_framework.request import Request as DRFRequest
+    from rest_framework.settings import api_settings
+
+    # The authenticators are invoked directly rather than through DRFRequest.user, whose setter writes the
+    # result back onto the underlying request; identifying the user here must not alter what the view sees.
+    probe = DRFRequest(
+        request,
+        authenticators=[auth() for auth in api_settings.DEFAULT_AUTHENTICATION_CLASSES],
+    )
+    try:
+        for authenticator in probe.authenticators:
+            if (result := authenticator.authenticate(probe)) is not None:
+                user = result[0]
+                break
+    except APIException:
+        # Leave the user unresolved so that the view reports the authentication failure itself. Any other
+        # exception is a genuine fault and is left to propagate, as it would from REST framework's own pass.
+        logger.debug('Unable to authenticate API request while resolving the active branch', exc_info=True)
+    request._branching_api_user = user
+
+    return user
+
+
 def get_active_branch(request):
     """
-    Return the active Branch (if any).
+    Return the active Branch (if any). Only branches which the requesting user is permitted to view are
+    eligible for activation.
     """
+    def lookup_branch(schema_id):
+        """
+        Return the named Branch if the requester is permitted to use it. Called only where a branch is
+        named, so a request naming none doesn't pay to identify the user. An API request whose credentials
+        could not be validated yields None rather than raising, so that REST framework reports the
+        authentication failure instead of the branch appearing invalid.
+        """
+        user = resolve_request_user(request)
+        try:
+            return get_branches_for_user(user).get(schema_id=schema_id)
+        except ObjectDoesNotExist:
+            if is_api_request(request) and (user is None or not user.is_authenticated):
+                return None
+            raise
+
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
-    from .models import Branch
     if is_api_request(request) and BRANCH_HEADER in request.headers:
-        branch = Branch.objects.get(schema_id=request.headers.get(BRANCH_HEADER))
+        if (branch := lookup_branch(request.headers.get(BRANCH_HEADER))) is None:
+            return None
         if not branch.ready:
             return HttpResponseBadRequest(f"Branch {branch} is not ready for use (status: {branch.status})")
         return branch
@@ -550,7 +617,8 @@ def get_active_branch(request):
     # Branch activated/deactivated by URL query parameter
     if QUERY_PARAM in request.GET:
         if schema_id := request.GET.get(QUERY_PARAM):
-            branch = Branch.objects.get(schema_id=schema_id)
+            if (branch := lookup_branch(schema_id)) is None:
+                return None
             if branch.ready:
                 if (
                     schema_id != request.COOKIES.get(COOKIE_NAME)
@@ -574,8 +642,7 @@ def get_active_branch(request):
     # Branch set by cookie
     if schema_id := request.COOKIES.get(COOKIE_NAME):
         try:
-            branch = Branch.objects.get(schema_id=schema_id)
-            if branch.ready:
+            if (branch := lookup_branch(schema_id)) and branch.ready:
                 return branch
         except ObjectDoesNotExist:
             pass
