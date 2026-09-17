@@ -105,45 +105,27 @@ class BuildErrorReportTestCase(SimpleTestCase):
         self.assertEqual(entry['model'], 'site')
 
 
-class MainCollisionClassificationTestCase(SimpleTestCase):
+class ValidationErrorDetailTestCase(SimpleTestCase):
     """
-    A collision with main is classified apart from an ordinary validation error: one is fixed
-    inside the branch, the other cannot be. (#632)
+    The underlying validation message is what tells the user what blocked the merge -- often
+    state in main that is invisible from within the branch. It must survive into the report. (#632)
     """
 
-    def _flagged(self, exc, value='12.0'):
-        annotate_validation_error(exc, Site, object_id=7, content_type_id=42)
-        exc.netbox_branching_main_collision = True
-        exc.netbox_branching_value = value
-        return exc
-
-    def test_flagged_error_classified_as_main_collision(self):
-        exc = self._flagged(ValidationError({'position': ['U12 is already occupied']}))
-        entry = build_error_report(exc)
-        self.assertEqual(entry['type'], 'main_collision')
-        self.assertEqual(entry['field'], 'position')
-        self.assertEqual(entry['value'], '12.0')
-        self.assertEqual(entry['detail'], 'U12 is already occupied')
-
-    def test_unflagged_error_stays_a_validation_error_and_carries_no_detail(self):
+    def test_validation_error_carries_the_underlying_message_as_detail(self):
         exc = ValidationError({'position': ['U12 is already occupied']})
         annotate_validation_error(exc, Site, object_id=7, content_type_id=42)
         entry = build_error_report(exc)
         self.assertEqual(entry['type'], 'validation_error')
-        self.assertIsNone(entry['detail'])
-        self.assertIsNone(entry['value'])
-
-    def test_uniqueness_error_is_never_reclassified(self):
-        """Uniqueness failures already point the user at both schemas."""
-        exc = self._flagged(ValidationError({'name': [ValidationError('taken', code='unique')]}))
-        self.assertEqual(build_error_report(exc)['type'], 'unique_constraint')
+        self.assertEqual(entry['field'], 'position')
+        self.assertEqual(entry['detail'], 'U12 is already occupied')
 
     def test_non_field_error_does_not_surface_the_django_sentinel_as_a_field(self):
         """
         A clean() error keyed on NON_FIELD_ERRORS must not render as Device "__all__" in the
         report or the recommendations.
         """
-        exc = self._flagged(ValidationError({NON_FIELD_ERRORS: ['cross-field check failed']}))
+        exc = ValidationError({NON_FIELD_ERRORS: ['cross-field check failed']})
+        annotate_validation_error(exc, Site, object_id=7, content_type_id=42)
         entry = build_error_report(exc)
         self.assertIsNone(entry['field'])
         self.assertEqual(entry['detail'], 'cross-field check failed')
@@ -195,23 +177,21 @@ class GetEntryMessageTestCase(SimpleTestCase):
         self.assertIn('Site', msg)
         self.assertIn('name', msg)
 
-    def test_main_collision_message_names_main_and_quotes_the_underlying_error(self):
+    def test_validation_error_quotes_the_underlying_error(self):
         msg = get_entry_message({
-            'type': 'main_collision',
+            'type': 'validation_error',
             'model': 'device',
             'field': 'position',
-            'value': '12.0',
             'detail': 'U12 is already occupied',
         })
         self.assertIn('Device', msg)
         self.assertIn('position', msg)
-        self.assertIn('main schema', msg)
         self.assertIn('U12 is already occupied', msg)
 
-    def test_main_collision_message_without_detail_still_explains_where_the_conflict_is(self):
-        msg = get_entry_message({'type': 'main_collision', 'model': 'device', 'field': 'position'})
-        self.assertIn('main', msg)
-        self.assertIn('valid within the branch', msg)
+    def test_validation_error_without_detail_still_names_the_object(self):
+        msg = get_entry_message({'type': 'validation_error', 'model': 'device', 'field': 'position'})
+        self.assertIn('Device', msg)
+        self.assertIn('position', msg)
 
     def test_database_error_returns_generic_message(self):
         msg = get_entry_message({'type': 'database_error'})
@@ -252,70 +232,40 @@ class GetMergeRecommendationsTestCase(SimpleTestCase):
         # First rec is the generic rename guidance (no field/value interpolation)
         self.assertIn('Rename', str(recs[0]))
 
-    def test_validation_error_with_field_recommends_fixing_that_field(self):
+    def test_validation_error_with_field_names_that_field_and_both_schemas(self):
         recs = get_merge_recommendations(
             {'type': 'validation_error', 'field': 'name'},
-            merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
+            merge_strategy=BranchMergeStrategyChoices.SQUASH,
         )
         self.assertEqual(len(recs), 1)
         self.assertIn('name', str(recs[0]))
+        # A value that is valid in the branch can still collide with a main-only object (#632)
+        self.assertIn('main', str(recs[0]))
 
-    def test_main_collision_offers_a_main_side_and_a_branch_side_route(self):
+    def test_validation_error_under_iterative_adds_the_squash_caveat(self):
+        """
+        Iterative replays the recorded value, so fixing the object in the branch and retrying
+        fails identically -- whatever the cause of the failure. (#632)
+        """
         recs = get_merge_recommendations(
-            {'type': 'main_collision', 'field': 'position', 'value': '12.0'},
+            {'type': 'validation_error', 'field': 'position'},
             merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
         )
-        joined = ' '.join(str(r) for r in recs)
         self.assertEqual(len(recs), 2)
-        self.assertIn('main schema', joined)
-        self.assertIn('position', joined)
+        self.assertIn('Squash', str(recs[1]))
 
-    def test_main_collision_recommendations_never_quote_the_branch_side_value(self):
-        """
-        `value` is the branch object's current value; once the branch-side remedy is applied
-        it no longer names the contested resource.
-        """
-        recs = get_merge_recommendations(
-            {'type': 'main_collision', 'field': 'position', 'value': '21.0'},
-            merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
-        )
-        self.assertNotIn('21.0', ' '.join(str(r) for r in recs))
-
-    def test_main_collision_under_iterative_routes_the_branch_side_fix_through_squash(self):
-        """
-        Under iterative the branch-side route has to name squash: the retry replays the
-        original colliding value and fails identically. (#632)
-        """
-        recs = get_merge_recommendations(
-            {'type': 'main_collision', 'field': 'position', 'value': '12.0'},
-            merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
-        )
-        branch_side = str(recs[1])
-        self.assertIn('Squash', branch_side)
-        self.assertIn('position', branch_side)
-        # The main-side route works under either strategy
-        self.assertNotIn('Squash', str(recs[0]))
-
-    def test_main_collision_under_squash_omits_the_redundant_squash_suggestion(self):
-        for entry in ({'type': 'main_collision', 'field': 'position', 'value': '12.0'},
-                      {'type': 'main_collision'}):
+    def test_validation_error_under_squash_omits_the_redundant_squash_caveat(self):
+        for entry in ({'type': 'validation_error', 'field': 'position'}, {'type': 'validation_error'}):
             recs = get_merge_recommendations(entry, merge_strategy=BranchMergeStrategyChoices.SQUASH)
             self.assertNotIn('Squash', ' '.join(str(r) for r in recs))
 
-    def test_main_collision_without_field_still_names_squash_under_iterative(self):
+    def test_validation_error_without_field_falls_back_to_generic_guidance(self):
         recs = get_merge_recommendations(
-            {'type': 'main_collision'},
-            merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
-        )
-        self.assertIn('Squash', str(recs[1]))
-
-    def test_main_collision_without_field_falls_back_to_generic_guidance(self):
-        recs = get_merge_recommendations(
-            {'type': 'main_collision'},
+            {'type': 'validation_error'},
             merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
         )
         self.assertEqual(len(recs), 2)
-        self.assertIn('main schema', ' '.join(str(r) for r in recs))
+        self.assertIn('main', str(recs[0]))
 
     def test_database_error_iterative_suggests_log_review_and_squash(self):
         recs = get_merge_recommendations(

@@ -1626,10 +1626,11 @@ class BaseMergeTests:
 
         return branch, branch_device
 
-    def test_merge_rack_position_collision_reports_main_collision(self):
+    def test_merge_rack_position_collision_reports_the_underlying_error(self):
         """
-        A merge blocked by main's occupancy of the rack unit is reported as a collision with
-        main, not as an invalid value in the branch. (#632)
+        A merge blocked by main's occupancy of the rack unit must report what actually blocked
+        it, rather than swallowing the message and telling the user to fix a value that is
+        already valid within the branch. (#632)
         """
         branch, branch_device = self._rack_collision_branch()
 
@@ -1642,28 +1643,25 @@ class BaseMergeTests:
         with self.assertRaises(ValidationError) as ctx:
             branch.merge(user=self.user, commit=True)
 
+        # Compare against the error's own text rather than pinning NetBox's exact wording
+        expected_detail = ctx.exception.message_dict['position'][0]
+
         entry = build_error_report(ctx.exception)
-        self.assertEqual(entry['type'], 'main_collision')
+        self.assertEqual(entry['type'], 'validation_error')
         self.assertEqual(entry['model'], 'device')
         self.assertEqual(entry['field'], 'position')
         self.assertEqual(entry['object_id'], branch_device.pk)
-        self.assertEqual(entry['value'], '12.0')
-        self.assertIn('already occupied', entry['detail'])
-
-        message = get_entry_message(entry)
-        self.assertIn('main schema', message)
-        self.assertIn('already occupied', message)
+        self.assertEqual(entry['detail'], expected_detail)
+        self.assertIn(expected_detail, get_entry_message(entry))
 
         recommendations = [
             str(r) for r in get_merge_recommendations(entry, merge_strategy=self.MERGE_STRATEGY)
         ]
-        self.assertEqual(len(recommendations), 2)
-        joined = ' '.join(recommendations)
-        self.assertIn('main schema', joined)
-        self.assertIn('position', joined)
-        # The branch-side route needs squash unless we are already on it
+        # The remedy may lie in main, which the branch cannot see -- the report must say so
+        self.assertIn('main', recommendations[0])
+        self.assertIn('position', recommendations[0])
         if self.MERGE_STRATEGY == BranchMergeStrategyChoices.SQUASH:
-            self.assertNotIn('Squash', joined)
+            self.assertEqual(len(recommendations), 1)
         else:
             self.assertIn('Squash', recommendations[1])
 
@@ -1675,7 +1673,7 @@ class BaseMergeTests:
         """
         Moving the branch device out of the contested slot only works under squash: iterative
         re-applies the original CREATE at the colliding position before reaching the UPDATE
-        that moved it. (#632)
+        that moved it. This is why the report's recommendation names squash. (#632)
         """
         branch, branch_device = self._rack_collision_branch()
 
@@ -1699,44 +1697,24 @@ class BaseMergeTests:
         with self.assertRaises(ValidationError) as ctx:
             branch.merge(user=self.user, commit=True)
 
+        # The branch object is out of the contested slot, yet the replayed CREATE still carries
+        # the original position -- the retry fails on a value no longer present in the branch
+        with activate_branch(branch):
+            self.assertEqual(Device.objects.get(pk=branch_device.pk).position, 21)
+
         entry = build_error_report(ctx.exception)
-        self.assertEqual(entry['type'], 'main_collision')
-        # Branch object is at 21 now, but the replayed change still carries the original 12
-        self.assertEqual(entry['value'], '21.0')
-        self.assertIn('U12', entry['detail'])
+        self.assertEqual(entry['type'], 'validation_error')
+        self.assertEqual(entry['detail'], ctx.exception.message_dict['position'][0])
         self.assertIn(
             'Squash',
             str(get_merge_recommendations(entry, merge_strategy=self.MERGE_STRATEGY)[1]),
-            msg='the branch-side remedy is useless under iterative unless it names squash',
+            msg='the branch-side remedy is useless under iterative unless the report names squash',
         )
 
-    def test_unrelated_branch_invalidity_is_not_reported_as_collision(self):
+    def test_merge_invalid_branch_value_reports_the_underlying_error(self):
         """
-        The probe requires the branch object to validate cleanly, not merely to pass on the
-        field that blocked the merge: clean() raises on its first problem, so an unrelated
-        failure in the branch leaves us unable to say the merge-blocking check would have
-        passed there. Such an object is reported as a plain validation error. (#632)
-        """
-        branch, branch_device = self._rack_collision_branch()
-
-        # Break the branch copy on a different field than the one the merge trips on
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-        with activate_branch(branch), event_tracking(request):
-            device = Device.objects.get(pk=branch_device.pk)
-            device.face = ''
-            device.save()
-
-        with self.assertRaises(ValidationError) as ctx:
-            branch.merge(user=self.user, commit=True)
-
-        self.assertEqual(build_error_report(ctx.exception)['type'], 'validation_error')
-
-    def test_merge_invalid_branch_value_is_not_reported_as_collision(self):
-        """
-        Control: a value that is invalid in the branch too keeps its plain validation_error
-        classification.
+        An ordinary bad value in the branch reports the same way: the message that blocked the
+        merge is quoted and the field is named. (#632)
         """
         site = Site.objects.create(name='Invalid Site', slug='invalid-site')
         rack = Rack.objects.create(site=site, name='Invalid Rack', u_height=42)
@@ -1764,7 +1742,7 @@ class BaseMergeTests:
         entry = build_error_report(ctx.exception)
         self.assertEqual(entry['type'], 'validation_error')
         self.assertEqual(entry['field'], 'face')
-        self.assertIsNone(entry['detail'])
+        self.assertEqual(entry['detail'], ctx.exception.message_dict['face'][0])
         self.assertIn('face', str(get_merge_recommendations(entry, merge_strategy=self.MERGE_STRATEGY)[0]))
 
 

@@ -226,7 +226,6 @@ class SquashMergeStrategy(MergeStrategy):
                         e, model_class,
                         collapsed.last_change.changed_object_id,
                         collapsed.last_change.changed_object_type_id,
-                        branch=branch,
                     )
                     raise
 
