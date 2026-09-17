@@ -4,15 +4,16 @@ from django.apps import apps
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import DEFAULT_DB_ALIAS, connections
-from django.test import TransactionTestCase, tag
+from django.test import tag
 
 from netbox_branching.models import Branch
 from netbox_branching.signal_receivers import check_pending_migrations
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase
 from netbox_branching.utilities import activate_branch, close_old_branch_connections
 
 
 @tag('regression')  # netbox-branching #358
-class BranchConnectionLifecycleTestCase(TransactionTestCase):
+class BranchConnectionLifecycleTestCase(FastTeardownTransactionTestCase):
     serialized_rollback = True
 
     def setUp(self):

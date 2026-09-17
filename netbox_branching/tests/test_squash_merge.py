@@ -7,12 +7,13 @@ from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
 from dcim.models import Device, Interface, Location, Region, Site, VirtualChassis
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.test import RequestFactory, TransactionTestCase
+from django.test import RequestFactory
 from django.urls import reverse
 from ipam.models import IPAddress
 from netbox.context_managers import event_tracking
 
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase
 from netbox_branching.utilities import activate_branch
 
 from .test_iterative_merge import BaseMergeTests
@@ -20,7 +21,7 @@ from .test_iterative_merge import BaseMergeTests
 User = get_user_model()
 
 
-class SquashMergeTestCase(BaseMergeTests, TransactionTestCase):
+class SquashMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
     """Test cases for Branch merge with ObjectChange collapsing and ordering using squash strategy."""
 
     MERGE_STRATEGY = BranchMergeStrategyChoices.SQUASH

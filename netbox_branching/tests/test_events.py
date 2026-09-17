@@ -7,7 +7,7 @@ from core.models import ObjectType
 from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.db import connection, connections
-from django.test import RequestFactory, TransactionTestCase, override_settings
+from django.test import RequestFactory, override_settings
 from django.urls import reverse
 from extras.choices import EventRuleActionChoices
 from extras.events import enqueue_event, flush_events
@@ -16,6 +16,7 @@ from extras.models import EventRule, Webhook
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.events import BRANCH_DEPROVISIONED
 from netbox_branching.models import Branch
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase
 
 User = get_user_model()
 
@@ -25,7 +26,7 @@ ENRICHED_PIPELINE = [
 ]
 
 
-class AddBranchContextTestCase(TransactionTestCase):
+class AddBranchContextTestCase(FastTeardownTransactionTestCase):
     serialized_rollback = True
 
     def setUp(self):
@@ -107,7 +108,7 @@ class AddBranchContextTestCase(TransactionTestCase):
         self.assertIsNone(data.get('active_branch'))
 
 
-class BranchDeprovisionedEventRuleTestCase(TransactionTestCase):
+class BranchDeprovisionedEventRuleTestCase(FastTeardownTransactionTestCase):
     """
     Regression tests for issue #641.
 
