@@ -203,6 +203,7 @@ class SquashMergeStrategy(MergeStrategy):
 
         # Apply collapsed changes in order
         logger.info(f"Applying {len(ordered_changes)} collapsed changes...")
+        created_pks_by_model = {}
         for i, collapsed in enumerate(ordered_changes, 1):
             model_class = collapsed.model_class
             models.add(model_class)
@@ -229,6 +230,12 @@ class SquashMergeStrategy(MergeStrategy):
                     )
                     raise
 
+            if collapsed.final_action == ActionType.CREATE:
+                created_pks_by_model.setdefault(model_class, []).append(collapsed.key[1])
+
+        # Run outside event_tracking(): this reconciles derived state, and is not itself a change
+        self._update_dependent_objects(created_pks_by_model, logger)
+
         # Perform cleanup tasks
         self._clean(models)
 
@@ -251,6 +258,7 @@ class SquashMergeStrategy(MergeStrategy):
 
         # Undo collapsed changes in dependency order
         logger.info(f"Undoing {len(ordered_changes)} collapsed changes in dependency order...")
+        restored_pks_by_model = {}
         for i, collapsed in enumerate(ordered_changes, 1):
             model_class = collapsed.model_class
             models.add(model_class)
@@ -269,6 +277,13 @@ class SquashMergeStrategy(MergeStrategy):
                 # Create a dummy ObjectChange from the collapsed change and undo it
                 dummy_change = collapsed.generate_object_change()
                 dummy_change.undo(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+
+            # Undoing a delete restores the object, which lands the same way an applied create does
+            if collapsed.final_action == ActionType.DELETE:
+                restored_pks_by_model.setdefault(model_class, []).append(collapsed.key[1])
+
+        # Run outside event_tracking(): this reconciles derived state, and is not itself a change
+        self._update_dependent_objects(restored_pks_by_model, logger)
 
         # Perform cleanup tasks
         self._clean(models)

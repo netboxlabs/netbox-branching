@@ -259,6 +259,7 @@ Since branching relies entirely on the `ObjectChange` log, anything that affects
 
 - If you override `serialize_object()` on your model, ensure it produces a stable, complete representation — the branch merge machinery uses this data to reconstruct and apply changes.
 - Avoid side effects in model `save()` or `delete()` methods that are not captured by `ObjectChange`, as those side effects will not be replayed during a merge.
+- If your model's `save()` maintains dependent objects (as NetBox's `Cable` maintains its `CablePath` records), implement NetBox's `update_dependent_objects()` hook on the model. A merge applies a create with a raw save, which bypasses `save()` entirely; the hook is called once every change has been applied, so the related objects your model derives from are all in place by then.
 - If your plugin mutates branchable objects outside of NetBox's standard views/viewsets (e.g. in a background job or signal receiver), call `obj.snapshot()` before saving. See [Programmatic Modifications](./best-practices.md#programmatic-modifications-scripts-shells-and-custom-code) in the Best Practices guide for why this matters in a branch context.
 
 ## Database Migrations
