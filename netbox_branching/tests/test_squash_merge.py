@@ -4,7 +4,7 @@ Tests for Branch merge functionality with ObjectChange collapsing using squash m
 import uuid
 
 from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
-from dcim.models import Device, Interface, Location, Region, Site, VirtualChassis
+from dcim.models import Cable, CablePath, Device, Interface, Location, Region, Site, VirtualChassis
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.test import RequestFactory
@@ -999,6 +999,48 @@ class SquashMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
             Site.objects.filter(id=site_id).exists(),
             msg='UPDATE+DELETE must collapse to a single DELETE; main row remains',
         )
+
+    def test_revert_cable_path_recalculation(self):
+        """
+        Test that cable paths are recreated when reverting a branch which deleted a cable.
+
+        Restoring the Cable re-saves it with no terminations assigned in memory, so its save()
+        traces nothing; the paths are recreated by update_dependent_objects() once the
+        CableTerminations have been restored as well. Refs: #469
+
+        Squash only: the same revert under the iterative strategy fails earlier, on unrelated
+        ordering — an Interface is restored while the Cable it references is still deleted.
+        """
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        device_a = Device.objects.create(
+            name='Device A', site=site, device_type=self.device_type, role=self.device_role
+        )
+        device_b = Device.objects.create(
+            name='Device B', site=site, device_type=self.device_type, role=self.device_role
+        )
+        interface_a = Interface.objects.create(device=device_a, name='eth0', type='1000base-t')
+        interface_b = Interface.objects.create(device=device_b, name='eth0', type='1000base-t')
+
+        with event_tracking(self._make_request()):
+            cable = Cable(a_terminations=[interface_a], b_terminations=[interface_b])
+            cable.save()
+        cable_id = cable.id
+        self.assertEqual(CablePath.objects.count(), 2)
+
+        branch = self._create_and_provision_branch()
+
+        # In branch: delete the cable
+        with activate_branch(branch), event_tracking(self._make_request()):
+            Cable.objects.get(id=cable_id).delete()
+
+        branch.merge(user=self.user, commit=True)
+        self.assertFalse(Cable.objects.filter(id=cable_id).exists())
+        self.assertEqual(CablePath.objects.count(), 0)
+
+        branch.revert(user=self.user, commit=True)
+
+        self.assertTrue(Cable.objects.filter(id=cable_id).exists())
+        self.assertEqual(CablePath.objects.count(), 2, 'Cable paths not restored after revert')
 
     def _make_request(self):
         """Build a per-test request for event_tracking()."""
