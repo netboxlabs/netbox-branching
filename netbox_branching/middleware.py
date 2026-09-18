@@ -55,8 +55,8 @@ class BranchMiddleware:
             branch = get_active_branch(request)
         except ObjectDoesNotExist:
             return HttpResponseBadRequest("Invalid branch identifier")
-        except BranchNotReady as e:
-            return HttpResponseBadRequest(str(e))
+        except BranchNotReady:
+            return HttpResponseBadRequest(_("Selected branch is not ready."))
         request.active_branch = branch
 
         response = self.get_response(request)
