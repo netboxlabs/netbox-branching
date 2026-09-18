@@ -1,10 +1,12 @@
-from django.test import override_settings
+from django.test import RequestFactory, override_settings
 from django.urls import reverse
 from utilities.testing import TestCase
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
+from netbox_branching.contextvars import active_branch
 from netbox_branching.models import Branch
+from netbox_branching.utilities import ActiveBranchContextManager
 
 
 class RequestTestCase(TestCase):
@@ -133,3 +135,41 @@ class RequestTestCase(TestCase):
             HTTP_X_NETBOX_BRANCH='nonexist',
         )
         self.assertEqual(response.status_code, 400)
+
+    @override_settings(LOGIN_REQUIRED=False)
+    def test_api_header_with_unready_branch_returns_400(self):
+        """
+        A branch which exists but is not ready must be refused, not activated. get_active_branch()
+        used to return an HttpResponseBadRequest here, and both of its callers treat the return
+        value as a Branch: ActiveBranchContextManager installed the response object as the active
+        branch and BranchMiddleware assigned it to request.active_branch, so the first branchable
+        query raised AttributeError and the intended 400 surfaced as a 500 instead. See #672.
+        """
+        self.add_permissions('dcim.view_site')
+        branch = Branch.objects.first()
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.SYNCING)
+
+        response = self.client.get(
+            reverse('dcim-api:site-list'),
+            HTTP_X_NETBOX_BRANCH=branch.schema_id,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('not ready for use', response.content.decode())
+
+    def test_unready_branch_is_never_activated(self):
+        """
+        The request processor runs ahead of BranchMiddleware (plugin middleware is appended after
+        CoreMiddleware, which applies the request processors), so it cannot rely on the middleware
+        to keep an unusable branch out of the context var — it has to refuse on its own. See #672.
+        """
+        branch = Branch.objects.first()
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.SYNCING)
+
+        request = RequestFactory().get(
+            reverse('dcim-api:site-list'),
+            headers={'x-netbox-branch': branch.schema_id},
+        )
+
+        with ActiveBranchContextManager(request):
+            self.assertIsNone(active_branch.get(), msg="An unusable branch was installed as active")
