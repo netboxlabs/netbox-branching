@@ -1,5 +1,8 @@
+import warnings
+
 from django.test import RequestFactory, override_settings
 from django.urls import reverse
+from utilities.request import apply_request_processors
 from utilities.testing import TestCase
 
 from netbox_branching.choices import BranchStatusChoices
@@ -173,3 +176,23 @@ class RequestTestCase(TestCase):
 
         with ActiveBranchContextManager(request):
             self.assertIsNone(active_branch.get(), msg="An unusable branch was installed as active")
+
+    def test_nonexistent_branch_is_refused_without_warning(self):
+        """
+        A request naming a branch which does not exist is refused by BranchMiddleware, but the
+        request processor runs first and must not let Branch.DoesNotExist escape: it would be
+        swallowed by apply_request_processors(), which reports the expected refusal as a failed
+        request processor on every such request. See #672.
+        """
+        request = RequestFactory().get(
+            reverse('dcim-api:site-list'),
+            headers={'x-netbox-branch': 'nonexist'},
+        )
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            with apply_request_processors(request):
+                self.assertIsNone(active_branch.get(), msg="A nonexistent branch was installed as active")
+
+        reported = [str(w.message) for w in caught if 'ActiveBranchContextManager' in str(w.message)]
+        self.assertEqual(reported, [], msg="An expected refusal was reported as a failed request processor")

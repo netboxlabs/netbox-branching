@@ -549,9 +549,10 @@ def get_active_branch(request):
     """
     Return the active Branch, or None if no branch is active.
 
-    Raises BranchNotReady if the request names a branch which exists but is not usable. Always
-    returns a Branch or None otherwise; never a response object, as callers install the return
-    value as the active branch.
+    Raises BranchNotReady if the request names a branch which exists but is not usable, and
+    Branch.DoesNotExist if it names one which does not exist at all. Always returns a Branch or
+    None otherwise; never a response object, as callers install the return value as the active
+    branch. Callers which cannot refuse the request must treat both exceptions as "no branch".
     """
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
     from .models import Branch
@@ -644,14 +645,16 @@ def ActiveBranchContextManager(request):
 
     # This runs ahead of BranchMiddleware (plugin middleware is appended after NetBox's
     # CoreMiddleware, which applies the request processors), so it is reached even for requests
-    # the middleware is about to refuse with a 400. Leave the branch inactive and let it do so.
+    # the middleware is about to refuse with a 400 — whether the branch named is unready
+    # (BranchNotReady) or absent entirely (ObjectDoesNotExist). Leave the branch inactive and let
+    # the middleware refuse the request.
     #
     # Caught explicitly rather than left to apply_request_processors(), whose blanket
     # `except Exception` would also stop the branch being activated but would report this
     # expected refusal as a failed request processor on every such request.
     try:
         branch = get_active_branch(request)
-    except BranchNotReady:
+    except (BranchNotReady, ObjectDoesNotExist):
         return nullcontext()
 
     if branch:
