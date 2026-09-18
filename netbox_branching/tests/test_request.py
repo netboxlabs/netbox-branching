@@ -158,7 +158,14 @@ class RequestTestCase(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn('not ready for use', response.content.decode())
+        body = response.content.decode()
+        self.assertIn('Selected branch is not ready', body)
+
+        # The refusal is a static message: the BranchNotReady text names the branch and its status,
+        # and must not be reflected back to the client (CodeQL: information exposure through an
+        # exception).
+        self.assertNotIn(branch.name, body, msg="Branch name leaked into the 400 response")
+        self.assertNotIn(BranchStatusChoices.SYNCING, body, msg="Branch status leaked into the 400 response")
 
     def test_unready_branch_is_never_activated(self):
         """
