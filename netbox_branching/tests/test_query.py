@@ -18,8 +18,7 @@ class QueryTestCase(TransactionTestCase):
         Site.objects.create(name='Site 1', slug='site-1')
         DeviceRole.objects.create(name='Device role 1', slug='device-role-1')
 
-        branch = Branch(name='Branch 1')
-        branch.schema_id = 'test1234'
+        branch = Branch(name='Branch 1', backend_id='test1234')
         branch.save(provision=False)
         branch.provision(user=None)
 

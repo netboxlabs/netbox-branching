@@ -104,8 +104,10 @@ class BranchTable(NetBoxTable):
     conflicts = ConflictsColumn(
         verbose_name=_('Conflicts')
     )
-    schema_id = tables.TemplateColumn(
-        template_code='<span class="font-monospace">{{ value }}</code>'
+    backend_id = tables.TemplateColumn(
+        # TemplateColumn sets empty_values = (), so a branch with no identifier yet renders
+        # the template rather than the column default; without the filter, "None".
+        template_code='<span class="font-monospace">{{ value|placeholder }}</span>'
     )
     tags = columns.TagColumn(
         url_name='plugins:netbox_branching:branch_list'
@@ -114,11 +116,11 @@ class BranchTable(NetBoxTable):
     class Meta(NetBoxTable.Meta):
         model = Branch
         fields = (
-            'pk', 'id', 'name', 'is_active', 'status', 'provisioned', 'is_stale', 'conflicts', 'schema_id',
+            'pk', 'id', 'name', 'is_active', 'status', 'provisioned', 'is_stale', 'conflicts', 'backend_id',
             'description', 'owner', 'tags', 'created', 'last_updated',
         )
         default_columns = (
-            'pk', 'name', 'is_active', 'status', 'is_stale', 'owner', 'conflicts', 'schema_id', 'description',
+            'pk', 'name', 'is_active', 'status', 'is_stale', 'owner', 'conflicts', 'backend_id', 'description',
         )
 
     def render_is_active(self, value):

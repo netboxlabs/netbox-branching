@@ -1,6 +1,6 @@
 from django.db import connection, migrations
-from netbox.plugins import get_plugin_config
 
+from netbox_branching.backends import SchemaBranchingBackend
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.utilities import get_sql_results
 
@@ -17,8 +17,9 @@ def rename_indexes(apps, schema_editor):
     Rename all indexes within each branch to match the main schema.
     """
     Branch = apps.get_model('netbox_branching', 'Branch')
-    schema_prefix = get_plugin_config('netbox_branching', 'schema_prefix')
-    main_schema = get_plugin_config('netbox_branching', 'main_schema')
+    backend = SchemaBranchingBackend()
+    schema_prefix = backend.get_config('schema_prefix')
+    main_schema = backend.get_config('main_schema')
 
     with connection.cursor() as cursor:
 

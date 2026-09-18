@@ -1,10 +1,12 @@
-from django.test import override_settings
+from django.test import RequestFactory, override_settings
 from django.urls import reverse
 from utilities.testing import TestCase
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
+from netbox_branching.contextvars import active_branch
 from netbox_branching.models import Branch
+from netbox_branching.utilities import ActiveBranchContextManager
 
 
 class RequestTestCase(TestCase):
@@ -12,8 +14,12 @@ class RequestTestCase(TestCase):
     @classmethod
     def setUpTestData(cls):
         # Create a Branch
-        branch = Branch(name='Branch 1')
-        branch.status = BranchStatusChoices.READY  # Fake provisioning
+        # Fake provisioning: a provisioned branch has a READY status, the backend ID the
+        # backend would have assigned it, and a dataset to connect to. Without the last of
+        # those the branch is not ready for use and cannot be activated.
+        branch = Branch(name='Branch 1', backend_id='branch01')
+        branch.status = BranchStatusChoices.READY
+        branch.provisioned = True
         branch.save(provision=False)
 
     @override_settings(
@@ -28,12 +34,12 @@ class RequestTestCase(TestCase):
 
         # Activate the Branch
         url = reverse('home')
-        response = self.client.get(f'{url}?{QUERY_PARAM}={branch.schema_id}')
+        response = self.client.get(f'{url}?{QUERY_PARAM}={branch.backend_id}')
         self.assertEqual(response.status_code, 200)
         self.assertIn(COOKIE_NAME, self.client.cookies, msg="Cookie was not set on response")
         self.assertEqual(
             self.client.cookies[COOKIE_NAME].value,
-            branch.schema_id,
+            branch.backend_id,
             msg="Branch ID set in cookie is incorrect"
         )
 
@@ -59,7 +65,7 @@ class RequestTestCase(TestCase):
         # Attach the cookie to the test client
         branch = Branch.objects.first()
         self.client.cookies.load({
-            COOKIE_NAME: branch.schema_id,
+            COOKIE_NAME: branch.backend_id,
         })
 
         # Deactivate the Branch
@@ -78,11 +84,11 @@ class RequestTestCase(TestCase):
     def test_reactivate_branch_no_message(self):
         branch = Branch.objects.first()
         self.client.cookies.load({
-            COOKIE_NAME: branch.schema_id,
+            COOKIE_NAME: branch.backend_id,
         })
 
         url = reverse('home')
-        response = self.client.get(f'{url}?{QUERY_PARAM}={branch.schema_id}')
+        response = self.client.get(f'{url}?{QUERY_PARAM}={branch.backend_id}')
         self.assertEqual(response.status_code, 200)
         messages_list = list(response.wsgi_request._messages)
         self.assertEqual(len(messages_list), 0, msg="Unexpected toast message on branch re-activation")
@@ -97,13 +103,37 @@ class RequestTestCase(TestCase):
         branch.save(provision=False, update_merge_sync_fields=True)
 
         self.client.cookies.load({
-            COOKIE_NAME: branch.schema_id,
+            COOKIE_NAME: branch.backend_id,
         })
 
         url = reverse('home')
         response = self.client.get(url)
         self.assertEqual(response.status_code, 200)
         self.assertEqual(self.client.cookies[COOKIE_NAME].value, '', msg="Stale cookie was not cleared")
+
+    @override_settings(LOGIN_REQUIRED=False)
+    def test_branch_without_a_dataset_cannot_be_activated(self):
+        """
+        A branch whose dataset has gone missing keeps its READY status and its backend ID,
+        so nothing downstream refuses it: the schema backend hands back an alias whose
+        search_path names a schema which no longer exists, and PostgreSQL falls through to
+        the next entry — main. Every query made "inside" the branch would then read and
+        write main while the UI showed the branch as active, so activation has to be
+        refused up front. See #618.
+        """
+        branch = Branch.objects.first()
+        Branch.objects.filter(pk=branch.pk).update(provisioned=False)
+
+        url = reverse('home')
+        response = self.client.get(f'{url}?{QUERY_PARAM}={branch.backend_id}')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.client.cookies[COOKIE_NAME].value, '', msg="Branch was activated")
+        messages_list = [str(m) for m in response.wsgi_request._messages]
+        self.assertTrue(
+            any('not ready for use' in m for m in messages_list),
+            msg=f"Expected a refusal message; got {messages_list}",
+        )
 
     # -------------------------------------------------------------------------
     # Paranoid paths
@@ -126,10 +156,66 @@ class RequestTestCase(TestCase):
         """
         get_active_branch routes API requests with the X-NetBox-Branch header
         through Branch.objects.get(), which raises Branch.DoesNotExist for an
-        unknown schema_id — caught by the middleware and surfaced as 400.
+        unknown backend_id — caught by the middleware and surfaced as 400.
         """
         response = self.client.get(
             reverse('api-root'),
             HTTP_X_NETBOX_BRANCH='nonexist',
         )
         self.assertEqual(response.status_code, 400)
+
+    @override_settings(LOGIN_REQUIRED=False)
+    def test_api_header_with_unready_branch_returns_400(self):
+        """
+        A branch which exists but is not ready must be refused, not activated. get_active_branch()
+        used to return an HttpResponseBadRequest here, and both of its callers treat the return
+        value as a Branch: ActiveBranchContextManager installed the response object as the active
+        branch and BranchMiddleware assigned it to request.active_branch, so the first branchable
+        query raised AttributeError and the intended 400 surfaced as a 500 instead.
+        """
+        self.add_permissions('dcim.view_site')
+        branch = Branch.objects.first()
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.SYNCING)
+
+        response = self.client.get(
+            reverse('dcim-api:site-list'),
+            HTTP_X_NETBOX_BRANCH=branch.backend_id,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('not ready for use', response.content.decode())
+
+    @override_settings(LOGIN_REQUIRED=False)
+    def test_api_header_with_unprovisioned_branch_returns_400(self):
+        """
+        `ready` requires a provisioned dataset as well as a READY status, so a branch whose dataset
+        has gone away takes the same path as one in a transitional status.
+        """
+        self.add_permissions('dcim.view_site')
+        branch = Branch.objects.first()
+        Branch.objects.filter(pk=branch.pk).update(provisioned=False)
+
+        response = self.client.get(
+            reverse('dcim-api:site-list'),
+            HTTP_X_NETBOX_BRANCH=branch.backend_id,
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('not ready for use', response.content.decode())
+
+    def test_unready_branch_is_never_activated(self):
+        """
+        The request processor runs ahead of BranchMiddleware (plugin middleware is appended after
+        CoreMiddleware, which applies the request processors), so it cannot rely on the middleware
+        to keep an unusable branch out of the context var — it has to refuse on its own.
+        """
+        branch = Branch.objects.first()
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.SYNCING)
+
+        request = RequestFactory().get(
+            reverse('dcim-api:site-list'),
+            headers={'x-netbox-branch': branch.backend_id},
+        )
+
+        with ActiveBranchContextManager(request):
+            self.assertIsNone(active_branch.get(), msg="An unusable branch was installed as active")
