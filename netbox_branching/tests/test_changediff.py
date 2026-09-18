@@ -2,7 +2,7 @@ import uuid
 from datetime import timedelta
 
 from core.choices import ObjectChangeActionChoices
-from dcim.models import Site
+from dcim.models import Region, Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections, transaction
@@ -145,6 +145,77 @@ class DiffPropertyTestCase(SimpleTestCase):
         self.assertEqual(result['original'], {'description': ''})
         self.assertEqual(result['modified'], {'description': 'changed'})
         self.assertEqual(result['current'], {'description': 'main change'})
+
+
+class ResolveDisplayTestCase(TestCase):
+    """
+    Verify that original_display/modified_display/current_display resolve foreign key values to
+    the string representation of the related object, rather than a bare numeric ID (#670).
+    """
+
+    def setUp(self):
+        self.region = Region.objects.create(name='Region 1', slug='region-1')
+
+    def make_diff(self, **kwargs):
+        return ChangeDiff(object_type=ContentType.objects.get_for_model(Site), **kwargs)
+
+    def test_foreign_key_resolved_to_related_object(self):
+        diff = self.make_diff(original={'name': 'Site 1', 'region': self.region.pk})
+        self.assertEqual(diff.original_display, {'name': 'Site 1', 'region': str(self.region)})
+
+    def test_missing_related_object_falls_back_to_raw_value(self):
+        diff = self.make_diff(original={'region': 999999})
+        self.assertEqual(diff.original_display, {'region': 999999})
+
+    def test_non_relational_field_is_unchanged(self):
+        diff = self.make_diff(original={'name': 'Site 1'})
+        self.assertEqual(diff.original_display, {'name': 'Site 1'})
+
+    def test_unknown_field_is_unchanged(self):
+        diff = self.make_diff(original={'not_a_real_field': 5})
+        self.assertEqual(diff.original_display, {'not_a_real_field': 5})
+
+    def test_none_value_is_unchanged(self):
+        diff = self.make_diff(original={'region': None})
+        self.assertEqual(diff.original_display, {'region': None})
+
+    def test_no_data_returns_falsy_value_unchanged(self):
+        diff = self.make_diff(original=None)
+        self.assertIsNone(diff.original_display)
+
+    def test_current_display_resolves_against_main(self):
+        diff = self.make_diff(current={'region': self.region.pk})
+        self.assertEqual(diff.current_display, {'region': str(self.region)})
+
+
+class ModifiedDisplayBranchSchemaTestCase(FastTeardownTransactionTestCase):
+    """
+    modified_display must resolve related-object IDs against the branch's own schema: an object
+    created only within the branch (e.g. after provisioning) does not exist in main (#670).
+    """
+
+    serialized_rollback = True
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser')
+
+    def tearDown(self):
+        for branch in Branch.objects.all():
+            if hasattr(connections._connections, branch.connection_name):
+                connections[branch.connection_name].close()
+
+    def test_modified_display_resolves_against_branch_schema(self):
+        branch = provision_branch(user=self.user, name='Branch 1')
+
+        with activate_branch(branch):
+            region = Region.objects.create(name='Branch-only Region', slug='branch-only-region')
+
+        diff = ChangeDiff(
+            branch=branch,
+            object_type=ContentType.objects.get_for_model(Site),
+            modified={'region': region.pk},
+        )
+        self.assertEqual(diff.modified_display, {'region': str(region)})
 
 
 class LastUpdatedTestCase(TestCase):

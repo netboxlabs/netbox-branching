@@ -5,6 +5,7 @@ from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.postgres.fields import ArrayField
+from django.core.exceptions import FieldDoesNotExist
 from django.db import DEFAULT_DB_ALIAS, models
 from django.urls import reverse
 from django.utils.dateparse import parse_datetime
@@ -421,6 +422,63 @@ class ChangeDiff(models.Model):
             k: v for k, v in self.current.items()
             if k in self.altered_fields
         }
+
+    def _resolve_display_value(self, model, field_name, value, using):
+        """
+        Resolve a raw serialized field value for human-readable display. If the field is a
+        relation (ForeignKey, OneToOneField, or ManyToManyField), substitute the string
+        representation of the related object(s) for their numeric primary key(s). Falls back to
+        the raw value for non-relational fields, unknown field names, or related objects that
+        can no longer be found (e.g. deleted, or not yet visible in the given schema).
+        """
+        if value is None:
+            return value
+        try:
+            field = model._meta.get_field(field_name)
+        except FieldDoesNotExist:
+            return value
+        if not field.is_relation or not (field.many_to_one or field.one_to_one or field.many_to_many):
+            return value
+        related_model = field.related_model
+        if related_model is None:
+            return value
+        if isinstance(value, (list, tuple)):
+            objects = related_model.objects.using(using).in_bulk(value)
+            return [str(objects[pk]) if pk in objects else pk for pk in value]
+        try:
+            return str(related_model.objects.using(using).get(pk=value))
+        except (related_model.DoesNotExist, ValueError, TypeError):
+            return value
+
+    def _resolve_display_dict(self, data, using):
+        if not data:
+            return data
+        model = self.object_type.model_class()
+        return {k: self._resolve_display_value(model, k, v, using) for k, v in data.items()}
+
+    @cached_property
+    def original_display(self):
+        """
+        Return `original` with related-object IDs resolved to their string representation, for
+        display purposes. Looked up in main, as `original` reflects the pre-branch state.
+        """
+        return self._resolve_display_dict(self.original, DEFAULT_DB_ALIAS)
+
+    @cached_property
+    def modified_display(self):
+        """
+        Return `modified` with related-object IDs resolved to their string representation, for
+        display purposes. Looked up in the branch schema, as `modified` reflects branch state.
+        """
+        return self._resolve_display_dict(self.modified, self.branch.connection_name)
+
+    @cached_property
+    def current_display(self):
+        """
+        Return `current` with related-object IDs resolved to their string representation, for
+        display purposes. Looked up in main, as `current` reflects the live main state.
+        """
+        return self._resolve_display_dict(self.current, DEFAULT_DB_ALIAS)
 
 
 class AppliedChange(models.Model):

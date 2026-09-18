@@ -69,8 +69,8 @@
             {% for field in object.conflicts %}
             <tr>
               <td><code>{{ field }}</code></td>
-              <td>{% if object.modified %}{{ object.modified|get_item:field|json }}{% else %}<span class="text-muted">{% trans "Deleted" %}</span>{% endif %}</td>
-              <td>{% if object.current %}{{ object.current|get_item:field|json }}{% else %}<span class="text-muted">{% trans "Deleted" %}</span>{% endif %}</td>
+              <td>{% if object.modified %}{{ object.modified_display|get_item:field|json }}{% else %}<span class="text-muted">{% trans "Deleted" %}</span>{% endif %}</td>
+              <td>{% if object.current %}{{ object.current_display|get_item:field|json }}{% else %}<span class="text-muted">{% trans "Deleted" %}</span>{% endif %}</td>
             </tr>
             {% endfor %}
           </tbody>
@@ -97,7 +97,7 @@
         {% if object.original %}
           {% spaceless %}
             <pre class="change-data m-0">
-              {% for k, v in object.original.items %}
+              {% for k, v in object.original_display.items %}
                 <span{% if k in altered_in_modified %} class="removed"{% endif %}>{{ k }}: {{ v|json }}</span>
               {% endfor %}
             </pre>
@@ -115,7 +115,7 @@
         {% if object.modified %}
           {% spaceless %}
             <pre class="change-data m-0">
-              {% for k, v in object.modified.items %}
+              {% for k, v in object.modified_display.items %}
                 <span{% if k in altered_in_modified %} class="added{% if object.conflicts and k in object.conflicts %} conflict{% endif %}"{% endif %}>{{ k }}: {{ v|json }}</span>
               {% endfor %}
             </pre>
@@ -159,7 +159,7 @@
         {% if object.original %}
           {% spaceless %}
             <pre class="change-data m-0">
-              {% for k, v in object.original.items %}
+              {% for k, v in object.original_display.items %}
                 <span{% if k in altered_in_current %} class="removed"{% endif %}>{{ k }}: {{ v|json }}</span>
               {% endfor %}
             </pre>
@@ -177,7 +177,7 @@
         {% if object.current %}
           {% spaceless %}
             <pre class="change-data m-0">
-              {% for k, v in object.current.items %}
+              {% for k, v in object.current_display.items %}
                 <span{% if k in altered_in_current %} class="added{% if object.conflicts and k in object.conflicts %} conflict{% endif %}"{% endif %}>{{ k }}: {{ v|json }}</span>
               {% endfor %}
             </pre>
