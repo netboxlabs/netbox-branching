@@ -5,7 +5,6 @@ import string
 from contextlib import contextmanager
 
 from django.apps import apps
-from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.db import connection
 from django.db.migrations.operations.special import RunSQL, SeparateDatabaseAndState
@@ -419,9 +418,9 @@ class SchemaBranchingBackend(BranchingBackend):
                     if str(e).startswith('permission denied '):
                         logger.critical(
                             f"Provisioning failed due to insufficient database permissions. Ensure that the NetBox "
-                            f"role ({settings.DATABASE['USER']}) has permission to create new schemas on this "
-                            f"database ({settings.DATABASE['NAME']}). (Use the PostgreSQL command 'GRANT CREATE ON "
-                            f"DATABASE $database TO $role;' to grant the required permission.)"
+                            f"role ({connection.settings_dict['USER']}) has permission to create new schemas on "
+                            f"this database ({connection.settings_dict['NAME']}). (Use the PostgreSQL command "
+                            f"'GRANT CREATE ON DATABASE $database TO $role;' to grant the required permission.)"
                         )
                     raise
 

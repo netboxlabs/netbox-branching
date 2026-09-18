@@ -45,7 +45,7 @@ from netbox_branching.signals import (
 )
 from netbox_branching.utilities import supports_branching
 
-from .utils import plugin_disabled
+from .utils import DEFAULT_HOST_CONFIG, plugin_disabled
 
 DUMMY_BACKEND = 'netbox_branching.tests.test_backends.DummyBranchingBackend'
 
@@ -157,6 +157,7 @@ class ConfigurableBackend(DummyBranchingBackend):
 
 class GetBranchingBackendTestCase(TestCase):
 
+    @override_settings(PLUGINS_CONFIG=DEFAULT_HOST_CONFIG)
     def test_default_backend_is_the_schema_backend(self):
         self.assertIsInstance(get_branching_backend(), SchemaBranchingBackend)
 
@@ -522,6 +523,7 @@ class SchemaBackendIdentityTestCase(TestCase):
         self.assertIsNone(value, msg="A dropped schema was reported as the branch's own")
 
 
+@override_settings(PLUGINS_CONFIG=DEFAULT_HOST_CONFIG)
 class BaseBackendDefaultsTestCase(TestCase):
     """
     Behaviour ``BranchingBackend`` supplies to every backend, exercised through a backend
@@ -727,6 +729,7 @@ class ApplyMigrationsTemplateTestCase(TestCase):
         self.executor.migrate.assert_called_once_with(self.targets)
 
 
+@override_settings(PLUGINS_CONFIG=DEFAULT_HOST_CONFIG)
 class SchemaBackendConnectionTestCase(TestCase):
     """
     Connection addressing must round-trip: the alias the backend hands the router
@@ -783,6 +786,7 @@ class SchemaBackendConnectionTestCase(TestCase):
         self.assertFalse(self.backend.routes_model(Site, self.branch))
 
 
+@override_settings(PLUGINS_CONFIG=DEFAULT_HOST_CONFIG)
 class SchemaBackendValidationTestCase(TestCase):
     """
     ``validate_configuration()`` holds the checks that used to live inline in
@@ -827,6 +831,7 @@ class SchemaBackendValidationTestCase(TestCase):
         self.backend.validate_configuration()  # must not raise
 
 
+@override_settings(PLUGINS_CONFIG=DEFAULT_HOST_CONFIG)
 class ConnectionParamsRegistryTestCase(TestCase):
     """
     The registry exists so a backend needing per-branch endpoint details can stash

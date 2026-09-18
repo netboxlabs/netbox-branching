@@ -26,7 +26,7 @@ from netbox_branching.utilities import (
     track_branch_connection,
 )
 
-from .utils import plugin_disabled
+from .utils import DEFAULT_HOST_CONFIG, plugin_disabled
 
 
 class PickyBackend(SchemaBranchingBackend):
@@ -52,6 +52,7 @@ class CountingBackend(SchemaBranchingBackend):
         return super().get_connection_alias(branch)
 
 
+@override_settings(PLUGINS_CONFIG=DEFAULT_HOST_CONFIG)
 class DynamicSchemaDictTestCase(TestCase):
     """
     DynamicSchemaDict fabricates a per-branch DATABASE config for any
@@ -159,6 +160,7 @@ class DynamicSchemaDictTestCase(TestCase):
                 databases['schema_branch_abc123']
 
 
+@override_settings(PLUGINS_CONFIG=DEFAULT_HOST_CONFIG)
 class BranchAwareRouterTestCase(TestCase):
     """
     BranchAwareRouter consults the active_branch ContextVar to decide whether
