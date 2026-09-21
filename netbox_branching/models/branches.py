@@ -974,6 +974,11 @@ class Branch(JobsMixin, PrimaryModel):
         # Emit pre-sync signal
         pre_sync.send(sender=self.__class__, branch=self, user=user)
 
+        # Watermark the sync where the change set is read: get_unsynced_changes() filters on
+        # time__gt=last_sync, so storing the completion time would skip anything main committed
+        # while this sync was running.
+        sync_started = timezone.now()
+
         # Retrieve unsynced changes before we update the Branch's status
         if changes := self.get_unsynced_changes().order_by('time'):
             logger.info(f"Found {len(changes)} changes to sync")
@@ -1056,7 +1061,7 @@ class Branch(JobsMixin, PrimaryModel):
 
         # Record the branch's last_synced time & update its status
         logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
-        self.last_sync = timezone.now()
+        self.last_sync = sync_started
         self.status = BranchStatusChoices.READY
         self.save(update_merge_sync_fields=True)
 
