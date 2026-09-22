@@ -122,6 +122,17 @@ Alternatively, if the conflicting changes are problematic, you can go back and m
 
 Syncing a branch also clears the conflict: the branch adopts main's value and its conflict baseline moves with it, so any subsequent change you make in the branch to that attribute is not flagged again unless main changes it once more.
 
+### Collisions With Objects in Main
+
+Conflicts are detected by comparing the same object in your branch and in main, so a collision between two *different* objects cannot be flagged in advance — for example, a device you place in rack unit 12 in your branch and a different device someone places in that slot in main. Both writes are valid in their own schema; the collision surfaces only when the merge replays your change against main.
+
+The job report quotes the underlying error ("U12 is already occupied…"), which names whatever blocked the change. Two ways forward:
+
+- Resolve it in main: move or delete whatever already claims the resource, then retry. Works under either strategy.
+- Change the value in your branch, then merge using **squash**.
+
+The second requires squash because iterative replays the value recorded in your original change before reaching the change that fixed it, so a branch-side fix on its own leaves the merge failing identically. Squash does not help with a collision you have not resolved — both strategies then apply the same value and fail. Same recovery pattern as [Recovering from Duplicate Object Conflicts](#recovering-from-duplicate-object-conflicts).
+
 ## Dry Runs
 
 By default, NetBox will perform a "dry run" when synchronizing or merging a branch through the web UI. This means that it will replicate all the relevant changes to check for errors before ultimately aborting the operation and returning the branch to its original state. To permanently apply the changes instead, check the **Commit changes** checkbox before submitting the form.

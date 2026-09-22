@@ -31,7 +31,7 @@ from dcim.models import (
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections
-from django.test import RequestFactory, TransactionTestCase
+from django.test import RequestFactory
 from django.urls import reverse
 from extras.models import Tag
 from netbox.context_managers import event_tracking
@@ -39,13 +39,13 @@ from utilities.exceptions import AbortTransaction
 
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
-from netbox_branching.tests.utils import provision_branch
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import activate_branch
 
 User = get_user_model()
 
 
-class SyncTestCase(TransactionTestCase):
+class SyncTestCase(FastTeardownTransactionTestCase):
     """
     Test cases for Branch sync functionality.
 
