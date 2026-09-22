@@ -1,6 +1,7 @@
 import logging
 from abc import ABC, abstractmethod
 
+from django.db import DEFAULT_DB_ALIAS
 from mptt.models import MPTTModel
 
 __all__ = (
@@ -42,6 +43,27 @@ class MergeStrategy(ABC):
             logger: Logger instance for logging
             user: User who initiated the revert
         """
+
+    def _update_dependent_objects(self, pks_by_model, logger):
+        """
+        Update the objects which depend on those just applied (e.g. the CablePaths traversing a Cable).
+        Applying a create writes the object with a raw save, which bypasses Model.save() and the dependent
+        objects it maintains; models expose the work through update_dependent_objects(). (#469)
+
+        Must be called only once every change has been applied: retracing a Cable, for instance, requires
+        its CableTerminations to exist.
+
+        Args:
+            pks_by_model: Mapping of model classes to the PKs of the objects applied for each
+            logger: Logger instance for logging
+        """
+        for model, pks in pks_by_model.items():
+            if not hasattr(model, 'update_dependent_objects'):
+                continue
+            queryset = model.objects.using(DEFAULT_DB_ALIAS).filter(pk__in=pks)
+            for instance in queryset.iterator(chunk_size=100):
+                logger.debug(f"Updating objects dependent on {model._meta.verbose_name} {instance.pk}")
+                instance.update_dependent_objects()
 
     def _clean(self, models):
         """
