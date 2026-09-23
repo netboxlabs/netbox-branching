@@ -587,6 +587,9 @@ class SquashMergeStrategy(MergeStrategy):
         # in the CREATE direction, where the cycle already implies the ordering.
         if is_delete:
             # UPDATE clears the reference, then the DELETE can proceed: original -> NULL.
+            # _build_fk_dependency_graph will also read the other FKs in this full snapshot and
+            # order their DELETEs after this UPDATE; those edges are redundant (they already run
+            # after the object's own DELETE, which runs after this UPDATE), never new constraints.
             update_collapsed.prechange_data = original
             update_collapsed.postchange_data = dict(data)
             collapsed.depends_on.add(update_key)
