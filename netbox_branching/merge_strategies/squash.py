@@ -40,6 +40,7 @@ class CollapsedChange:
         self.prechange_data = {}
         self.postchange_data = {}
         self.last_change = None  # The most recent ObjectChange (for metadata)
+        self.synthetic = False  # True for UPDATEs injected by cycle breaking
 
         # Dependencies for ordering
         self.depends_on = set()  # Set of keys this change depends on
@@ -220,7 +221,13 @@ class SquashMergeStrategy(MergeStrategy):
                 # Create a dummy ObjectChange from the collapsed change and apply it
                 dummy_change = collapsed.generate_object_change()
                 try:
-                    dummy_change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+                    # A synthetic UPDATE only exists to sequence a real change; if main has
+                    # already lost the object, skip it rather than fail the merge — the paired
+                    # CREATE/DELETE tolerates the same absence. _skip_updates_missing_in_main
+                    # can't cover these, as they're injected after it runs.
+                    dummy_change.apply(
+                        branch, using=DEFAULT_DB_ALIAS, logger=logger, skip_missing=collapsed.synthetic
+                    )
                 except ValidationError as e:
                     annotate_validation_error(
                         e, model_class,
@@ -422,12 +429,13 @@ class SquashMergeStrategy(MergeStrategy):
                         )
 
     @staticmethod
-    def _iter_create_references(create, creates, ct_cache):
+    def _iter_references(collapsed, nodes, ct_cache, data):
         """
         Yield ``(field_name, target_key, breakable)`` for every concrete ForeignKey and
-        GenericForeignKey in ``create.postchange_data`` that points at another object in
-        ``creates`` (self-references excluded). Fields are visited in model definition
-        order, so the yielded sequence is deterministic.
+        GenericForeignKey in ``data`` — the post-change snapshot for a CREATE, the
+        pre-change snapshot for a DELETE — that points at another object in ``nodes``
+        (self-references excluded). Fields are visited in model definition order, so the
+        yielded sequence is deterministic.
 
         ``breakable`` is True only for nullable concrete ForeignKeys — the edges a cycle
         can be deferred at by NULLing the field and restoring it in a follow-up UPDATE.
@@ -438,12 +446,11 @@ class SquashMergeStrategy(MergeStrategy):
         concrete FKs and by content-type id for GFKs) so repeated graph rebuilds don't
         re-hit Django's ContentType cache once per FK field.
         """
-        data = create.postchange_data
         if not data:
             return
 
         # Concrete ForeignKey fields
-        for field in create.model_class._meta.get_fields():
+        for field in collapsed.model_class._meta.get_fields():
             if not isinstance(field, models.ForeignKey):
                 continue
             fk_value = data.get(field.name)
@@ -455,11 +462,11 @@ class SquashMergeStrategy(MergeStrategy):
                 ct_cache[field.related_model] = natural_key
             app_label, model = natural_key
             target_key = (f"{app_label}.{model}", fk_value)
-            if target_key in creates and target_key != create.key:
+            if target_key in nodes and target_key != collapsed.key:
                 yield field.name, target_key, field.null
 
         # GenericForeignKey fields
-        for field in create.model_class._meta.private_fields:
+        for field in collapsed.model_class._meta.private_fields:
             if not isinstance(field, GenericForeignKey):
                 continue
             # ObjectChange data may store the CT FK as either 'field_name' or 'field_name_id'
@@ -476,7 +483,7 @@ class SquashMergeStrategy(MergeStrategy):
                 ct_cache[ct_value] = natural_key
             app_label, model = natural_key
             target_key = (f"{app_label}.{model}", fk_value)
-            if target_key in creates and target_key != create.key:
+            if target_key in nodes and target_key != collapsed.key:
                 yield field.name, target_key, False
 
     @staticmethod
@@ -533,83 +540,115 @@ class SquashMergeStrategy(MergeStrategy):
         return None
 
     @staticmethod
-    def _defer_fk(collapsed_changes, create, field_name):
+    def _defer_fk(collapsed_changes, collapsed, field_name):
         """
-        Break a cycle at ``create``'s nullable FK ``field_name`` by NULLing it on the CREATE
-        and emitting a synthetic follow-up UPDATE that restores the original value once the
-        referenced object exists. Mirrors how NetBox itself persists self-referential
-        topologies such as ``primary_ip4`` / ``Circuit.termination_a``.
+        Break a cycle at ``collapsed``'s nullable FK ``field_name`` by removing the reference
+        from the operation itself and pairing it with a synthetic UPDATE that carries the
+        value. Mirrors how NetBox itself persists self-referential topologies such as
+        ``primary_ip4`` / ``Circuit.termination_a``.
 
-        The UPDATE's ``postchange_data`` is a full snapshot, but it is applied as a diff
+        For a CREATE the field is NULLed on the create and the UPDATE — sequenced after it —
+        restores the original value once the referenced object exists. For a DELETE the field
+        is NULLed in the pre-change snapshot and the UPDATE — sequenced before it — clears the
+        reference in main first. Because a squash revert replays the ordered changes backwards,
+        that also gives the correct restore order: the object comes back without the reference,
+        and the reversed UPDATE reinstates it once its target has been restored too (#668).
+
+        The UPDATE's data is a full snapshot, but it is applied as a diff
         (``ObjectChange.apply`` -> ``get_merge_data`` -> ``diff_for_merge`` of pre vs post),
         so only ``field_name`` is actually written. This is what makes deferring multiple
         FKs on the same object safe: a later deferral NULLs another field in this snapshot,
         but because that field is unchanged between this UPDATE's pre/post it is excluded
         from the diff and therefore never clobbers the value restored by its own UPDATE.
         """
-        original_postchange = dict(create.postchange_data)
-        create.postchange_data[field_name] = None
+        is_delete = collapsed.final_action == ActionType.DELETE
+        data = collapsed.prechange_data if is_delete else collapsed.postchange_data
+        original = dict(data)
+        data[field_name] = None
 
         # 3-tuple keys distinguish synthetic UPDATEs from real (2-tuple) changes; enforce the
         # contract with an unconditional raise (not assert, which is stripped under -O) so a
-        # future 3-tuple key elsewhere can't silently overwrite a real change.
-        update_key = (create.key[0], create.key[1], f'update_{field_name}')
+        # future 3-tuple key elsewhere can't silently overwrite a real change. The prefix keeps
+        # the two deferral directions distinct.
+        prefix = 'predelete' if is_delete else 'update'
+        update_key = (collapsed.key[0], collapsed.key[1], f'{prefix}_{field_name}')
         if update_key in collapsed_changes:
             raise RuntimeError(f"Unexpected key collision while deferring FK: {update_key}")
 
-        update_collapsed = CollapsedChange(update_key, create.model_class)
+        update_collapsed = CollapsedChange(update_key, collapsed.model_class)
         update_collapsed.change_count = 1  # Synthetic update from split
         update_collapsed.final_action = ActionType.UPDATE
-        update_collapsed.prechange_data = dict(create.postchange_data)
-        update_collapsed.postchange_data = original_postchange
-        update_collapsed.last_change = create.last_change
+        update_collapsed.synthetic = True
+        update_collapsed.last_change = collapsed.last_change
 
-        # The UPDATE depends on the originating CREATE existing first. That ordering is also
-        # enforced transitively through the cycle (the FK target leads back to this object),
-        # but make it direct so _defer_fk doesn't rely on that implicit precondition.
-        # _build_fk_dependency_graph runs afterwards and only adds to these sets, so the
-        # manual edge survives.
-        update_collapsed.depends_on.add(create.key)
-        create.depended_by.add(update_key)
+        # The manual dependency edges below survive _build_fk_dependency_graph, which runs
+        # afterwards and only adds to these sets. They are required in the DELETE direction
+        # (nothing else orders an UPDATE ahead of its own object's DELETE) and belt-and-braces
+        # in the CREATE direction, where the cycle already implies the ordering.
+        if is_delete:
+            # UPDATE clears the reference, then the DELETE can proceed: original -> NULL.
+            update_collapsed.prechange_data = original
+            update_collapsed.postchange_data = dict(data)
+            collapsed.depends_on.add(update_key)
+            update_collapsed.depended_by.add(collapsed.key)
+        else:
+            # CREATE lands without the reference, then the UPDATE adds it: NULL -> original.
+            update_collapsed.prechange_data = dict(data)
+            update_collapsed.postchange_data = original
+            update_collapsed.depends_on.add(collapsed.key)
+            collapsed.depended_by.add(update_key)
 
         collapsed_changes[update_key] = update_collapsed
 
     @staticmethod
     def _break_dependency_cycles(collapsed_changes, logger):
         """
-        Preemptively detect and break dependency cycles of any length among CREATE
-        operations.
+        Preemptively detect and break dependency cycles of any length, among CREATE
+        operations and among DELETE operations alike.
 
-        A cycle exists when a set of newly-created objects reference each other in a loop
-        via concrete ForeignKeys and/or GenericForeignKeys. Each cycle is broken at an
-        eligible edge — one backed by a nullable concrete ForeignKey — by deferring it:
-        the field is set NULL on the CREATE and a follow-up UPDATE restores it once the
-        referenced object exists (see ``_defer_fk``).
+        A cycle exists when a set of objects created (or deleted) together reference each
+        other in a loop via concrete ForeignKeys and/or GenericForeignKeys. Each cycle is
+        broken at an eligible edge — one backed by a nullable concrete ForeignKey — by
+        deferring it with a synthetic UPDATE (see ``_defer_fk``).
 
         The two-node case (e.g. Circuit ↔ CircuitTermination) is just the length-2
         specialisation of this routine. The three-node primary-IP loop
-        (Device → IPAddress → Interface → Device) is broken at ``Device.primary_ip4``.
+        (Device → IPAddress → Interface → Device) is broken at ``Device.primary_ip4``, and
+        the Interface ↔ MACAddress delete loop at ``Interface.primary_mac_address`` (#668).
 
         Cycles containing no deferrable (nullable concrete FK) edge are left in place for
         the topological sort to report, as before.
         """
-        creates = {key: c for key, c in collapsed_changes.items() if c.final_action == ActionType.CREATE}
+        for action in (ActionType.CREATE, ActionType.DELETE):
+            SquashMergeStrategy._break_cycles_for_action(collapsed_changes, action, logger)
 
-        broken_fields = set()  # (create_key, field_name) already deferred — don't redo
+    @staticmethod
+    def _break_cycles_for_action(collapsed_changes, action, logger):
+        """
+        Run the cycle-breaking loop over the ``action`` (CREATE or DELETE) nodes of
+        ``collapsed_changes``. See ``_break_dependency_cycles``.
+        """
+        nodes = {key: c for key, c in collapsed_changes.items() if c.final_action == action}
+        # A CREATE's references live in the state it produces, a DELETE's in the state it removes.
+        data_attr = 'prechange_data' if action == ActionType.DELETE else 'postchange_data'
+
+        broken_fields = set()  # (node_key, field_name) already deferred — don't redo
         ignored_edges = set()  # unbreakable edges excluded from detection to make progress
         ct_cache = {}  # memoised ContentType natural keys; content types don't change mid-operation
         # Safety bound: every iteration either defers an FK or ignores an edge, both finite.
-        max_iterations = 2 * sum(len(c.postchange_data or {}) for c in creates.values()) + len(creates) + 1
+        max_iterations = 2 * sum(len(getattr(c, data_attr) or {}) for c in nodes.values()) + len(nodes) + 1
 
         for _ in range(max_iterations):
-            # (Re)build the adjacency graph from the current postchange data, so deferred
-            # edges drop out automatically once their field has been NULLed. Targets are
-            # stored as ordered lists (deduped) so cycle detection is deterministic.
-            adjacency = {key: [] for key in creates}
+            # (Re)build the adjacency graph from the current snapshots, so deferred edges drop
+            # out automatically once their field has been NULLed. Targets are stored as ordered
+            # lists (deduped) so cycle detection is deterministic.
+            adjacency = {key: [] for key in nodes}
             edge_fields = {}  # (src_key, dst_key) -> list of (field_name, breakable)
-            for key, create in creates.items():
+            for key, collapsed in nodes.items():
                 seen_targets = set()
-                refs = SquashMergeStrategy._iter_create_references(create, creates, ct_cache)
+                refs = SquashMergeStrategy._iter_references(
+                    collapsed, nodes, ct_cache, getattr(collapsed, data_attr)
+                )
                 for field_name, target_key, breakable in refs:
                     if (key, target_key) in ignored_edges:
                         continue
@@ -629,11 +668,11 @@ class SquashMergeStrategy(MergeStrategy):
                 for field_name, breakable in edge_fields.get((src, dst), ()):
                     if breakable and (src, field_name) not in broken_fields:
                         logger.info(
-                            f"  Breaking dependency cycle at {creates[src].model_class.__name__}:{src[1]} "
-                            f".{field_name} -> {creates[dst].model_class.__name__}:{dst[1]} "
-                            f"(cycle length {len(cycle)})"
+                            f"  Breaking {action} dependency cycle at "
+                            f"{nodes[src].model_class.__name__}:{src[1]}.{field_name} -> "
+                            f"{nodes[dst].model_class.__name__}:{dst[1]} (cycle length {len(cycle)})"
                         )
-                        SquashMergeStrategy._defer_fk(collapsed_changes, creates[src], field_name)
+                        SquashMergeStrategy._defer_fk(collapsed_changes, nodes[src], field_name)
                         broken_fields.add((src, field_name))
                         broke = True
                         break
@@ -660,8 +699,8 @@ class SquashMergeStrategy(MergeStrategy):
                 src, dst = cycle[0], cycle[1]
                 ignored_edges.add((src, dst))
                 logger.warning(
-                    f"  Unbreakable dependency cycle (length {len(cycle)}) involving "
-                    f"{creates[src].model_class.__name__}:{src[1]}; no nullable FK to defer. "
+                    f"  Unbreakable {action} dependency cycle (length {len(cycle)}) involving "
+                    f"{nodes[src].model_class.__name__}:{src[1]}; no nullable FK to defer. "
                     f"Leaving for topological sort to report."
                 )
 
