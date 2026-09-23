@@ -8,7 +8,7 @@ logic with no DB access, so the tests run as SimpleTestCase.
 
 from types import SimpleNamespace
 
-from django.core.exceptions import ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.db import IntegrityError
 from django.test import SimpleTestCase
 
@@ -107,6 +107,55 @@ class BuildErrorReportTestCase(SimpleTestCase):
         self.assertEqual(entry['model'], 'site')
 
 
+class ValidationErrorDetailTestCase(SimpleTestCase):
+    """
+    The underlying validation message is what tells the user what blocked the merge -- often
+    state in main that is invisible from within the branch. It must survive into the report. (#632)
+    """
+
+    def test_validation_error_carries_the_underlying_message_as_detail(self):
+        exc = ValidationError({'position': ['U12 is already occupied']})
+        annotate_validation_error(exc, Site, object_id=7, content_type_id=42)
+        entry = build_error_report(exc)
+        self.assertEqual(entry['type'], 'validation_error')
+        self.assertEqual(entry['field'], 'position')
+        self.assertEqual(entry['detail'], 'U12 is already occupied')
+
+    def test_non_field_error_does_not_surface_the_django_sentinel_as_a_field(self):
+        """
+        A clean() error keyed on NON_FIELD_ERRORS must not render as Device "__all__" in the
+        report or the recommendations.
+        """
+        exc = ValidationError({NON_FIELD_ERRORS: ['cross-field check failed']})
+        annotate_validation_error(exc, Site, object_id=7, content_type_id=42)
+        entry = build_error_report(exc)
+        self.assertIsNone(entry['field'])
+        self.assertEqual(entry['detail'], 'cross-field check failed')
+        self.assertNotIn('__all__', get_entry_message(entry))
+        recs = get_merge_recommendations(entry, merge_strategy=BranchMergeStrategyChoices.ITERATIVE)
+        self.assertNotIn('__all__', ' '.join(str(r) for r in recs))
+
+    def test_unique_together_error_does_not_surface_the_django_sentinel_as_a_field(self):
+        """validate_unique() files unique_together failures under NON_FIELD_ERRORS."""
+        exc = ValidationError({NON_FIELD_ERRORS: [ValidationError('taken', code='unique_together')]})
+        annotate_validation_error(exc, Site, object_id=7, content_type_id=42)
+        entry = build_error_report(exc)
+        self.assertEqual(entry['type'], 'unique_constraint')
+        self.assertIsNone(entry['field'])
+        self.assertNotIn('__all__', get_entry_message(entry))
+
+    def test_every_entry_type_carries_a_detail_key(self):
+        """views.py splats the entry into the template context; the shape must be uniform."""
+        entries = [
+            build_error_report(_make_integrity_error(sqlstate=PG_UNIQUE_VIOLATION, table_name='dcim_site')),
+            build_error_report(_make_integrity_error(sqlstate='42P01')),
+            build_error_report(ValidationError('boom')),
+            build_error_report(RuntimeError('boom')),
+        ]
+        for entry in entries:
+            self.assertIn('detail', entry)
+
+
 class GetEntryMessageTestCase(SimpleTestCase):
     def test_unique_constraint_with_full_context_includes_model_field_value(self):
         msg = get_entry_message(
@@ -130,6 +179,24 @@ class GetEntryMessageTestCase(SimpleTestCase):
         msg = get_entry_message({'type': 'validation_error', 'model': 'site', 'field': 'name'})
         self.assertIn('Site', msg)
         self.assertIn('name', msg)
+
+    def test_validation_error_quotes_the_underlying_error(self):
+        msg = get_entry_message(
+            {
+                'type': 'validation_error',
+                'model': 'device',
+                'field': 'position',
+                'detail': 'U12 is already occupied',
+            }
+        )
+        self.assertIn('Device', msg)
+        self.assertIn('position', msg)
+        self.assertIn('U12 is already occupied', msg)
+
+    def test_validation_error_without_detail_still_names_the_object(self):
+        msg = get_entry_message({'type': 'validation_error', 'model': 'device', 'field': 'position'})
+        self.assertIn('Device', msg)
+        self.assertIn('position', msg)
 
     def test_database_error_returns_generic_message(self):
         msg = get_entry_message({'type': 'database_error'})
@@ -170,13 +237,40 @@ class GetMergeRecommendationsTestCase(SimpleTestCase):
         # First rec is the generic rename guidance (no field/value interpolation)
         self.assertIn('Rename', str(recs[0]))
 
-    def test_validation_error_with_field_recommends_fixing_that_field(self):
+    def test_validation_error_with_field_names_that_field_and_both_schemas(self):
         recs = get_merge_recommendations(
             {'type': 'validation_error', 'field': 'name'},
-            merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
+            merge_strategy=BranchMergeStrategyChoices.SQUASH,
         )
         self.assertEqual(len(recs), 1)
         self.assertIn('name', str(recs[0]))
+        # A value that is valid in the branch can still collide with a main-only object (#632)
+        self.assertIn('main', str(recs[0]))
+
+    def test_validation_error_under_iterative_adds_the_squash_caveat(self):
+        """
+        Iterative replays the recorded value, so fixing the object in the branch and retrying
+        fails identically -- whatever the cause of the failure. (#632)
+        """
+        recs = get_merge_recommendations(
+            {'type': 'validation_error', 'field': 'position'},
+            merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
+        )
+        self.assertEqual(len(recs), 2)
+        self.assertIn('Squash', str(recs[1]))
+
+    def test_validation_error_under_squash_omits_the_redundant_squash_caveat(self):
+        for entry in ({'type': 'validation_error', 'field': 'position'}, {'type': 'validation_error'}):
+            recs = get_merge_recommendations(entry, merge_strategy=BranchMergeStrategyChoices.SQUASH)
+            self.assertNotIn('Squash', ' '.join(str(r) for r in recs))
+
+    def test_validation_error_without_field_falls_back_to_generic_guidance(self):
+        recs = get_merge_recommendations(
+            {'type': 'validation_error'},
+            merge_strategy=BranchMergeStrategyChoices.ITERATIVE,
+        )
+        self.assertEqual(len(recs), 2)
+        self.assertIn('main', str(recs[0]))
 
     def test_database_error_iterative_suggests_log_review_and_squash(self):
         recs = get_merge_recommendations(

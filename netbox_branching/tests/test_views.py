@@ -6,7 +6,7 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.messages import get_messages
 from django.core.exceptions import ValidationError
 from django.db import connections
-from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
+from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django_rq import get_queue
 
@@ -19,7 +19,7 @@ from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tables import ChangesGroupedTable, ChangesTable
 from netbox_branching.tests.plugin_testing import PluginTestCases
-from netbox_branching.tests.utils import provision_branch
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import activate_branch
 from netbox_branching.views import BaseBranchActionView, GroupedChangesViewMixin
 from utilities.testing import create_tags
@@ -354,7 +354,7 @@ class BranchMigrateViewTestCase(TestCase):
         self.assertTrue(any('not ready' in t.lower() for t in msg_texts))
 
 
-class ObjectValidationTestCase(TransactionTestCase):
+class ObjectValidationTestCase(FastTeardownTransactionTestCase):
     """
     Test validation behavior for operations on objects that have been deleted in main.
     Ref: Issue #422
@@ -474,7 +474,7 @@ class ObjectValidationTestCase(TransactionTestCase):
             site.full_clean()
 
 
-class BranchMiddlewareTestCase(TransactionTestCase):
+class BranchMiddlewareTestCase(FastTeardownTransactionTestCase):
     serialized_rollback = True
 
     def setUp(self):

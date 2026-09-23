@@ -18,14 +18,14 @@ from contextlib import contextmanager
 
 from django.contrib.auth import get_user_model
 from django.db import connections
-from django.test import RequestFactory, TransactionTestCase
+from django.test import RequestFactory
 from django.urls import reverse
 
 from dcim.models import Site
 from netbox.context_managers import event_tracking
 from netbox_branching import signals as branch_signals
 from netbox_branching.models import Branch
-from netbox_branching.tests.utils import provision_branch
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import activate_branch
 
 User = get_user_model()
@@ -52,7 +52,7 @@ def capture_signal(signal):
         signal.disconnect(dispatch_uid='signal_capture_test')
 
 
-class BranchSignalTestCase(TransactionTestCase):
+class BranchSignalTestCase(FastTeardownTransactionTestCase):
     serialized_rollback = True
 
     def setUp(self):

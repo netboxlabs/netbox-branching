@@ -10,7 +10,6 @@ from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db import connections
 from django.db.models import ForeignKey, ManyToManyField
-from django.http import HttpResponseBadRequest
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext as _
@@ -51,6 +50,7 @@ __all__ = (
     'DELETED',
     'ActiveBranchContextManager',
     'BranchActionIndicator',
+    'BranchNotReady',
     'ChangeSummary',
     'DynamicSchemaDict',
     'ListHandler',
@@ -536,9 +536,24 @@ def is_api_request(request):
     return request.path_info.startswith(reverse('api-root')) or request.path_info.startswith(reverse('graphql'))
 
 
+class BranchNotReady(Exception):
+    """
+    Raised by get_active_branch() when the request names a branch which exists but is not ready for
+    use. Returning the branch would let queries run against a schema which may be mid-sync, mid-merge
+    or gone entirely, so the request has to be refused: BranchMiddleware translates this into an HTTP
+    400. Callers which cannot refuse the request (such as request processors) must treat it as "no
+    branch" rather than activating one.
+    """
+
+
 def get_active_branch(request):
     """
-    Return the active Branch (if any).
+    Return the active Branch, or None if no branch is active.
+
+    Raises BranchNotReady if the request names a branch which exists but is not usable, and
+    Branch.DoesNotExist if it names one which does not exist at all. Always returns a Branch or
+    None otherwise; never a response object, as callers install the return value as the active
+    branch. Callers which cannot refuse the request must treat both exceptions as "no branch".
     """
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
     from .models import Branch
@@ -546,7 +561,7 @@ def get_active_branch(request):
     if is_api_request(request) and BRANCH_HEADER in request.headers:
         branch = Branch.objects.get(schema_id=request.headers.get(BRANCH_HEADER))
         if not branch.ready:
-            return HttpResponseBadRequest(f'Branch {branch} is not ready for use (status: {branch.status})')
+            raise BranchNotReady(f'Branch {branch} is not ready for use (status: {branch.status})')
         return branch
 
     # Branch activated/deactivated by URL query parameter
@@ -627,7 +642,24 @@ def ActiveBranchContextManager(request):
     """
     Activate a branch if indicated by the request (except for exempt paths).
     """
-    if request and request.path not in EXEMPT_PATHS and (branch := get_active_branch(request)):
+    if not request or request.path in EXEMPT_PATHS:
+        return nullcontext()
+
+    # This runs ahead of BranchMiddleware (plugin middleware is appended after NetBox's
+    # CoreMiddleware, which applies the request processors), so it is reached even for requests
+    # the middleware is about to refuse with a 400 — whether the branch named is unready
+    # (BranchNotReady) or absent entirely (ObjectDoesNotExist). Leave the branch inactive and let
+    # the middleware refuse the request.
+    #
+    # Caught explicitly rather than left to apply_request_processors(), whose blanket
+    # `except Exception` would also stop the branch being activated but would report this
+    # expected refusal as a failed request processor on every such request.
+    try:
+        branch = get_active_branch(request)
+    except (BranchNotReady, ObjectDoesNotExist):
+        return nullcontext()
+
+    if branch:
         return activate_branch(branch)
     return nullcontext()
 

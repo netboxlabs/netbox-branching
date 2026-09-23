@@ -4,7 +4,7 @@ import uuid
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections
-from django.test import Client, RequestFactory, TestCase, TransactionTestCase
+from django.test import Client, RequestFactory, TestCase
 from django.urls import reverse
 
 from core.choices import ObjectChangeActionChoices
@@ -14,6 +14,7 @@ from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME
 from netbox_branching.models import Branch, ChangeDiff
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase
 from users.models import Token
 
 
@@ -48,7 +49,7 @@ class BaseAPITestCase:
             return token.token
 
 
-class APITestCase(BaseAPITestCase, TransactionTestCase):
+class APITestCase(BaseAPITestCase, FastTeardownTransactionTestCase):
     def setUp(self):
         super().setUp()
 
@@ -372,7 +373,7 @@ class BranchRevertAPITestCase(BaseBranchAPITestCase, TestCase):
     invalid_status = BranchStatusChoices.READY
 
 
-class ChangeDiffSerializerTestCase(BaseAPITestCase, TransactionTestCase):
+class ChangeDiffSerializerTestCase(BaseAPITestCase, FastTeardownTransactionTestCase):
     """
     Verify that the ChangeDiff API endpoint serializes CREATE and DELETE records
     without raising AttributeError when original or modified is None.

@@ -5,14 +5,14 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections, transaction
 from django.db.models.signals import post_save
-from django.test import RequestFactory, SimpleTestCase, TestCase, TransactionTestCase
+from django.test import RequestFactory, SimpleTestCase, TestCase
 from django.urls import reverse
 
 from core.choices import ObjectChangeActionChoices
 from dcim.models import Site
 from netbox.context_managers import event_tracking
 from netbox_branching.models import Branch, ChangeDiff
-from netbox_branching.tests.utils import provision_branch
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import activate_branch
 
 User = get_user_model()
@@ -168,7 +168,7 @@ class LastUpdatedTestCase(TestCase):
         self.assertGreater(diff.last_updated, original)
 
 
-class MainSideConflictTestCase(TransactionTestCase):
+class MainSideConflictTestCase(FastTeardownTransactionTestCase):
     """
     Conflicts must be recorded when the change in main arrives *after* the branch's
     change. Previously the global-change path in record_change_diff() refreshed

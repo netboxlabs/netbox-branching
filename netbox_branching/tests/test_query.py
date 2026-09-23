@@ -1,12 +1,12 @@
 from django.db import connections
-from django.test import TransactionTestCase
 
 from dcim.models import DeviceRole, Site
 from netbox_branching.models import Branch
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase
 from netbox_branching.utilities import activate_branch
 
 
-class QueryTestCase(TransactionTestCase):
+class QueryTestCase(FastTeardownTransactionTestCase):
     serialized_rollback = True
 
     def tearDown(self):

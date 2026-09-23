@@ -19,7 +19,7 @@ import uuid
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections
-from django.test import RequestFactory, TransactionTestCase
+from django.test import RequestFactory
 from django.urls import reverse
 
 from dcim.choices import PortTypeChoices
@@ -42,13 +42,13 @@ from extras.models.search import CachedValue
 from netbox.context import current_request
 from netbox.context_managers import event_tracking
 from netbox_branching.contextvars import active_branch as active_branch_var
-from netbox_branching.tests.utils import provision_branch
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import activate_branch
 
 User = get_user_model()
 
 
-class RelatedModelsTestCase(TransactionTestCase):
+class RelatedModelsTestCase(FastTeardownTransactionTestCase):
     """
     Verify that related models are routed to the branch schema when a branch
     is active, not to the main schema.

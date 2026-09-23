@@ -38,8 +38,12 @@ name: Test
     branches: [main]
 
 concurrency:
+  # Keyed per ref so unrelated PRs run side by side instead of queueing behind
+  # one another, and superseded runs on the same ref are cancelled.
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Superseded PR runs are cancelled; pushes to main always run to completion
+  # so every landed commit keeps a result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -103,13 +107,18 @@ jobs:
           --health-timeout 5s
           --health-retries 5
       postgres:
-        image: postgres
+        # Pinned: the tag was unpinned and had silently moved to 18, which also
+        # relocated PGDATA (17: /var/lib/postgresql/data, 18:
+        # /var/lib/postgresql/18/docker). The tmpfs below mounts the shared
+        # parent so it stays correct across either layout.
+        image: postgres:18
         env:
           POSTGRES_USER: netbox
           POSTGRES_PASSWORD: netbox
         ports:
           - 5432:5432
         options: >-
+          --mount type=tmpfs,destination=/var/lib/postgresql
           --health-cmd pg_isready
           --health-interval 10s
           --health-timeout 5s
