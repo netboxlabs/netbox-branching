@@ -3,7 +3,8 @@ from netbox.plugins import PluginTemplateExtension
 
 from .choices import BranchStatusChoices
 from .contextvars import active_branch
-from .models import Branch, ChangeDiff
+from .models import ChangeDiff
+from .utilities import get_branches_for_user
 
 __all__ = (
     'BranchNotification',
@@ -17,9 +18,13 @@ __all__ = (
 class BranchSelector(PluginTemplateExtension):
 
     def navbar(self):
+        user = self.context['request'].user
+
+        # The template hides the selector from users without view permission; the queryset is lazy, so
+        # nothing is fetched in that case.
         return self.render('netbox_branching/inc/branch_selector.html', extra_context={
             'active_branch': active_branch.get(),
-            'branches': Branch.objects.filter(status__in=BranchStatusChoices.WORKING),
+            'branches': get_branches_for_user(user).filter(status__in=BranchStatusChoices.WORKING),
         })
 
 
@@ -40,7 +45,8 @@ class BranchNotification(PluginTemplateExtension):
         ct = ContentType.objects.get_for_model(instance)
         relevant_changes = ChangeDiff.objects.filter(
             object_type=ct,
-            object_id=instance.pk
+            object_id=instance.pk,
+            branch__in=get_branches_for_user(self.context['request'].user)
         ).exclude(
             branch__status__in=(BranchStatusChoices.MERGED, BranchStatusChoices.ARCHIVED)
         ).exclude(
