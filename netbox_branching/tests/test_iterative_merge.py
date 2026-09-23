@@ -5,6 +5,7 @@ import unittest
 import unittest.mock
 import uuid
 
+from dcim.choices import DeviceFaceChoices
 from dcim.models import (
     Cable,
     CablePath,
@@ -17,6 +18,7 @@ from dcim.models import (
     ModuleBay,
     ModuleBayTemplate,
     PortMapping,
+    Rack,
     RearPort,
     Region,
     Site,
@@ -24,8 +26,9 @@ from dcim.models import (
 )
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
+from django.core.exceptions import ValidationError
 from django.db import connections
-from django.test import RequestFactory, SimpleTestCase, TransactionTestCase
+from django.test import RequestFactory, SimpleTestCase
 from django.urls import reverse
 from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomField, Tag
@@ -33,8 +36,9 @@ from netbox.context_managers import event_tracking
 from utilities.exceptions import AbortTransaction
 
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
+from netbox_branching.error_report import build_error_report, get_entry_message, get_merge_recommendations
 from netbox_branching.models import Branch, ChangeDiff
-from netbox_branching.tests.utils import provision_branch
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import DELETED, _deep_merge_dict, _strip_deleted, activate_branch, diff_for_merge
 
 User = get_user_model()
@@ -44,11 +48,12 @@ class BaseMergeTests:
     """
     Mixin with common merge tests for all merge strategies.
 
-    Subclasses should inherit from both this mixin and TransactionTestCase, and must
+    Subclasses should inherit from both this mixin and FastTeardownTransactionTestCase,
+    and must
     define a MERGE_STRATEGY class attribute using BranchMergeStrategyChoices.
 
     Example:
-        class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
+        class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
             MERGE_STRATEGY = BranchMergeStrategyChoices.ITERATIVE
     """
 
@@ -1584,8 +1589,164 @@ class BaseMergeTests:
             msg='commit=False must not undo the previously merged change',
         )
 
+    def _rack_collision_branch(self):
+        """
+        Build the #632 scenario: a branch device and a main device independently claiming rack
+        unit 12. Returns (branch, branch_device).
+        """
+        site = Site.objects.create(name='Collision Site', slug='collision-site')
+        rack = Rack.objects.create(site=site, name='Collision Rack', u_height=42)
 
-class IterativeMergeTestCase(BaseMergeTests, TransactionTestCase):
+        branch = self._create_and_provision_branch()
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with activate_branch(branch), event_tracking(request):
+            branch_device = Device.objects.create(
+                name='Branch Device',
+                site=site,
+                rack=rack,
+                device_type=self.device_type,
+                role=self.device_role,
+                position=12,
+                face=DeviceFaceChoices.FACE_FRONT,
+            )
+
+        # Main independently takes the same slot
+        Device.objects.create(
+            name='Main Device',
+            site=site,
+            rack=rack,
+            device_type=self.device_type,
+            role=self.device_role,
+            position=12,
+            face=DeviceFaceChoices.FACE_FRONT,
+        )
+
+        return branch, branch_device
+
+    def test_merge_rack_position_collision_reports_the_underlying_error(self):
+        """
+        A merge blocked by main's occupancy of the rack unit must report what actually blocked
+        it, rather than swallowing the message and telling the user to fix a value that is
+        already valid within the branch. (#632)
+        """
+        branch, branch_device = self._rack_collision_branch()
+
+        # No conflict is detectable up front: different objects, so nothing diverges
+        self.assertFalse(
+            ChangeDiff.objects.filter(branch=branch).exclude(conflicts=None).exists(),
+            msg='the collision is between two distinct objects, so no ChangeDiff conflict exists',
+        )
+
+        with self.assertRaises(ValidationError) as ctx:
+            branch.merge(user=self.user, commit=True)
+
+        # Compare against the error's own text rather than pinning NetBox's exact wording
+        expected_detail = ctx.exception.message_dict['position'][0]
+
+        entry = build_error_report(ctx.exception)
+        self.assertEqual(entry['type'], 'validation_error')
+        self.assertEqual(entry['model'], 'device')
+        self.assertEqual(entry['field'], 'position')
+        self.assertEqual(entry['object_id'], branch_device.pk)
+        self.assertEqual(entry['detail'], expected_detail)
+        self.assertIn(expected_detail, get_entry_message(entry))
+
+        recommendations = [
+            str(r) for r in get_merge_recommendations(entry, merge_strategy=self.MERGE_STRATEGY)
+        ]
+        # The remedy may lie in main, which the branch cannot see -- the report must say so
+        self.assertIn('main', recommendations[0])
+        self.assertIn('position', recommendations[0])
+        if self.MERGE_STRATEGY == BranchMergeStrategyChoices.SQUASH:
+            self.assertEqual(len(recommendations), 1)
+        else:
+            self.assertIn('Squash', recommendations[1])
+
+        # The branch survives the failed merge and can be retried
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+    def test_branch_side_fix_needs_squash_under_iterative(self):
+        """
+        Moving the branch device out of the contested slot only works under squash: iterative
+        re-applies the original CREATE at the colliding position before reaching the UPDATE
+        that moved it. This is why the report's recommendation names squash. (#632)
+        """
+        branch, branch_device = self._rack_collision_branch()
+
+        with self.assertRaises(ValidationError):
+            branch.merge(user=self.user, commit=True)
+
+        # Apply the remedy: move the branch device to a free slot
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+        with activate_branch(branch), event_tracking(request):
+            device = Device.objects.get(pk=branch_device.pk)
+            device.position = 21
+            device.save()
+
+        if self.MERGE_STRATEGY == BranchMergeStrategyChoices.SQUASH:
+            branch.merge(user=self.user, commit=True)
+            self.assertEqual(Device.objects.get(pk=branch_device.pk).position, 21)
+            return
+
+        with self.assertRaises(ValidationError) as ctx:
+            branch.merge(user=self.user, commit=True)
+
+        # The branch object is out of the contested slot, yet the replayed CREATE still carries
+        # the original position -- the retry fails on a value no longer present in the branch
+        with activate_branch(branch):
+            self.assertEqual(Device.objects.get(pk=branch_device.pk).position, 21)
+
+        entry = build_error_report(ctx.exception)
+        self.assertEqual(entry['type'], 'validation_error')
+        self.assertEqual(entry['detail'], ctx.exception.message_dict['position'][0])
+        self.assertIn(
+            'Squash',
+            str(get_merge_recommendations(entry, merge_strategy=self.MERGE_STRATEGY)[1]),
+            msg='the branch-side remedy is useless under iterative unless the report names squash',
+        )
+
+    def test_merge_invalid_branch_value_reports_the_underlying_error(self):
+        """
+        An ordinary bad value in the branch reports the same way: the message that blocked the
+        merge is quoted and the field is named. (#632)
+        """
+        site = Site.objects.create(name='Invalid Site', slug='invalid-site')
+        rack = Rack.objects.create(site=site, name='Invalid Rack', u_height=42)
+
+        branch = self._create_and_provision_branch()
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # objects.create() skips full_clean(), so an invalid object can still reach the branch
+        with activate_branch(branch), event_tracking(request):
+            Device.objects.create(
+                name='Faceless Device',
+                site=site,
+                rack=rack,
+                device_type=self.device_type,
+                role=self.device_role,
+                position=12,
+                face='',
+            )
+
+        with self.assertRaises(ValidationError) as ctx:
+            branch.merge(user=self.user, commit=True)
+
+        entry = build_error_report(ctx.exception)
+        self.assertEqual(entry['type'], 'validation_error')
+        self.assertEqual(entry['field'], 'face')
+        self.assertEqual(entry['detail'], ctx.exception.message_dict['face'][0])
+        self.assertIn('face', str(get_merge_recommendations(entry, merge_strategy=self.MERGE_STRATEGY)[0]))
+
+
+class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
     """Test cases for Branch merge using iterative merge strategy."""
 
     MERGE_STRATEGY = BranchMergeStrategyChoices.ITERATIVE

@@ -1,7 +1,7 @@
 import re
 
 from django.apps import apps
-from django.core.exceptions import ValidationError
+from django.core.exceptions import NON_FIELD_ERRORS, ValidationError
 from django.db import IntegrityError
 from django.utils.translation import gettext as _
 from django.utils.translation import gettext_lazy as _l
@@ -22,10 +22,19 @@ _REC_TRY_SQUASH_UNIQUE = _l(
     'Switch to the Squash merge strategy, which handles these types of conflicts better.'
 )
 _REC_FIX_FIELD = _l(
-    'Fix the invalid value for field "%(field)s" on the affected object in the branch before retrying.'
+    'Resolve the condition described above. If the value of "%(field)s" is valid within the branch, it'
+    ' collides with an object that exists only in main — that object is neither visible nor editable from'
+    ' within the branch, so move or delete it there.'
 )
 _REC_FIX_GENERIC = _l(
-    'Fix the invalid value on the affected object in the branch before retrying.'
+    'Resolve the condition described above. If the affected object is valid within the branch, it collides'
+    ' with an object that exists only in main — that object is neither visible nor editable from within the'
+    ' branch, so move or delete it there.'
+)
+_REC_FIX_IN_BRANCH_THEN_SQUASH = _l(
+    'If you resolve it by changing the object in the branch, merge using the Squash merge strategy. The'
+    ' Iterative strategy replays every recorded change in order, so it will apply the original value again'
+    ' and fail identically; Squash applies only the final state of each object.'
 )
 _REC_REVIEW_LOG = _l('Review the job log for full error details.')
 _REC_TRY_SQUASH_DB = _l(
@@ -45,6 +54,36 @@ def annotate_validation_error(exc, model_class, object_id, content_type_id):
     exc.netbox_branching_model = model_class
     exc.netbox_branching_object_id = object_id
     exc.netbox_branching_content_type_id = content_type_id
+
+
+def _classify_validation_error(exc):
+    """
+    Return an ``(is_uniqueness, first_field)`` tuple for a ValidationError. ``first_field`` is
+    None for an error that names no field -- including one keyed on Django's NON_FIELD_ERRORS
+    sentinel, which must never reach the report as if it were a field.
+    """
+    def named(field):
+        return None if field == NON_FIELD_ERRORS else field
+
+    if hasattr(exc, 'error_dict'):
+        for field, field_errors in exc.error_dict.items():
+            if any(e.code in ('unique', 'unique_together') for e in field_errors):
+                return True, named(field)
+        return False, named(next(iter(exc.error_dict), None))
+    if hasattr(exc, 'error_list') and exc.error_list:
+        return any(e.code in ('unique', 'unique_together') for e in exc.error_list), None
+    return False, None
+
+
+def _first_error_message(exc, field):
+    """Return the underlying validation message for ``field``, for display in the report."""
+    if hasattr(exc, 'error_dict'):
+        errors = exc.error_dict.get(field) or next(iter(exc.error_dict.values()), None)
+    else:
+        errors = getattr(exc, 'error_list', None)
+    if errors:
+        return ' '.join(errors[0].messages)
+    return None
 
 
 def _get_field_from_constraint(table_name, constraint_name):
@@ -97,6 +136,7 @@ def _analyze_integrity_error(exc, table_model_map):
             'model': table_model_map.get(table_name) if table_name else None,
             'field': field,
             'value': value,
+            'detail': None,
             'object_id': None,
             'content_type_id': None,
         }
@@ -106,6 +146,7 @@ def _analyze_integrity_error(exc, table_model_map):
         'model': None,
         'field': None,
         'value': None,
+        'detail': None,
         'object_id': None,
         'content_type_id': None,
     }
@@ -116,25 +157,15 @@ def _analyze_validation_error(exc):
     model_class = getattr(exc, 'netbox_branching_model', None)
     model_name = model_class._meta.verbose_name if model_class else None
 
-    is_uniqueness = False
-    first_field = None
-
-    if hasattr(exc, 'error_dict'):
-        for field, field_errors in exc.error_dict.items():
-            if any(e.code in ('unique', 'unique_together') for e in field_errors):
-                is_uniqueness = True
-                first_field = field
-                break
-        if not is_uniqueness:
-            first_field = next(iter(exc.error_dict), None)
-    elif hasattr(exc, 'error_list') and exc.error_list:
-        is_uniqueness = any(e.code in ('unique', 'unique_together') for e in exc.error_list)
+    is_uniqueness, first_field = _classify_validation_error(exc)
 
     return {
         'type': 'unique_constraint' if is_uniqueness else 'validation_error',
         'model': model_name,
         'field': first_field,
         'value': None,
+        # The underlying message, which often names the state in main that blocked the change (#632)
+        'detail': _first_error_message(exc, first_field),
         'object_id': getattr(exc, 'netbox_branching_object_id', None),
         'content_type_id': getattr(exc, 'netbox_branching_content_type_id', None),
     }
@@ -143,7 +174,7 @@ def _analyze_validation_error(exc):
 def build_error_report(exc):
     """
     Analyze an exception and return a structured report entry dict containing:
-    type, model, field, value, object_id, content_type_id.
+    type, model, field, value, detail, object_id, content_type_id.
     """
     table_model_map = {model._meta.db_table: model._meta.verbose_name for model in apps.get_models()}
     if isinstance(exc, IntegrityError):
@@ -155,6 +186,7 @@ def build_error_report(exc):
         'model': None,
         'field': None,
         'value': None,
+        'detail': None,
         'object_id': None,
         'content_type_id': None,
     }
@@ -181,9 +213,10 @@ def get_entry_message(entry):
 
     if error_type == 'validation_error':
         parts = [p for p in [model_str, field_str] if p]
-        if parts:
-            return _('Validation error on %(where)s.') % {'where': ' '.join(parts)}
-        return _('Validation error.')
+        where = ' '.join(parts) if parts else _('the affected object')
+        if detail := entry.get('detail'):
+            return _('Validation error on %(where)s: %(detail)s') % {'where': where, 'detail': detail}
+        return _('Validation error on %(where)s.') % {'where': where}
 
     return _('An unexpected database error occurred.')
 
@@ -206,9 +239,12 @@ def get_merge_recommendations(entry, merge_strategy=None):
         return [rename_rec, _REC_TRY_SQUASH_UNIQUE]
 
     if error_type == 'validation_error':
-        if field:
-            return [_REC_FIX_FIELD % {'field': field}]
-        return [_REC_FIX_GENERIC]
+        # Iterative replays the original recorded value, so a branch-side fix only takes effect
+        # under squash -- true of any replayed change, not just a collision with main. (#632)
+        recs = [_REC_FIX_FIELD % {'field': field} if field else _REC_FIX_GENERIC]
+        if not is_squash:
+            recs.append(_REC_FIX_IN_BRANCH_THEN_SQUASH)
+        return recs
 
     if is_squash:
         return [_REC_REVIEW_LOG]
