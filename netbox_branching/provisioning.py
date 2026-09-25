@@ -8,6 +8,7 @@ two heaviest phases across a thread pool, using PostgreSQL's exported snapshot
 mechanism (the same one pg_dump --jobs uses) so that every worker reads main from
 an identical MVCC view.
 """
+
 import logging
 import re
 import threading
@@ -76,7 +77,7 @@ def _cancel_backends(pids):
         with conn.cursor() as cursor:
             for pid in pids:
                 try:
-                    cursor.execute("SELECT pg_cancel_backend(%s)", [pid])
+                    cursor.execute('SELECT pg_cancel_backend(%s)', [pid])
                     # pg_cancel_backend returns false (not an error) when the backend
                     # is already gone or can't be signalled. The worker's query is then
                     # NOT interrupted, so its locks persist and the downstream
@@ -85,19 +86,18 @@ def _cancel_backends(pids):
                     row = cursor.fetchone()
                     if not (row and row[0]):
                         logger.warning(
-                            f"pg_cancel_backend({pid}) returned false; that worker may still "
-                            f"be running and holding locks, which can delay schema cleanup."
+                            f'pg_cancel_backend({pid}) returned false; that worker may still '
+                            f'be running and holding locks, which can delay schema cleanup.'
                         )
                 except Exception:
-                    logger.exception(f"Failed to cancel worker backend {pid}")
+                    logger.exception(f'Failed to cancel worker backend {pid}')
     except Exception:
         # If we couldn't cancel the in-flight workers, the downstream DROP SCHEMA
         # cleanup will block on their table locks until they finish naturally —
         # potentially minutes on a loaded system. Warn loudly so the apparent hang
         # is diagnosable.
         logger.warning(
-            "Failed to cancel in-flight provisioning workers; schema cleanup may block "
-            "until they finish on their own.",
+            'Failed to cancel in-flight provisioning workers; schema cleanup may block until they finish on their own.',
             exc_info=True,
         )
     finally:
@@ -105,7 +105,7 @@ def _cancel_backends(pids):
             try:
                 conn.close()
             except Exception:
-                logger.debug("Ignoring error while closing cancellation connection", exc_info=True)
+                logger.debug('Ignoring error while closing cancellation connection', exc_info=True)
 
 
 def _run_pool(tasks, label, workers):
@@ -151,7 +151,7 @@ def _run_pool(tasks, label, workers):
             first = not errors
             errors.append(exc)
         if first:
-            logger.error(f"{label} worker failed", exc_info=exc)
+            logger.error(f'{label} worker failed', exc_info=exc)
             cancel_event.set()
             with pids_lock:
                 to_cancel = list(pids)
@@ -169,7 +169,7 @@ def _run_pool(tasks, label, workers):
             # not "simplify" it to connections[alias].
             conn = connections.create_connection(DEFAULT_DB_ALIAS)
             with conn.cursor() as cursor:
-                cursor.execute("SELECT pg_backend_pid()")
+                cursor.execute('SELECT pg_backend_pid()')
                 with pids_lock:
                     pids.append(cursor.fetchone()[0])
             while not cancel_event.is_set():
@@ -178,14 +178,14 @@ def _run_pool(tasks, label, workers):
                     break
                 with conn.cursor() as cursor:
                     task(cursor)
-        except Exception as e:  # noqa: BLE001 — any task failure must abort the whole pool
+        except Exception as e:
             record_failure(e)
         finally:
             if conn is not None:
                 try:
                     conn.close()
                 except Exception:
-                    logger.debug("Ignoring error while closing worker connection", exc_info=True)
+                    logger.debug('Ignoring error while closing worker connection', exc_info=True)
 
     with ThreadPoolExecutor(max_workers=workers, thread_name_prefix=label) as pool:
         futures = [pool.submit(worker) for _ in range(workers)]
@@ -209,7 +209,7 @@ def build_main_index_map(cursor, main_schema):
         main_schema: Name of the schema whose indexes are read.
     """
     cursor.execute(
-        "SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = %s",
+        'SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = %s',
         [main_schema],
     )
     result = defaultdict(list)
@@ -242,7 +242,7 @@ def build_main_table_sizes(cursor, main_schema):
         """,
         [main_schema],
     )
-    return {tablename: size for tablename, size in cursor.fetchall()}
+    return dict(cursor.fetchall())
 
 
 def build_main_constraint_map(cursor, main_schema):
@@ -324,15 +324,15 @@ def parallel_copy_tables(tables, snapshot_token, schema, main_schema, workers):
         # longer matches _SNAPSHOT_TOKEN_RE — not an injection attempt. Surface the
         # raw token and the cause so widening the pattern is an obvious next step.
         raise ValueError(
-            f"Refusing unexpected snapshot token format: {snapshot_token!r}. This token comes from "
-            f"pg_export_snapshot(); if it is well-formed for your PostgreSQL version, "
-            f"_SNAPSHOT_TOKEN_RE in netbox_branching/provisioning.py needs to be widened to accept it."
+            f'Refusing unexpected snapshot token format: {snapshot_token!r}. This token comes from '
+            f'pg_export_snapshot(); if it is well-formed for your PostgreSQL version, '
+            f'_SNAPSHOT_TOKEN_RE in netbox_branching/provisioning.py needs to be widened to accept it.'
         )
 
     def make_copy_task(table):
         def copy(cursor):
-            cursor.execute("BEGIN")
-            cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            cursor.execute('BEGIN')
+            cursor.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ')
             cursor.execute(f"SET TRANSACTION SNAPSHOT '{snapshot_token}'")
 
             main_table = f'{quote_ident(main_schema)}.{quote_ident(table)}'
@@ -341,7 +341,7 @@ def parallel_copy_tables(tables, snapshot_token, schema, main_schema, workers):
             # Safe only because triggers are replicated after this phase: a trigger on the
             # branch table would resolve its own targets via this connection's search_path
             # (the main schema) and write there. See Branch._replicate_triggers().
-            cursor.execute(f"INSERT INTO {schema_table} SELECT * FROM {main_table}")
+            cursor.execute(f'INSERT INTO {schema_table} SELECT * FROM {main_table}')
 
             # Point the branch table's id default at main's sequence so all branches
             # continue to share a global id namespace (matches the previous behavior).
@@ -351,19 +351,18 @@ def parallel_copy_tables(tables, snapshot_token, schema, main_schema, workers):
             row = cursor.fetchone()
             if row and row[0]:
                 cursor.execute(
-                    f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)",
+                    f'ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval(%s)',
                     [row[0]],
                 )
 
-            cursor.execute("COMMIT")
+            cursor.execute('COMMIT')
+
         return copy
 
     _run_pool([make_copy_task(t) for t in tables], 'branch-copy', workers)
 
 
-def parallel_build_indexes(
-    index_tasks, schema, main_schema, workers, skip_indexes=()
-):
+def parallel_build_indexes(index_tasks, schema, main_schema, workers, skip_indexes=()):
     """
     Build indexes against the populated branch tables.
 
@@ -397,9 +396,7 @@ def parallel_build_indexes(
     # quote_ident() gives us the exact same form, so the substring replacement
     # works regardless of how the operator named main_schema.
     with connections[DEFAULT_DB_ALIAS].cursor() as cursor:
-        cursor.execute(
-            "SELECT quote_ident(%s), quote_ident(%s)", [main_schema, schema]
-        )
+        cursor.execute('SELECT quote_ident(%s), quote_ident(%s)', [main_schema, schema])
         main_qident, schema_qident = cursor.fetchone()
 
     main_target = f' ON {main_qident}.'
@@ -414,8 +411,8 @@ def parallel_build_indexes(
             # index — a missing PK/UNIQUE backing index on a branch would be
             # extremely hard to diagnose downstream.
             raise RuntimeError(
-                f"Cannot rewrite indexdef for {indexname} to branch schema: "
-                f"definition does not contain {main_target!r}: {indexdef!r}"
+                f'Cannot rewrite indexdef for {indexname} to branch schema: '
+                f'definition does not contain {main_target!r}: {indexdef!r}'
             )
         # Only the table reference carries the ` ON <schema>.` prefix, so this
         # rewrites exactly that and nothing else. A schema-qualified function in an
@@ -427,6 +424,7 @@ def parallel_build_indexes(
         def build(cursor):
             logger.debug(f'Creating index {schema}.{indexname}')
             cursor.execute(new_def)
+
         return build
 
     _run_pool([make_build_task(t) for t in tasks], 'branch-index', workers)
@@ -449,6 +447,7 @@ def parallel_add_constraints(constraint_tasks, schema, workers):
         schema: Destination branch schema the constraints are added to.
         workers: Maximum number of worker threads (and backends) to use.
     """
+
     def make_add_task(item):
         tablename, conname, condef = item
         # Always-quote identifiers here — condef comes from pg_get_constraintdef
@@ -457,13 +456,13 @@ def parallel_add_constraints(constraint_tasks, schema, workers):
         # (Named sql_text, not sql, to avoid shadowing the module-level
         # `from psycopg import sql` import this module uses for quoting.)
         sql_text = (
-            f'ALTER TABLE {quote_ident(schema)}.{quote_ident(tablename)} '
-            f'ADD CONSTRAINT {quote_ident(conname)} {condef}'
+            f'ALTER TABLE {quote_ident(schema)}.{quote_ident(tablename)} ADD CONSTRAINT {quote_ident(conname)} {condef}'
         )
 
         def add(cursor):
             logger.debug(f'Adding constraint {conname} on {schema}.{tablename}')
             cursor.execute(sql_text)
+
         return add
 
     _run_pool([make_add_task(t) for t in constraint_tasks], 'branch-constraint', workers)
@@ -493,6 +492,7 @@ def parallel_analyze_tables(tables, schema, workers):
         schema: Branch schema the tables live in.
         workers: Maximum number of worker threads (and backends) to use.
     """
+
     def make_analyze_task(table):
         sql_text = f'ANALYZE {quote_ident(schema)}.{quote_ident(table)}'
 
@@ -508,6 +508,7 @@ def parallel_analyze_tables(tables, schema, workers):
                     f'ANALYZE of {schema}.{table} failed; leaving its statistics to autovacuum.',
                     exc_info=True,
                 )
+
         return analyze
 
     _run_pool([make_analyze_task(t) for t in tables], 'branch-analyze', workers)

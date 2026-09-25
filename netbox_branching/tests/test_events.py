@@ -2,17 +2,17 @@ import uuid
 from unittest import mock
 
 import django_rq
-from core.events import OBJECT_CREATED
-from core.models import ObjectType
-from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.db import connection, connections
 from django.test import RequestFactory, override_settings
 from django.urls import reverse
+
+from core.events import OBJECT_CREATED
+from core.models import ObjectType
+from dcim.models import Site
 from extras.choices import EventRuleActionChoices
 from extras.events import enqueue_event, flush_events
 from extras.models import EventRule, Webhook
-
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.events import BRANCH_DEPROVISIONED
 from netbox_branching.models import Branch
@@ -75,11 +75,14 @@ class AddBranchContextTestCase(FastTeardownTransactionTestCase):
 
         self.assertEqual(self.queue.count, 1)
         data = self.queue.jobs[0].kwargs['data']
-        self.assertEqual(data['active_branch'], {
-            'id': self.branch.pk,
-            'name': self.branch.name,
-            'schema_id': self.branch.schema_id,
-        })
+        self.assertEqual(
+            data['active_branch'],
+            {
+                'id': self.branch.pk,
+                'name': self.branch.name,
+                'schema_id': self.branch.schema_id,
+            },
+        )
 
     @override_settings(EVENTS_PIPELINE=ENRICHED_PIPELINE)
     def test_no_branch_active_no_enrichment(self):
@@ -120,6 +123,7 @@ class BranchDeprovisionedEventRuleTestCase(FastTeardownTransactionTestCase):
     500 rolled the whole atomic block back, so the branch survived and could
     never be deleted while the rule existed.
     """
+
     serialized_rollback = True
 
     def setUp(self):
@@ -159,11 +163,8 @@ class BranchDeprovisionedEventRuleTestCase(FastTeardownTransactionTestCase):
 
         self.assertFalse(Branch.objects.filter(pk=branch_pk).exists())
         with connection.cursor() as cursor:
-            cursor.execute(
-                "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
-                [schema_name]
-            )
-            self.assertIsNone(cursor.fetchone(), msg="Schema was not dropped")
+            cursor.execute('SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s', [schema_name])
+            self.assertIsNone(cursor.fetchone(), msg='Schema was not dropped')
 
     def test_deprovision_event_payload_identifies_the_branch(self):
         """
@@ -184,8 +185,9 @@ class BranchDeprovisionedEventRuleTestCase(FastTeardownTransactionTestCase):
             branch.delete()
 
         self.assertEqual(
-            mock_process.call_count, 1,
-            msg="Expected exactly one dispatch; 0 means the EventRule did not match the event type"
+            mock_process.call_count,
+            1,
+            msg='Expected exactly one dispatch; 0 means the EventRule did not match the event type',
         )
         kwargs = mock_process.call_args.kwargs
         # NetBox 4.5.2+ nests the payload under `event`; older versions pass it flat.

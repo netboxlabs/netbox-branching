@@ -1,14 +1,15 @@
 from collections import defaultdict
 
-from core.choices import JobStatusChoices, ObjectChangeActionChoices
-from core.filtersets import ObjectChangeFilterSet
-from core.models import ObjectChange
 from django.contrib import messages
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
 from django.db.models import Count, Min, Q
 from django.shortcuts import redirect, render
 from django.utils.translation import gettext_lazy as _
+
+from core.choices import JobStatusChoices, ObjectChangeActionChoices
+from core.filtersets import ObjectChangeFilterSet
+from core.models import ObjectChange
 from netbox.views import generic
 from netbox.views.generic.base import BaseMultiObjectView
 from utilities.views import GetReturnURLMixin, ViewTab, register_model_view
@@ -119,12 +120,8 @@ class BranchDiffView(generic.ObjectChildrenView):
     child_model = ChangeDiff
     filterset = filtersets.ChangeDiffFilterSet
     table = tables.ChangeDiffTable
-    actions = {}  # noqa: RUF012
-    tab = ViewTab(
-        label=_('Diff'),
-        badge=_get_diff_count,
-        permission='netbox_branching.view_branch'
-    )
+    actions = {}
+    tab = ViewTab(label=_('Diff'), badge=_get_diff_count, permission='netbox_branching.view_branch')
 
     def get_children(self, request, parent):
         return ChangeDiff.objects.filter(branch=parent)
@@ -137,6 +134,7 @@ class GroupedChangesViewMixin:
     ChangesTable when `request_id` is present in the query string (drill-down from either
     the Request ID link or a Created/Updated/Deleted count link).
     """
+
     table = tables.ChangesGroupedTable
     flat_table = tables.ChangesTable
 
@@ -147,12 +145,14 @@ class GroupedChangesViewMixin:
     @staticmethod
     def _aggregate(qs):
         groups = list(
-            qs.values('request_id', 'changed_object_type_id', 'user_name').annotate(
+            qs.values('request_id', 'changed_object_type_id', 'user_name')
+            .annotate(
                 time=Min('time'),
                 creates=Count('pk', filter=Q(action=ObjectChangeActionChoices.ACTION_CREATE)),
                 updates=Count('pk', filter=Q(action=ObjectChangeActionChoices.ACTION_UPDATE)),
                 deletes=Count('pk', filter=Q(action=ObjectChangeActionChoices.ACTION_DELETE)),
-            ).order_by('time')
+            )
+            .order_by('time')
         )
         ct_ids = {g['changed_object_type_id'] for g in groups if g['changed_object_type_id']}
         cts = {ct.id: ct for ct in ContentType.objects.filter(id__in=ct_ids)}
@@ -176,11 +176,11 @@ class BranchChangesBehindView(GroupedChangesViewMixin, generic.ObjectChildrenVie
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
-    actions = {}  # noqa: RUF012
+    actions = {}
     tab = ViewTab(
         label=_('Changes Behind'),
         badge=lambda obj: obj.get_unsynced_changes().count(),
-        permission='netbox_branching.view_branch'
+        permission='netbox_branching.view_branch',
     )
 
     def get_children(self, request, parent):
@@ -192,11 +192,11 @@ class BranchChangesAheadView(GroupedChangesViewMixin, generic.ObjectChildrenView
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
-    actions = {}  # noqa: RUF012
+    actions = {}
     tab = ViewTab(
         label=_('Changes Ahead'),
         badge=lambda obj: obj.get_unmerged_changes().count(),
-        permission='netbox_branching.view_branch'
+        permission='netbox_branching.view_branch',
     )
 
     def get_children(self, request, parent):
@@ -236,14 +236,16 @@ class BranchJobReportView(generic.ObjectView):
                     value = entry.get('value')
             else:
                 value = entry.get('value')
-            entries.append({
-                **entry,
-                'value': value,
-                'message': get_entry_message(entry),
-                'recommendations': get_merge_recommendations(entry, merge_strategy=merge_strategy),
-                'object_url': object_url,
-                'object_str': object_str,
-            })
+            entries.append(
+                {
+                    **entry,
+                    'value': value,
+                    'message': get_entry_message(entry),
+                    'recommendations': get_merge_recommendations(entry, merge_strategy=merge_strategy),
+                    'object_url': object_url,
+                    'object_str': object_str,
+                }
+            )
         return entries
 
     def get_extra_context(self, request, instance):
@@ -272,12 +274,12 @@ class BranchChangesMergedView(GroupedChangesViewMixin, generic.ObjectChildrenVie
     queryset = Branch.objects.all()
     child_model = ObjectChange
     filterset = ObjectChangeFilterSet
-    actions = {}  # noqa: RUF012
+    actions = {}
     tab = ViewTab(
         label=_('Changes Merged'),
         badge=lambda obj: obj.get_merged_changes().count(),
         permission='netbox_branching.view_branch',
-        hide_if_empty=True
+        hide_if_empty=True,
     )
 
     def get_children(self, request, parent):
@@ -288,13 +290,12 @@ class BaseBranchActionView(generic.ObjectView):
     """
     Base view for syncing or merging a Branch.
     """
+
     queryset = Branch.objects.all()
     form = None  # Must be set by derived classes
     template_name = 'netbox_branching/branch_action.html'
     action = None
-    valid_states = (
-        BranchStatusChoices.READY,
-    )
+    valid_states = (BranchStatusChoices.READY,)
 
     def get_required_permission(self):
         return f'netbox_branching.{self.action}_branch'
@@ -337,10 +338,12 @@ class BaseBranchActionView(generic.ObjectView):
 
         def resolve(counts_dict):
             ct_map = {ct.pk: ct for ct in ContentType.objects.filter(pk__in=counts_dict)}
-            return dict(sorted(
-                {ct_map[ct_id]: count for ct_id, count in counts_dict.items()}.items(),
-                key=lambda item: item[0].model
-            ))
+            return dict(
+                sorted(
+                    {ct_map[ct_id]: count for ct_id, count in counts_dict.items()}.items(),
+                    key=lambda item: item[0].model,
+                )
+            )
 
         return {
             'creates': resolve(creates),
@@ -355,7 +358,7 @@ class BaseBranchActionView(generic.ObjectView):
         return None
 
     def do_action(self, branch, request, form):
-        raise NotImplementedError(f"{self.__class__} must implement action() method.")
+        raise NotImplementedError(f'{self.__class__} must implement action() method.')
 
     def _build_context(self, branch, form, action_permitted):
         return {
@@ -381,9 +384,12 @@ class BaseBranchActionView(generic.ObjectView):
         form = self.form(branch, request.POST, allow_commit=action_permitted)
 
         if branch.status not in self.valid_states:
-            messages.error(request, _(
-                "The branch must be in one of the following states to perform this action: {valid_states}"
-            ).format(valid_states=', '.join(self.valid_states)))
+            messages.error(
+                request,
+                _('The branch must be in one of the following states to perform this action: {valid_states}').format(
+                    valid_states=', '.join(self.valid_states)
+                ),
+            )
         elif form.is_valid():
             return self.do_action(branch, request, form)
 
@@ -400,12 +406,8 @@ class BranchSyncView(BaseBranchActionView):
 
     def do_action(self, branch, request, form):
         # Enqueue a background job to sync the Branch
-        SyncBranchJob.enqueue(
-            instance=branch,
-            user=request.user,
-            commit=form.cleaned_data['commit']
-        )
-        messages.success(request, _("Syncing of branch {branch} in progress").format(branch=branch))
+        SyncBranchJob.enqueue(instance=branch, user=request.user, commit=form.cleaned_data['commit'])
+        messages.success(request, _('Syncing of branch {branch} in progress').format(branch=branch))
 
         return redirect(branch.get_absolute_url())
 
@@ -424,12 +426,8 @@ class BranchMergeView(BaseBranchActionView):
         branch.save()
 
         # Enqueue a background job to merge the Branch
-        MergeBranchJob.enqueue(
-            instance=branch,
-            user=request.user,
-            commit=form.cleaned_data['commit']
-        )
-        messages.success(request, _("Merging of branch {branch} in progress").format(branch=branch))
+        MergeBranchJob.enqueue(instance=branch, user=request.user, commit=form.cleaned_data['commit'])
+        messages.success(request, _('Merging of branch {branch} in progress').format(branch=branch))
 
         return redirect(branch.get_absolute_url())
 
@@ -438,18 +436,12 @@ class BranchMergeView(BaseBranchActionView):
 class BranchRevertView(BaseBranchActionView):
     action = 'revert'
     form = forms.BranchRevertForm
-    valid_states = (
-        BranchStatusChoices.MERGED,
-    )
+    valid_states = (BranchStatusChoices.MERGED,)
 
     def do_action(self, branch, request, form):
         # Enqueue a background job to revert the Branch
-        RevertBranchJob.enqueue(
-            instance=branch,
-            user=request.user,
-            commit=form.cleaned_data['commit']
-        )
-        messages.success(request, _("Reverting branch {branch}").format(branch=branch))
+        RevertBranchJob.enqueue(instance=branch, user=request.user, commit=form.cleaned_data['commit'])
+        messages.success(request, _('Reverting branch {branch}').format(branch=branch))
 
         return redirect(branch.get_absolute_url())
 
@@ -459,6 +451,7 @@ class BranchArchiveView(generic.ObjectView):
     """
     Archive a merged Branch, deleting its database schema but retaining the Branch object.
     """
+
     queryset = Branch.objects.all()
     template_name = 'netbox_branching/branch_archive.html'
 
@@ -468,10 +461,10 @@ class BranchArchiveView(generic.ObjectView):
     @staticmethod
     def _validate(request, branch):
         if branch.status != BranchStatusChoices.MERGED:
-            messages.error(request, _("Only merged branches can be archived."))
+            messages.error(request, _('Only merged branches can be archived.'))
             return redirect(branch.get_absolute_url())
         if not branch.can_revert:
-            messages.error(request, _("Reverting this branch is disallowed per policy."))
+            messages.error(request, _('Reverting this branch is disallowed per policy.'))
             return redirect(branch.get_absolute_url())
         return None
 
@@ -480,10 +473,14 @@ class BranchArchiveView(generic.ObjectView):
         self._validate(request, branch)
         form = forms.ConfirmationForm()
 
-        return render(request, self.template_name, {
-            'branch': branch,
-            'form': form,
-        })
+        return render(
+            request,
+            self.template_name,
+            {
+                'branch': branch,
+                'form': form,
+            },
+        )
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
@@ -493,13 +490,17 @@ class BranchArchiveView(generic.ObjectView):
         if form.is_valid():
             branch.archive(user=request.user)
 
-            messages.success(request, _("Branch {branch} has been archived.").format(branch=branch))
+            messages.success(request, _('Branch {branch} has been archived.').format(branch=branch))
             return redirect(branch.get_absolute_url())
 
-        return render(request, self.template_name, {
-            'branch': branch,
-            'form': form,
-        })
+        return render(
+            request,
+            self.template_name,
+            {
+                'branch': branch,
+                'form': form,
+            },
+        )
 
 
 @register_model_view(Branch, 'migrate')
@@ -516,11 +517,15 @@ class BranchMigrateView(generic.ObjectView):
         action_permitted = branch.can_migrate
         form = self.form()
 
-        return render(request, self.template_name, {
-            'branch': branch,
-            'form': form,
-            'action_permitted': action_permitted,
-        })
+        return render(
+            request,
+            self.template_name,
+            {
+                'branch': branch,
+                'form': form,
+                'action_permitted': action_permitted,
+            },
+        )
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
@@ -528,18 +533,22 @@ class BranchMigrateView(generic.ObjectView):
         form = self.form(request.POST)
 
         if branch.status != BranchStatusChoices.PENDING_MIGRATIONS:
-            messages.error(request, _("The branch is not ready to be migrated."))
+            messages.error(request, _('The branch is not ready to be migrated.'))
         elif form.is_valid():
             # Enqueue a background job to migrate the Branch
             MigrateBranchJob.enqueue(instance=branch, user=request.user)
-            messages.success(request, _("Migration of branch {branch} in progress").format(branch=branch))
+            messages.success(request, _('Migration of branch {branch} in progress').format(branch=branch))
             return redirect(branch.get_absolute_url())
 
-        return render(request, self.template_name, {
-            'branch': branch,
-            'form': form,
-            'action_permitted': action_permitted,
-        })
+        return render(
+            request,
+            self.template_name,
+            {
+                'branch': branch,
+                'form': form,
+                'action_permitted': action_permitted,
+            },
+        )
 
 
 @register_model_view(Branch, 'recover')
@@ -548,6 +557,7 @@ class BranchRecoverView(generic.ObjectView):
     Reset a branch which is stuck in a transitional status because the job responsible for it is no
     longer running (see issue #622).
     """
+
     queryset = Branch.objects.all()
     template_name = 'netbox_branching/branch_recover.html'
 
@@ -570,7 +580,7 @@ class BranchRecoverView(generic.ObjectView):
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
         if branch.status not in BranchStatusChoices.TRANSITIONAL:
-            messages.error(request, _("This branch is not in a transitional status."))
+            messages.error(request, _('This branch is not in a transitional status.'))
             return redirect(branch.get_absolute_url())
 
         form = forms.RecoverBranchForm(branch)
@@ -580,24 +590,22 @@ class BranchRecoverView(generic.ObjectView):
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
         if branch.status not in BranchStatusChoices.TRANSITIONAL:
-            messages.error(request, _("This branch is not in a transitional status."))
+            messages.error(request, _('This branch is not in a transitional status.'))
             return redirect(branch.get_absolute_url())
 
         form = forms.RecoverBranchForm(branch, request.POST)
         if form.is_valid():
             # Determine this before recovering, since the reset overwrites the branch's status.
-            retry = bool(
-                branch.status in BranchStatusChoices.RECOVERY_RETRYABLE and form.cleaned_data.get('retry')
-            )
+            retry = bool(branch.status in BranchStatusChoices.RECOVERY_RETRYABLE and form.cleaned_data.get('retry'))
             # The operator has explicitly confirmed that the operation is no longer running, so
             # recover the branch even if a job record still claims otherwise (the record may have
             # been purged, or its worker may have died in a way RQ cannot report).
             new_status = branch.force_recover(user=request.user, retry=retry)
             status_label = dict(BranchStatusChoices).get(new_status, new_status)
             if retry:
-                message = _("Branch {branch} has been reset to {status} and the operation re-queued.")
+                message = _('Branch {branch} has been reset to {status} and the operation re-queued.')
             else:
-                message = _("Branch {branch} has been reset to {status}.")
+                message = _('Branch {branch} has been reset to {status}.')
             messages.success(request, message.format(branch=branch, status=status_label))
             return redirect(branch.get_absolute_url())
 
@@ -638,7 +646,8 @@ class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
             form = forms.BulkMigrateBranchForm(request.POST)
             if form.is_valid():
                 branches = [
-                    branch for branch in form.cleaned_data['pk']
+                    branch
+                    for branch in form.cleaned_data['pk']
                     if branch.status == BranchStatusChoices.PENDING_MIGRATIONS and branch.can_migrate
                 ]
                 skipped = len(form.cleaned_data['pk']) - len(branches)
@@ -646,14 +655,10 @@ class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
                 for branch in branches:
                     MigrateBranchJob.enqueue(instance=branch, user=request.user)
                 if count:
-                    messages.success(
-                        request,
-                        _('Queued migration jobs for {count} branch(es).').format(count=count)
-                    )
+                    messages.success(request, _('Queued migration jobs for {count} branch(es).').format(count=count))
                 if skipped:
                     messages.warning(
-                        request,
-                        _('Skipped {skipped} branch(es) that cannot be migrated.').format(skipped=skipped)
+                        request, _('Skipped {skipped} branch(es) that cannot be migrated.').format(skipped=skipped)
                     )
             return redirect(self.get_return_url(request))
 
@@ -663,7 +668,8 @@ class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
             return redirect(self.get_return_url(request))
 
         branches = [
-            branch for branch in form.cleaned_data['pk']
+            branch
+            for branch in form.cleaned_data['pk']
             if branch.status == BranchStatusChoices.PENDING_MIGRATIONS and branch.can_migrate
         ]
         table = self.table(branches, orderable=False)
@@ -674,16 +680,21 @@ class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
 
         form = forms.BulkMigrateBranchForm(initial={'pk': [b.pk for b in branches]})
 
-        return render(request, self.template_name, {
-            'form': form,
-            'table': table,
-            'return_url': self.get_return_url(request),
-        })
+        return render(
+            request,
+            self.template_name,
+            {
+                'form': form,
+                'table': table,
+                'return_url': self.get_return_url(request),
+            },
+        )
 
 
 #
 # Change diffs
 #
+
 
 class ChangeDiffListView(generic.ObjectListView):
     queryset = ChangeDiff.objects.all()

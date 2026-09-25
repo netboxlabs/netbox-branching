@@ -1,4 +1,5 @@
 from django.utils.translation import gettext as _
+
 from netbox.events import EVENT_TYPE_KIND_SUCCESS, EventType
 
 __all__ = (
@@ -27,11 +28,15 @@ def add_branch_context(events):
     for event in events:
         request = event.get('request')
         branch = getattr(request, 'active_branch', None) if request else None
-        event['data']['active_branch'] = {
-            'id': branch.pk,
-            'name': branch.name,
-            'schema_id': branch.schema_id,
-        } if branch else None
+        event['data']['active_branch'] = (
+            {
+                'id': branch.pk,
+                'name': branch.name,
+                'schema_id': branch.schema_id,
+            }
+            if branch
+            else None
+        )
 
 
 # Register core events

@@ -1,6 +1,6 @@
-from dcim.models import DeviceRole, Site
 from django.db import connections
 
+from dcim.models import DeviceRole, Site
 from netbox_branching.models import Branch
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase
 from netbox_branching.utilities import activate_branch

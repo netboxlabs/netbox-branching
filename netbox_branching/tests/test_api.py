@@ -1,21 +1,21 @@
 import json
 import uuid
 
-from core.choices import ObjectChangeActionChoices
-from core.models import Job
-from dcim.models import Cable, CableTermination, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections
 from django.test import Client, RequestFactory, TestCase
 from django.urls import reverse
-from netbox.context_managers import event_tracking
-from users.models import Token
 
+from core.choices import ObjectChangeActionChoices
+from core.models import Job
+from dcim.models import Cable, CableTermination, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
+from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase
+from users.models import Token
 
 
 class BaseAPITestCase:
@@ -37,6 +37,7 @@ class BaseAPITestCase:
         try:
             # NetBox >= 4.5
             from users.choices import TokenVersionChoices
+
             token = Token(version=TokenVersionChoices.V1, user=user)
             token.save()
         except ImportError:
@@ -49,7 +50,6 @@ class BaseAPITestCase:
 
 
 class APITestCase(BaseAPITestCase, FastTeardownTransactionTestCase):
-
     def setUp(self):
         super().setUp()
 
@@ -72,7 +72,7 @@ class APITestCase(BaseAPITestCase, FastTeardownTransactionTestCase):
         self.assertEqual(response.status_code, 200)
         data = json.loads(response.content)
         if 'results' not in data:
-            raise ValueError("Response content does not contain API results")
+            raise ValueError('Response content does not contain API results')
         return data['results']
 
     def test_without_branch(self):
@@ -86,7 +86,7 @@ class APITestCase(BaseAPITestCase, FastTeardownTransactionTestCase):
     def test_with_branch_header(self):
         url = reverse('dcim-api:site-list')
         branch = Branch.objects.first()
-        self.assertIsNotNone(branch, "Branch was not created")
+        self.assertIsNotNone(branch, 'Branch was not created')
 
         # Regular API query
         response = self.client.get(url, **self.header)
@@ -107,7 +107,7 @@ class APITestCase(BaseAPITestCase, FastTeardownTransactionTestCase):
     def test_with_branch_cookie(self):
         url = reverse('dcim-api:site-list')
         branch = Branch.objects.first()
-        self.assertIsNotNone(branch, "Branch was not created")
+        self.assertIsNotNone(branch, 'Branch was not created')
 
         # Regular API query
         response = self.client.get(url, **self.header)
@@ -116,9 +116,11 @@ class APITestCase(BaseAPITestCase, FastTeardownTransactionTestCase):
         self.assertEqual(results[0]['name'], 'Site 1')
 
         # Branch-aware API query
-        self.client.cookies.load({
-            COOKIE_NAME: branch.schema_id,
-        })
+        self.client.cookies.load(
+            {
+                COOKIE_NAME: branch.schema_id,
+            }
+        )
         response = self.client.get(url, **self.header)
         results = self.get_results(response)
         self.assertEqual(len(results), 1)
@@ -181,10 +183,7 @@ class BranchArchiveAPITestCase(BaseAPITestCase, TestCase):
 
         url = reverse('plugins-api:netbox_branching-api:branch-detail', kwargs={'pk': branch.pk})
         response = self.client.patch(
-            url,
-            data=json.dumps({'status': 'archived'}),
-            content_type='application/json',
-            **self.header
+            url, data=json.dumps({'status': 'archived'}), content_type='application/json', **self.header
         )
 
         self.assertEqual(response.status_code, 200)
@@ -200,6 +199,7 @@ class BaseBranchAPITestCase(BaseAPITestCase):
       valid_status  - branch status that allows the action
       invalid_status - branch status that should return 400
     """
+
     action = None
     valid_status = None
     invalid_status = None
@@ -226,10 +226,7 @@ class BaseBranchAPITestCase(BaseAPITestCase):
         """Omitting 'commit' from a JSON body must not raise KeyError (issue #468)."""
         branch = self.make_branch()
         response = self.client.post(
-            self.get_url(branch.pk),
-            data=json.dumps({}),
-            content_type='application/json',
-            **self.header
+            self.get_url(branch.pk), data=json.dumps({}), content_type='application/json', **self.header
         )
 
         self.assertEqual(response.status_code, 200)
@@ -237,10 +234,7 @@ class BaseBranchAPITestCase(BaseAPITestCase):
     def test_endpoint_with_commit(self):
         branch = self.make_branch()
         response = self.client.post(
-            self.get_url(branch.pk),
-            data=json.dumps({'commit': True}),
-            content_type='application/json',
-            **self.header
+            self.get_url(branch.pk), data=json.dumps({'commit': True}), content_type='application/json', **self.header
         )
 
         self.assertEqual(response.status_code, 200)
@@ -337,7 +331,7 @@ class BranchConflictAPITestMixin:
             self.get_url(branch.pk),
             data=json.dumps({'commit': False, 'acknowledge_conflicts': True}),
             content_type='application/json',
-            **self.header
+            **self.header,
         )
 
         self.assertEqual(response.status_code, 200)
@@ -351,7 +345,7 @@ class BranchConflictAPITestMixin:
             self.get_url(branch.pk),
             data=json.dumps({'commit': False, 'acknowledge_conflicts': False}),
             content_type='application/json',
-            **self.header
+            **self.header,
         )
 
         self.assertEqual(response.status_code, 409)
@@ -384,6 +378,7 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, FastTeardownTransactionTestC
     Verify that the ChangeDiff API endpoint serializes CREATE and DELETE records
     without raising AttributeError when original or modified is None.
     """
+
     serialized_rollback = True
 
     def setUp(self):
@@ -543,10 +538,7 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, FastTeardownTransactionTestC
             # than a nested dict) proves the fallback fired.
             ct_type = ContentType.objects.get_for_model(CableTermination)
             results = json.loads(response.content)['results']
-            termination_diffs = [
-                r for r in results
-                if r['object_type'] == f'{ct_type.app_label}.{ct_type.model}'
-            ]
+            termination_diffs = [r for r in results if r['object_type'] == f'{ct_type.app_label}.{ct_type.model}']
             self.assertEqual(len(termination_diffs), 2)
             for diff in termination_diffs:
                 self.assertEqual(diff['action']['value'], ObjectChangeActionChoices.ACTION_DELETE)

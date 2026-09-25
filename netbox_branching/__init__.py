@@ -1,6 +1,7 @@
 from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
+
 from netbox.plugins import PluginConfig, get_plugin_config
 from netbox.utils import register_model_feature
 
@@ -19,51 +20,38 @@ class AppConfig(PluginConfig):
     # maintenance into database triggers; branch provisioning replicates those triggers, so 4.7 is required.
     min_version = '4.7.0'
     max_version = '4.7.99'
-    middleware = (
-        'netbox_branching.middleware.BranchMiddleware',
-    )
-    default_settings = {  # noqa: RUF012
+    middleware = ('netbox_branching.middleware.BranchMiddleware',)
+    default_settings = {
         # The maximum number of working branches (excludes merged & archived branches)
         'max_working_branches': None,
-
         # The maximum number of branches which can be provisioned simultaneously
         'max_branches': None,
-
         # Models from other plugins which should be excluded from branching support
         'exempt_models': [],
-
         # The name of the main schema
         'main_schema': 'public',
-
         # This string is prefixed to the name of each new branch schema during provisioning
         'schema_prefix': 'branch_',
-
         # Job timeout in seconds for long-running operations (sync, merge, revert)
         'job_timeout': 3600,
-
         # Number of parallel workers used during branch provisioning to copy tables and build
         # indexes. Set to 1 to disable parallelism. Each worker holds its own database
         # connection for the duration of the provision.
         'provision_workers': 4,
-
         # Branch action validators
         'sync_validators': [],
         'merge_validators': [],
         'migrate_validators': [],
         'revert_validators': [],
         'archive_validators': [],
-
         # Number of days before staleness at which to display a stale warning
         'stale_warning_threshold': 7,
-
         # Automatically archive branches merged more than this many days ago (via a daily job).
         # Set to an integer number of days to enable automatic archival.
         'auto_archive_days': None,
-
         # Automatically reset branches left in a transitional status (e.g. "migrating") by a
         # background job whose worker died before it could complete. Checked hourly.
         'auto_recover_stuck_branches': True,
-
         # Seconds added to `job_timeout` before a job which still reports itself as running is
         # presumed dead. Allows for clock skew and for a worker shutting down gracefully.
         'stuck_job_grace_period': 300,
@@ -79,9 +67,7 @@ class AppConfig(PluginConfig):
 
         # Validate required settings
         if type(settings.DATABASES) is not DynamicSchemaDict:
-            raise ImproperlyConfigured(
-                "netbox_branching: DATABASES must be a DynamicSchemaDict instance."
-            )
+            raise ImproperlyConfigured('netbox_branching: DATABASES must be a DynamicSchemaDict instance.')
         if 'netbox_branching.database.BranchAwareRouter' not in settings.DATABASE_ROUTERS:
             raise ImproperlyConfigured(
                 "netbox_branching: DATABASE_ROUTERS must contain 'netbox_branching.database.BranchAwareRouter'."
@@ -92,22 +78,16 @@ class AppConfig(PluginConfig):
         workers = get_plugin_config('netbox_branching', 'provision_workers')
         if workers is not None:
             if type(workers) is not int:
-                raise ImproperlyConfigured(
-                    "netbox_branching: 'provision_workers' must be an integer."
-                )
+                raise ImproperlyConfigured("netbox_branching: 'provision_workers' must be an integer.")
             if workers < 1:
-                raise ImproperlyConfigured(
-                    "netbox_branching: 'provision_workers' must be greater than or equal to 1."
-                )
+                raise ImproperlyConfigured("netbox_branching: 'provision_workers' must be greater than or equal to 1.")
 
         # Validate auto_archive_days up front so a misconfigured value surfaces at startup rather
         # than as an opaque timedelta error the first time the daily archival job runs.
         auto_archive_days = get_plugin_config('netbox_branching', 'auto_archive_days')
         if auto_archive_days is not None:
             if type(auto_archive_days) is not int:
-                raise ImproperlyConfigured(
-                    "netbox_branching: 'auto_archive_days' must be an integer or None."
-                )
+                raise ImproperlyConfigured("netbox_branching: 'auto_archive_days' must be an integer or None.")
             if auto_archive_days < 1:
                 raise ImproperlyConfigured(
                     "netbox_branching: 'auto_archive_days' must be greater than or equal to 1 (if enabled)."
@@ -117,9 +97,7 @@ class AppConfig(PluginConfig):
         # recovery job to either fire prematurely or silently never fire at all.
         grace_period = get_plugin_config('netbox_branching', 'stuck_job_grace_period')
         if type(grace_period) is not int or grace_period < 0:
-            raise ImproperlyConfigured(
-                "netbox_branching: 'stuck_job_grace_period' must be a non-negative integer."
-            )
+            raise ImproperlyConfigured("netbox_branching: 'stuck_job_grace_period' must be a non-negative integer.")
 
         # Register cleanup handler for branch connections (#358)
         # This ensures branch connections are closed when they exceed CONN_MAX_AGE,
@@ -138,7 +116,7 @@ class AppConfig(PluginConfig):
                 try:
                     func = import_string(validator_path)
                 except ImportError:
-                    raise ImproperlyConfigured(f"Branch {action} validator not found: {validator_path}")
+                    raise ImproperlyConfigured(f'Branch {action} validator not found: {validator_path}')
                 Branch.register_preaction_check(func, action)
 
 

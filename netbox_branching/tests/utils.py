@@ -6,8 +6,8 @@ from django.core.management import call_command
 from django.core.management.sql import emit_post_migrate_signal
 from django.db import DatabaseError, connections
 from django.test import TransactionTestCase
-from netbox.plugins import get_plugin_config
 
+from netbox.plugins import get_plugin_config
 from netbox_branching.models import Branch
 from netbox_branching.provisioning import quote_ident
 
@@ -45,9 +45,7 @@ def fetchall(cursor):
     Map cursor.fetchall() into a list of named tuples for convenience.
     """
     result = namedtuple('Result', [col[0] for col in cursor.description])
-    return [
-        result(*row) for row in cursor.fetchall()
-    ]
+    return [result(*row) for row in cursor.fetchall()]
 
 
 def fetchone(cursor):
@@ -81,6 +79,7 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
     replaced, and the post_migrate signal Django's flush would have emitted is
     emitted here under the same condition Django uses.
     """
+
     # Cached per connection alias: the probe is built from the table list, which
     # cannot change while the suite runs.
     _nonempty_probe: ClassVar[dict] = {}
@@ -132,9 +131,7 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
                     # extended protocol, which permits exactly one statement per execute.
                     # Keep the schema names interpolated via quote_ident, not passed as
                     # parameters (an identifier could not be a parameter anyway).
-                    cursor.execute('; '.join(
-                        f'DROP SCHEMA {quote_ident(s)} CASCADE' for s in schemas
-                    ))
+                    cursor.execute('; '.join(f'DROP SCHEMA {quote_ident(s)} CASCADE' for s in schemas))
         except DatabaseError:
             logger.warning('Failed to drop leftover branch schemas', exc_info=True)
 
@@ -154,11 +151,13 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
             return False
         if not hasattr(connections[db_name], '_test_serialized_contents'):
             logger.warning(
-                "%s sets serialized_rollback but connection %r has no "
+                '%s sets serialized_rollback but connection %r has no '
                 "_test_serialized_contents. Django's test runner normally sets this, so "
-                "it likely moved in a Django upgrade — %s needs to follow it, and until "
-                "then post_migrate fires where Django would have suppressed it.",
-                type(self).__name__, db_name, __name__,
+                'it likely moved in a Django upgrade — %s needs to follow it, and until '
+                'then post_migrate fires where Django would have suppressed it.',
+                type(self).__name__,
+                db_name,
+                __name__,
             )
             return False
         return True
@@ -184,14 +183,11 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
         connection = connections[db_name]
         probe = self._nonempty_probe.get(db_name)
         if probe is None:
-            tables = connection.introspection.django_table_names(
-                only_existing=True, include_views=False
-            )
+            tables = connection.introspection.django_table_names(only_existing=True, include_views=False)
             if not tables:
                 return True
             probe = ' UNION ALL '.join(
-                f"SELECT '{table}' AS t WHERE EXISTS "
-                f"(SELECT 1 FROM {connection.ops.quote_name(table)} LIMIT 1)"
+                f"SELECT '{table}' AS t WHERE EXISTS (SELECT 1 FROM {connection.ops.quote_name(table)} LIMIT 1)"
                 for table in tables
             )
             self._nonempty_probe[db_name] = probe
@@ -214,10 +210,7 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
                     # while no bind parameters are used — adding one would switch psycopg
                     # to the extended protocol, which allows a single statement per
                     # execute and would break this silently.
-                    cursor.execute('; '.join(
-                        f'DELETE FROM {connection.ops.quote_name(table)}'
-                        for table in nonempty
-                    ))
+                    cursor.execute('; '.join(f'DELETE FROM {connection.ops.quote_name(table)}' for table in nonempty))
                 finally:
                     cursor.execute('SET session_replication_role = DEFAULT')
         except DatabaseError:

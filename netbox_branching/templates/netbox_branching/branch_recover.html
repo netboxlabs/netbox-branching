@@ -2,24 +2,29 @@
 {% load form_helpers %}
 {% load helpers %}
 {% load i18n %}
-
 {% block title %}
   {% blocktrans %}Recover Branch {{ branch }}{% endblocktrans %}
 {% endblock %}
-
 {% block tabs %}
   <ul class="nav nav-tabs">
     <li class="nav-item" role="presentation">
-      <button class="nav-link active" id="action-form-tab" data-bs-toggle="tab" data-bs-target="#action-form" type="button" role="tab" aria-controls="action-form" aria-selected="true">
-        {% trans "Recover" %}
-      </button>
+      <button class="nav-link active"
+              id="action-form-tab"
+              data-bs-toggle="tab"
+              data-bs-target="#action-form"
+              type="button"
+              role="tab"
+              aria-controls="action-form"
+              aria-selected="true">{% trans "Recover" %}</button>
     </li>
   </ul>
 {% endblock tabs %}
-
 {% block content %}
   {# Form tab #}
-  <div class="tab-pane show active" id="action-form" role="tabpanel" aria-labelledby="action-form-tab">
+  <div class="tab-pane show active"
+       id="action-form"
+       role="tabpanel"
+       aria-labelledby="action-form-tab">
     <form action="" method="post" enctype="multipart/form-data">
       {% csrf_token %}
       <div class="row">
@@ -76,13 +81,14 @@
                   {% endblocktrans %}
                 </div>
               {% endif %}
-              {% if form.retry %}{% render_field form.retry %}{% endif %}
+              {% if form.retry %}
+                {% render_field form.retry %}
+              {% endif %}
             </div>
             <div class="card-footer text-end">
-              <a href="{{ branch.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
-              <button type="submit" name="_update" class="btn btn-primary">
-                {% trans "Recover" %}
-              </button>
+              <a href="{{ branch.get_absolute_url }}"
+                 class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
+              <button type="submit" name="_update" class="btn btn-primary">{% trans "Recover" %}</button>
             </div>
           </div>
         </div>

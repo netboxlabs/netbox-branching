@@ -11,16 +11,12 @@ from .constants import PG_UNIQUE_VIOLATION
 
 # Recommendation message templates — separated from decision logic in get_merge_recommendations()
 _REC_RENAME_WITH_FIELD = _l(
-    'Rename the conflicting object (where %(field)s="%(value)s") in either the branch'
-    ' or the main schema.'
+    'Rename the conflicting object (where %(field)s="%(value)s") in either the branch or the main schema.'
 )
 _REC_RENAME_GENERIC = _l(
-    'Rename the conflicting object in either the branch or the main schema'
-    ' so the values no longer conflict.'
+    'Rename the conflicting object in either the branch or the main schema so the values no longer conflict.'
 )
-_REC_TRY_SQUASH_UNIQUE = _l(
-    'Switch to the Squash merge strategy, which handles these types of conflicts better.'
-)
+_REC_TRY_SQUASH_UNIQUE = _l('Switch to the Squash merge strategy, which handles these types of conflicts better.')
 _REC_FIX_FIELD = _l(
     'Resolve the condition described above. If the value of "%(field)s" is valid within the branch, it'
     ' collides with an object that exists only in main — that object is neither visible nor editable from'
@@ -37,9 +33,7 @@ _REC_FIX_IN_BRANCH_THEN_SQUASH = _l(
     ' and fail identically; Squash applies only the final state of each object.'
 )
 _REC_REVIEW_LOG = _l('Review the job log for full error details.')
-_REC_TRY_SQUASH_DB = _l(
-    'Switch to the Squash merge strategy, which may resolve some database-level conflicts.'
-)
+_REC_TRY_SQUASH_DB = _l('Switch to the Squash merge strategy, which may resolve some database-level conflicts.')
 
 __all__ = (
     'annotate_validation_error',
@@ -62,6 +56,7 @@ def _classify_validation_error(exc):
     None for an error that names no field -- including one keyed on Django's NON_FIELD_ERRORS
     sentinel, which must never reach the report as if it were a field.
     """
+
     def named(field):
         return None if field == NON_FIELD_ERRORS else field
 
