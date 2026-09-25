@@ -57,9 +57,15 @@ class RegisterBranchingResolverTestCase(TestCase):
 
     def test_multiple_registrations_preserve_order(self):
         with _isolated_resolvers():
-            r1 = lambda model: None
-            r2 = lambda model: None
-            r3 = lambda model: None
+            def r1(model):
+                return None
+
+            def r2(model):
+                return None
+
+            def r3(model):
+                return None
+
             register_branching_resolver(r1)
             register_branching_resolver(r2)
             register_branching_resolver(r3)
