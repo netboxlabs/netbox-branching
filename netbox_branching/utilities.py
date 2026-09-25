@@ -244,6 +244,7 @@ def supports_branching(model):
     """
     Returns True if branching is supported for the given model; otherwise False.
     """
+    from django.apps import apps as live_apps
     from netbox.models.features import ChangeLoggingMixin
 
     label = f'{model._meta.app_label}.{model._meta.model_name}'
@@ -273,7 +274,7 @@ def supports_branching(model):
         # router would send branch-aware queries to main. Resolve to the live
         # registry for an accurate class-hierarchy check.
         try:
-            resolved_model = apps.get_model(model._meta.app_label, model._meta.model_name)
+            resolved_model = live_apps.get_model(model._meta.app_label, model._meta.model_name)
         except LookupError:
             resolved_model = model
 
