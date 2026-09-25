@@ -7,6 +7,7 @@ from functools import cached_property
 
 from asgiref.local import Local
 from core.choices import JobStatusChoices
+from django.apps import apps
 from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db import connections
@@ -243,7 +244,6 @@ def supports_branching(model):
     """
     Returns True if branching is supported for the given model; otherwise False.
     """
-    from django.apps import apps as live_apps
     from netbox.models.features import ChangeLoggingMixin
 
     label = f'{model._meta.app_label}.{model._meta.model_name}'
@@ -273,7 +273,7 @@ def supports_branching(model):
         # router would send branch-aware queries to main. Resolve to the live
         # registry for an accurate class-hierarchy check.
         try:
-            resolved_model = live_apps.get_model(model._meta.app_label, model._meta.model_name)
+            resolved_model = apps.get_model(model._meta.app_label, model._meta.model_name)
         except LookupError:
             resolved_model = model
 
@@ -635,12 +635,30 @@ def get_sql_results(cursor):
     ]
 
 
+# Registration must stay at module import rather than move into AppConfig.ready(): it keeps
+# this processor ahead of NetBox's event_tracking, which registers when CoreConfig.ready() runs.
+# Request processors are entered in registration order and unwound in reverse, and
+# event_tracking flushes events during its exit, when event payloads are serialized lazily.
+# Registering later would run that flush after the branch is deactivated, so objects created or
+# updated in a branch would be serialized against main, where they do not exist.
 @register_request_processor
 def ActiveBranchContextManager(request):
     """
     Activate a branch if indicated by the request (except for exempt paths).
     """
     if not request or request.path in EXEMPT_PATHS:
+        return nullcontext()
+
+    # This module is importable without the plugin being enabled: configuration.py imports
+    # DynamicSchemaDict from it, and settings.py imports the package before rejecting it on a
+    # version mismatch (an incompatible plugin is warned about and skipped, not raised on). In
+    # either case AppConfig.ready() never runs, and the deferred `from .models import Branch` in
+    # get_active_branch() would raise at proxy model definition, failing every script run. Do
+    # nothing rather than break core functionality the plugin was never enabled for. See #649.
+    #
+    # Checked here rather than at registration: apps.is_installed() raises AppRegistryNotReady
+    # before the app registry is populated, and registration happens during settings import.
+    if not apps.is_installed('netbox_branching'):
         return nullcontext()
 
     # This runs ahead of BranchMiddleware (plugin middleware is appended after NetBox's
