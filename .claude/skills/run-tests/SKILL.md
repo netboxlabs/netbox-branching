@@ -9,7 +9,7 @@ This plugin uses Django's built-in test runner (`django.test.TestCase`), **not**
 
 ## Canonical command
 
-From the NetBox repo root (with the plugin installed in editable mode and `testing/configuration.py` linked into NetBox):
+From the NetBox repo root (with the plugin installed in editable mode and `testing/configuration.py` loaded via `NETBOX_CONFIGURATION` + `PYTHONPATH`, per the prerequisites below):
 
 ```bash
 python netbox/manage.py test netbox_branching.tests --keepdb

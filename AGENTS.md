@@ -188,7 +188,7 @@ Callable validators can be registered for each action (`sync`, `merge`, `migrate
 
 ## Commands
 
-There is no Justfile/Makefile in this repo; commands are raw. Run them inside a NetBox checkout that has this plugin installed and `testing/configuration.py` linked in as `netbox/netbox/configuration.py`.
+There is no Justfile/Makefile in this repo; commands are raw. Run the `manage.py` ones from the root of a NetBox checkout that has this plugin installed in editable mode, with this repo's `testing/configuration.py` loaded via `NETBOX_CONFIGURATION=configuration` and `PYTHONPATH=<this repo>/testing` — the same way CI does it. The rest run from this repo.
 
 | Command | What it does |
 |---|---|
@@ -211,7 +211,13 @@ There is no Justfile/Makefile in this repo; commands are raw. Run them inside a 
 NetBox plugins must run inside a NetBox checkout. The reproducible setup mirrors what CI does (`.github/workflows/test.yml`):
 
 1. Clone NetBox alongside this repo: `git clone https://github.com/netbox-community/netbox.git`
-2. Symlink this repo's `testing/configuration.py` into NetBox: `ln -s "$PWD/nbl-netbox-branching/testing/configuration.py" netbox/netbox/netbox/configuration.py`
+2. Point NetBox at this repo's `testing/configuration.py` without touching the NetBox checkout:
+   ```
+   export NETBOX_CONFIGURATION=configuration
+   export PYTHONPATH="$PWD/netbox-branching/testing"
+   ```
+   (Symlinking the file into `netbox/netbox/netbox/configuration.py` also works, but it overwrites
+   whatever configuration that checkout already has.)
 3. Install NetBox's requirements: `pip install -r netbox/requirements.txt`
 4. Install this plugin in editable mode: `pip install -e '.[dev,test,docs]'`
 5. Provision PostgreSQL (`netbox` / `netbox` / `netbox`) and Redis on localhost (default ports)
