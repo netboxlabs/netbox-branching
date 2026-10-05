@@ -1,4 +1,5 @@
 import warnings
+from unittest.mock import patch
 
 from django.test import RequestFactory, override_settings
 from django.urls import reverse
@@ -203,3 +204,48 @@ class RequestTestCase(TestCase):
 
         reported = [str(w.message) for w in caught if 'ActiveBranchContextManager' in str(w.message)]
         self.assertEqual(reported, [], msg="An expected refusal was reported as a failed request processor")
+
+    def test_processor_is_inert_when_app_not_installed(self):
+        """
+        The plugin can be imported while absent from INSTALLED_APPS: configuration.py imports
+        DynamicSchemaDict from utilities, and settings.py imports the package before rejecting it
+        on a version mismatch. Either way AppConfig.ready() never runs, so the deferred
+        `from .models import Branch` in get_active_branch() raises at proxy model definition and
+        breaks every script run. The processor must do nothing instead. See #649.
+
+        A READY branch is used deliberately: with a nonexistent branch, get_active_branch() raises
+        Branch.DoesNotExist, which the handler above already absorbs, so the assertion would pass
+        with or without the guard.
+        """
+        branch = Branch.objects.first()
+        request = RequestFactory().get(
+            reverse('dcim-api:site-list'),
+            headers={'x-netbox-branch': branch.schema_id},
+        )
+
+        with (
+            patch('netbox_branching.utilities.apps.is_installed', return_value=False),
+            ActiveBranchContextManager(request),
+        ):
+            self.assertIsNone(
+                active_branch.get(),
+                msg="A branch was activated despite netbox_branching not being installed"
+            )
+
+    def test_processor_does_not_propagate_model_import_failure(self):
+        """
+        Guards against the specific regression in #649: reaching get_active_branch() at all when
+        the app is not installed. If the guard is ever moved or removed, this fails.
+        """
+        request = RequestFactory().get(reverse('dcim-api:site-list'))
+        error = RuntimeError(
+            "Model class netbox_branching.models.changes.ObjectChange doesn't declare an explicit "
+            "app_label and isn't in an application in INSTALLED_APPS"
+        )
+
+        with (
+            patch('netbox_branching.utilities.apps.is_installed', return_value=False),
+            patch('netbox_branching.utilities.get_active_branch', side_effect=error),
+            ActiveBranchContextManager(request),
+        ):
+            self.assertIsNone(active_branch.get())

@@ -7,6 +7,7 @@ from functools import cached_property
 
 from asgiref.local import Local
 from core.choices import JobStatusChoices
+from django.apps import apps
 from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db import connections
@@ -635,12 +636,19 @@ def get_sql_results(cursor):
     ]
 
 
+# Register at module import, not in AppConfig.ready(), so this processor wraps event_tracking.
+# event_tracking serializes event data on exit, and the branch must still be active then.
 @register_request_processor
 def ActiveBranchContextManager(request):
     """
     Activate a branch if indicated by the request (except for exempt paths).
     """
     if not request or request.path in EXEMPT_PATHS:
+        return nullcontext()
+
+    # This module can load when the plugin is not installed, and the models import then fails (#649).
+    # The check is here because apps.is_installed() raises before the app registry is ready.
+    if not apps.is_installed('netbox_branching'):
         return nullcontext()
 
     # This runs ahead of BranchMiddleware (plugin middleware is appended after NetBox's
