@@ -1,14 +1,13 @@
 import warnings
 
 from django.db import DEFAULT_DB_ALIAS
+
 from netbox.registry import registry
 
 from .contextvars import active_branch
 from .utilities import supports_branching
 
-__all__ = (
-    'BranchAwareRouter',
-)
+__all__ = ('BranchAwareRouter',)
 
 
 class BranchAwareRouter:
@@ -16,6 +15,7 @@ class BranchAwareRouter:
     A Django database router that returns the appropriate connection/schema for
     the active branch (if any).
     """
+
     connection_prefix = 'schema_'
 
     def _get_connection(self, branch):
@@ -24,7 +24,7 @@ class BranchAwareRouter:
     def _get_db(self, model, **hints):
         # Warn & exit if branching support has not yet been initialized
         if 'branching' not in registry['model_features']:
-            warnings.warn(f"Routing database query for {model} before branching support is initialized.")
+            warnings.warn(f'Routing database query for {model} before branching support is initialized.')
             return None
 
         # Bail if the model does not support branching
@@ -69,10 +69,15 @@ class BranchAwareRouter:
                 return True
 
             from core.models import ObjectType
-            if not ObjectType.objects.using(DEFAULT_DB_ALIAS).filter(
+
+            if (
+                not ObjectType.objects.using(DEFAULT_DB_ALIAS)
+                .filter(
                     app_label=app_label,
                     model=model_name,
                     features__contains=['branching'],
-            ).exists():
+                )
+                .exists()
+            ):
                 return False
         return None

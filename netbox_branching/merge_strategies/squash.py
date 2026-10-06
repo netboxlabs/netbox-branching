@@ -1,27 +1,28 @@
 """
 Squash merge strategy implementation with functions for collapsing and ordering ObjectChanges.
 """
+
 from enum import StrEnum
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, models
+
 from netbox.context_managers import event_tracking
 
 from ..error_report import annotate_validation_error
 from ..signals import squash_dependency_graph_built
 from .strategy import MergeStrategy
 
-__all__ = (
-    'SquashMergeStrategy',
-)
+__all__ = ('SquashMergeStrategy',)
 
 
 class ActionType(StrEnum):
     """
     Enum for collapsed change action types.
     """
+
     CREATE = 'create'
     UPDATE = 'update'
     DELETE = 'delete'
@@ -32,6 +33,7 @@ class CollapsedChange:
     """
     Represents a collapsed set of ObjectChanges for a single object.
     """
+
     def __init__(self, key, model_class):
         self.key = key  # (content_type_id, object_id)
         self.model_class = model_class
@@ -48,10 +50,10 @@ class CollapsedChange:
 
     def __repr__(self):
         obj_id = self.key[1]
-        suffix = f" ({self.key[2]})" if len(self.key) > 2 else ""
+        suffix = f' ({self.key[2]})' if len(self.key) > 2 else ''
         return (
-            f"<CollapsedChange {self.model_class.__name__}:{obj_id}{suffix} "
-            f"action={self.final_action} changes={self.change_count}>"
+            f'<CollapsedChange {self.model_class.__name__}:{obj_id}{suffix} '
+            f'action={self.final_action} changes={self.change_count}>'
         )
 
     def add_change(self, change, logger):
@@ -75,11 +77,11 @@ class CollapsedChange:
     def _add_change_create(self, change, logger):
         """Handle CREATE action."""
         if self.final_action is None:
-            logger.debug(f"  [{self.change_count}] CREATE")
+            logger.debug(f'  [{self.change_count}] CREATE')
             self.final_action = ActionType.CREATE
             self._set_initial_data(change)
         else:
-            logger.warning(f"  [{self.change_count}] Unexpected CREATE after {self.final_action} for {self}")
+            logger.warning(f'  [{self.change_count}] Unexpected CREATE after {self.final_action} for {self}')
 
     def _add_change_update(self, change, logger):
         """Handle UPDATE action."""
@@ -87,11 +89,11 @@ class CollapsedChange:
             self.final_action = ActionType.UPDATE
             self._set_initial_data(change)
         elif self.final_action in (ActionType.CREATE, ActionType.UPDATE):
-            logger.debug(f"  [{self.change_count}] UPDATE after {self.final_action} (still {self.final_action})")
+            logger.debug(f'  [{self.change_count}] UPDATE after {self.final_action} (still {self.final_action})')
             if change.postchange_data:
                 self.postchange_data.update(change.postchange_data)
         else:
-            logger.warning(f"  [{self.change_count}] Unexpected UPDATE after {self.final_action} for {self}")
+            logger.warning(f'  [{self.change_count}] Unexpected UPDATE after {self.final_action} for {self}')
 
     def _add_change_delete(self, change, logger):
         """Handle DELETE action."""
@@ -100,7 +102,7 @@ class CollapsedChange:
             self._set_initial_data(change)
         elif self.final_action == ActionType.CREATE:
             # CREATE + DELETE = SKIP
-            logger.debug(f"  [{self.change_count}] DELETE after CREATE -> SKIP")
+            logger.debug(f'  [{self.change_count}] DELETE after CREATE -> SKIP')
             self.final_action = ActionType.SKIP
             self.prechange_data = {}
             self.postchange_data = {}
@@ -110,7 +112,7 @@ class CollapsedChange:
             self.postchange_data = change.postchange_data
         else:
             # DELETE after DELETE or SKIP is unexpected
-            logger.warning(f"  [{self.change_count}] Unexpected DELETE after {self.final_action} for {self}")
+            logger.warning(f'  [{self.change_count}] Unexpected DELETE after {self.final_action} for {self}')
 
     def _set_initial_data(self, change):
         """Helper to set initial pre/postchange data for first CREATE or UPDATE."""
@@ -124,6 +126,7 @@ class CollapsedChange:
         Used to leverage the standard ObjectChange.apply() and undo() methods.
         """
         from netbox_branching.models import ObjectChange
+
         app_label, model = self.key[0].split('.')
         dummy_change = ObjectChange(
             action=self.final_action.value if self.final_action else None,
@@ -141,6 +144,7 @@ class SquashMergeStrategy(MergeStrategy):
     """
     Squash merge strategy that collapses multiple changes per object into a single operation.
     """
+
     # Override: squash strategy needs chronological order for both merge and revert
     # because the collapse logic expects CREATE -> UPDATE -> DELETE order
     revert_changes_ordering = 'time'
@@ -157,12 +161,12 @@ class SquashMergeStrategy(MergeStrategy):
         for change in changes:
             change_count += 1
             app_label, model = change.changed_object_type.natural_key()
-            key = (f"{app_label}.{model}", change.changed_object_id)
+            key = (f'{app_label}.{model}', change.changed_object_id)
 
             if key not in collapsed_changes:
                 model_class = change.changed_object_type.model_class()
                 collapsed_changes[key] = CollapsedChange(key, model_class)
-                logger.debug(f"New object: {model_class.__name__}:{change.changed_object_id}")
+                logger.debug(f'New object: {model_class.__name__}:{change.changed_object_id}')
 
             collapsed_changes[key].add_change(change, logger)
 
@@ -177,13 +181,11 @@ class SquashMergeStrategy(MergeStrategy):
         """
         for collapsed in collapsed_changes.values():
             if collapsed.final_action == ActionType.UPDATE:
-                exists = collapsed.model_class.objects.using(DEFAULT_DB_ALIAS).filter(
-                    pk=collapsed.key[1]
-                ).exists()
+                exists = collapsed.model_class.objects.using(DEFAULT_DB_ALIAS).filter(pk=collapsed.key[1]).exists()
                 if not exists:
                     logger.info(
-                        f"  Skipping UPDATE for {collapsed.model_class.__name__}:{collapsed.key[1]} "
-                        f"(object deleted in main)"
+                        f'  Skipping UPDATE for {collapsed.model_class.__name__}:{collapsed.key[1]} '
+                        f'(object deleted in main)'
                     )
                     collapsed.final_action = ActionType.SKIP
 
@@ -193,17 +195,15 @@ class SquashMergeStrategy(MergeStrategy):
         """
         models = set()
 
-        logger.info("Collapsing ObjectChanges by object (incremental)...")
+        logger.info('Collapsing ObjectChanges by object (incremental)...')
         collapsed_changes, _ = SquashMergeStrategy._collapse_changes(changes, logger)
         SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
 
         # Order collapsed changes based on dependencies
-        ordered_changes = SquashMergeStrategy._order_collapsed_changes(
-            collapsed_changes, logger, operation='merge'
-        )
+        ordered_changes = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger, operation='merge')
 
         # Apply collapsed changes in order
-        logger.info(f"Applying {len(ordered_changes)} collapsed changes...")
+        logger.info(f'Applying {len(ordered_changes)} collapsed changes...')
         created_pks_by_model = {}
         for i, collapsed in enumerate(ordered_changes, 1):
             model_class = collapsed.model_class
@@ -211,9 +211,11 @@ class SquashMergeStrategy(MergeStrategy):
 
             last_change = collapsed.last_change
 
-            logger.info(f"  [{i}/{len(ordered_changes)}] {collapsed.final_action.upper()} "
-                       f"{model_class.__name__}:{collapsed.key[1]} "
-                       f"(from {collapsed.change_count} original changes)")
+            logger.info(
+                f'  [{i}/{len(ordered_changes)}] {collapsed.final_action.upper()} '
+                f'{model_class.__name__}:{collapsed.key[1]} '
+                f'(from {collapsed.change_count} original changes)'
+            )
 
             with event_tracking(request):
                 request.id = last_change.request_id
@@ -226,12 +228,11 @@ class SquashMergeStrategy(MergeStrategy):
                     # already lost the object, skip it rather than fail the merge — the paired
                     # CREATE/DELETE tolerates the same absence. _skip_updates_missing_in_main
                     # can't cover these, as they're injected after it runs.
-                    dummy_change.apply(
-                        branch, using=DEFAULT_DB_ALIAS, logger=logger, skip_missing=collapsed.synthetic
-                    )
+                    dummy_change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger, skip_missing=collapsed.synthetic)
                 except ValidationError as e:
                     annotate_validation_error(
-                        e, model_class,
+                        e,
+                        model_class,
                         collapsed.last_change.changed_object_id,
                         collapsed.last_change.changed_object_type_id,
                     )
@@ -252,19 +253,17 @@ class SquashMergeStrategy(MergeStrategy):
         """
         models = set()
 
-        logger.info("Collapsing ObjectChanges by object (incremental)...")
+        logger.info('Collapsing ObjectChanges by object (incremental)...')
         collapsed_changes, change_count = SquashMergeStrategy._collapse_changes(changes, logger)
-        logger.info(f"  {change_count} changes collapsed into {len(collapsed_changes)} objects")
+        logger.info(f'  {change_count} changes collapsed into {len(collapsed_changes)} objects')
         SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
 
         # Order collapsed changes for revert (reverse of merge order)
-        merge_order = SquashMergeStrategy._order_collapsed_changes(
-            collapsed_changes, logger, operation='revert'
-        )
+        merge_order = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger, operation='revert')
         ordered_changes = list(reversed(merge_order))
 
         # Undo collapsed changes in dependency order
-        logger.info(f"Undoing {len(ordered_changes)} collapsed changes in dependency order...")
+        logger.info(f'Undoing {len(ordered_changes)} collapsed changes in dependency order...')
         restored_pks_by_model = {}
         for i, collapsed in enumerate(ordered_changes, 1):
             model_class = collapsed.model_class
@@ -273,8 +272,8 @@ class SquashMergeStrategy(MergeStrategy):
             # Use the last change's metadata for tracking
             last_change = collapsed.last_change
             logger.info(
-                f"[{i}/{len(ordered_changes)}] Undoing {collapsed.final_action} "
-                f"{model_class._meta.verbose_name} (ID: {collapsed.key[1]})"
+                f'[{i}/{len(ordered_changes)}] Undoing {collapsed.final_action} '
+                f'{model_class._meta.verbose_name} (ID: {collapsed.key[1]})'
             )
 
             with event_tracking(request):
@@ -317,7 +316,7 @@ class SquashMergeStrategy(MergeStrategy):
                     related_model = field.related_model
                     related_ct = ContentType.objects.get_for_model(related_model)
                     app_label, model = related_ct.natural_key()
-                    model_label = f"{app_label}.{model}"
+                    model_label = f'{app_label}.{model}'
                     ref_key = (model_label, fk_value)
 
                     # Only track if this object is in our changed_objects
@@ -335,7 +334,7 @@ class SquashMergeStrategy(MergeStrategy):
                     try:
                         ct = ContentType.objects.get_for_id(ct_value)
                         app_label, model = ct.natural_key()
-                        model_label = f"{app_label}.{model}"
+                        model_label = f'{app_label}.{model}'
                         ref_key = (model_label, fk_value)
 
                         if ref_key in changed_objects:
@@ -369,9 +368,7 @@ class SquashMergeStrategy(MergeStrategy):
             # The UPDATE must happen BEFORE the DELETE so the FK reference is removed first
             if update.prechange_data:
                 prechange_refs = SquashMergeStrategy._get_fk_references(
-                    update.model_class,
-                    update.prechange_data,
-                    deletes_map.keys()
+                    update.model_class, update.prechange_data, deletes_map.keys()
                 )
                 for ref_key in prechange_refs:
                     # DELETE depends on UPDATE (UPDATE removes reference, then DELETE can proceed)
@@ -379,8 +376,7 @@ class SquashMergeStrategy(MergeStrategy):
                     delete_collapsed.depends_on.add(update.key)
                     update.depended_by.add(ref_key)
                     logger.debug(
-                        f"    {delete_collapsed} depends on {update} "
-                        f"(UPDATE removes FK reference before DELETE)"
+                        f'    {delete_collapsed} depends on {update} (UPDATE removes FK reference before DELETE)'
                     )
 
             # Check if UPDATE references created object in postchange_data
@@ -388,28 +384,21 @@ class SquashMergeStrategy(MergeStrategy):
             # The CREATE must happen BEFORE the UPDATE
             if update.postchange_data:
                 postchange_refs = SquashMergeStrategy._get_fk_references(
-                    update.model_class,
-                    update.postchange_data,
-                    creates_map.keys()
+                    update.model_class, update.postchange_data, creates_map.keys()
                 )
                 for ref_key in postchange_refs:
                     # UPDATE depends on CREATE
                     create_collapsed = creates_map[ref_key]
                     update.depends_on.add(ref_key)
                     create_collapsed.depended_by.add(update.key)
-                    logger.debug(
-                        f"    {update} depends on {create_collapsed} "
-                        f"(UPDATE references created object)"
-                    )
+                    logger.debug(f'    {update} depends on {create_collapsed} (UPDATE references created object)')
 
         # 2. Check CREATEs for dependencies on other CREATEs
         for create in creates:
             if create.postchange_data:
                 # Check if this CREATE references other created objects
                 refs = SquashMergeStrategy._get_fk_references(
-                    create.model_class,
-                    create.postchange_data,
-                    creates_map.keys()
+                    create.model_class, create.postchange_data, creates_map.keys()
                 )
                 for ref_key in refs:
                     if ref_key != create.key:  # Don't self-reference
@@ -417,19 +406,14 @@ class SquashMergeStrategy(MergeStrategy):
                         ref_create = creates_map[ref_key]
                         create.depends_on.add(ref_key)
                         ref_create.depended_by.add(create.key)
-                        logger.debug(
-                            f"    {create} depends on {ref_create} "
-                            f"(CREATE references another created object)"
-                        )
+                        logger.debug(f'    {create} depends on {ref_create} (CREATE references another created object)')
 
         # 3. Check DELETEs for dependencies on other DELETEs
         for delete in deletes:
             if delete.prechange_data:
                 # Check if this DELETE references other deleted objects
                 refs = SquashMergeStrategy._get_fk_references(
-                    delete.model_class,
-                    delete.prechange_data,
-                    deletes_map.keys()
+                    delete.model_class, delete.prechange_data, deletes_map.keys()
                 )
                 for ref_key in refs:
                     if ref_key != delete.key:  # Don't self-reference
@@ -439,8 +423,7 @@ class SquashMergeStrategy(MergeStrategy):
                         ref_delete.depends_on.add(delete.key)
                         delete.depended_by.add(ref_key)
                         logger.debug(
-                            f"    {ref_delete} depends on {delete} "
-                            f"(child DELETE must happen before parent DELETE)"
+                            f'    {ref_delete} depends on {delete} (child DELETE must happen before parent DELETE)'
                         )
 
     @staticmethod
@@ -476,7 +459,7 @@ class SquashMergeStrategy(MergeStrategy):
                 natural_key = ContentType.objects.get_for_model(field.related_model).natural_key()
                 ct_cache[field.related_model] = natural_key
             app_label, model = natural_key
-            target_key = (f"{app_label}.{model}", fk_value)
+            target_key = (f'{app_label}.{model}', fk_value)
             if target_key in nodes and target_key != collapsed.key:
                 yield field.name, target_key, field.null
 
@@ -497,7 +480,7 @@ class SquashMergeStrategy(MergeStrategy):
                     continue
                 ct_cache[ct_value] = natural_key
             app_label, model = natural_key
-            target_key = (f"{app_label}.{model}", fk_value)
+            target_key = (f'{app_label}.{model}', fk_value)
             if target_key in nodes and target_key != collapsed.key:
                 yield field.name, target_key, False
 
@@ -514,7 +497,7 @@ class SquashMergeStrategy(MergeStrategy):
         do not hit Python's recursion limit.
         """
         WHITE, GRAY, BLACK = 0, 1, 2
-        color = {node: WHITE for node in adjacency}
+        color = dict.fromkeys(adjacency, WHITE)
         parent = {}
 
         for start in adjacency:
@@ -588,7 +571,7 @@ class SquashMergeStrategy(MergeStrategy):
         prefix = 'predelete' if is_delete else 'update'
         update_key = (collapsed.key[0], collapsed.key[1], f'{prefix}_{field_name}')
         if update_key in collapsed_changes:
-            raise RuntimeError(f"Unexpected key collision while deferring FK: {update_key}")
+            raise RuntimeError(f'Unexpected key collision while deferring FK: {update_key}')
 
         update_collapsed = CollapsedChange(update_key, collapsed.model_class)
         update_collapsed.change_count = 1  # Synthetic update from split
@@ -664,9 +647,7 @@ class SquashMergeStrategy(MergeStrategy):
             edge_fields = {}  # (src_key, dst_key) -> list of (field_name, breakable)
             for key, collapsed in nodes.items():
                 seen_targets = set()
-                refs = SquashMergeStrategy._iter_references(
-                    collapsed, nodes, ct_cache, getattr(collapsed, data_attr)
-                )
+                refs = SquashMergeStrategy._iter_references(collapsed, nodes, ct_cache, getattr(collapsed, data_attr))
                 for field_name, target_key, breakable in refs:
                     if (key, target_key) in ignored_edges:
                         continue
@@ -686,9 +667,9 @@ class SquashMergeStrategy(MergeStrategy):
                 for field_name, breakable in edge_fields.get((src, dst), ()):
                     if breakable and (src, field_name) not in broken_fields:
                         logger.info(
-                            f"  Breaking {action} dependency cycle at "
-                            f"{nodes[src].model_class.__name__}:{src[1]}.{field_name} -> "
-                            f"{nodes[dst].model_class.__name__}:{dst[1]} (cycle length {len(cycle)})"
+                            f'  Breaking {action} dependency cycle at '
+                            f'{nodes[src].model_class.__name__}:{src[1]}.{field_name} -> '
+                            f'{nodes[dst].model_class.__name__}:{dst[1]} (cycle length {len(cycle)})'
                         )
                         SquashMergeStrategy._defer_fk(collapsed_changes, nodes[src], field_name)
                         broken_fields.add((src, field_name))
@@ -717,12 +698,12 @@ class SquashMergeStrategy(MergeStrategy):
                 src, dst = cycle[0], cycle[1]
                 ignored_edges.add((src, dst))
                 logger.warning(
-                    f"  Unbreakable {action} dependency cycle (length {len(cycle)}) involving "
-                    f"{nodes[src].model_class.__name__}:{src[1]}; no nullable FK to defer. "
-                    f"Leaving for topological sort to report."
+                    f'  Unbreakable {action} dependency cycle (length {len(cycle)}) involving '
+                    f'{nodes[src].model_class.__name__}:{src[1]}; no nullable FK to defer. '
+                    f'Leaving for topological sort to report.'
                 )
 
-        logger.warning("  Cycle breaking exceeded its iteration bound; remaining cycles left for topological sort.")
+        logger.warning('  Cycle breaking exceeded its iteration bound; remaining cycles left for topological sort.')
 
     @staticmethod
     def _log_cycle_details(remaining, collapsed_changes, logger, max_to_show=5):
@@ -738,13 +719,13 @@ class SquashMergeStrategy(MergeStrategy):
 
             # Try to get identifying info
             data = collapsed.postchange_data or collapsed.prechange_data or {}
-            identifying_info = [f"{field}={data[field]!r}" for field in ['name', 'slug', 'label'] if field in data]
-            info_str = f" ({', '.join(identifying_info)})" if identifying_info else ""
+            identifying_info = [f'{field}={data[field]!r}' for field in ['name', 'slug', 'label'] if field in data]
+            info_str = f' ({", ".join(identifying_info)})' if identifying_info else ''
 
-            logger.error(f"    {action} {model_name} (ID: {obj_id}){info_str} depends on: {deps}")
+            logger.error(f'    {action} {model_name} (ID: {obj_id}){info_str} depends on: {deps}')
 
         if len(remaining) > max_to_show:
-            logger.error(f"    ... and {len(remaining) - max_to_show} more nodes in cycle")
+            logger.error(f'    ... and {len(remaining) - max_to_show} more nodes in cycle')
 
     @staticmethod
     def _dependency_order_by_references(collapsed_changes, logger):
@@ -764,14 +745,14 @@ class SquashMergeStrategy(MergeStrategy):
 
         Returns: ordered list of keys
         """
-        logger.info("Adjusting ordering by references...")
+        logger.info('Adjusting ordering by references...')
 
         # Define action priority (lower number = higher priority = processed first)
         action_priority = {
             ActionType.DELETE: 0,  # DELETEs should happen first
             ActionType.UPDATE: 1,  # UPDATEs in the middle
             ActionType.CREATE: 2,  # CREATEs should happen last
-            ActionType.SKIP: 3,    # SKIPs should never be in the sort, but just in case
+            ActionType.SKIP: 3,  # SKIPs should never be in the sort, but just in case
         }
 
         # Create a copy of dependencies to modify
@@ -789,22 +770,24 @@ class SquashMergeStrategy(MergeStrategy):
 
             if not ready:
                 # No nodes without dependencies - we have a cycle
-                logger.error("  Cycle detected in dependency graph.")
+                logger.error('  Cycle detected in dependency graph.')
 
                 # Log details about the nodes involved in the cycle (for debugging)
                 SquashMergeStrategy._log_cycle_details(remaining, collapsed_changes, logger)
 
                 raise Exception(
-                    f"Cycle detected in dependency graph. {len(remaining)} changes are involved in "
-                    f"circular dependencies and cannot be ordered. This may indicate a complex cycle "
-                    f"that could not be automatically resolved. Check the logs above for details."
+                    f'Cycle detected in dependency graph. {len(remaining)} changes are involved in '
+                    f'circular dependencies and cannot be ordered. This may indicate a complex cycle '
+                    f'that could not be automatically resolved. Check the logs above for details.'
                 )
             # Sort ready nodes by action priority (primary) and time (secondary)
             # This maintains DELETE -> UPDATE -> CREATE ordering, with time ordering within each group
-            ready.sort(key=lambda k: (
-                action_priority.get(collapsed_changes[k].final_action, 99),
-                collapsed_changes[k].last_change.time
-            ))
+            ready.sort(
+                key=lambda k: (
+                    action_priority.get(collapsed_changes[k].final_action, 99),
+                    collapsed_changes[k].last_change.time,
+                )
+            )
 
             # Process ready nodes
             for key in ready:
@@ -816,18 +799,18 @@ class SquashMergeStrategy(MergeStrategy):
                     deps.discard(key)
 
         if iteration >= max_iterations:
-            logger.error("  Ordering by references exceeded maximum iterations. Possible complex cycle.")
+            logger.error('  Ordering by references exceeded maximum iterations. Possible complex cycle.')
 
             # Log details about the remaining unprocessed nodes (for debugging)
             SquashMergeStrategy._log_cycle_details(remaining, collapsed_changes, logger)
 
             raise Exception(
-                f"Ordering by references exceeded maximum iterations ({max_iterations}). "
-                f"{len(remaining)} changes could not be ordered, possibly due to a complex cycle. "
-                f"Check the logs above for details."
+                f'Ordering by references exceeded maximum iterations ({max_iterations}). '
+                f'{len(remaining)} changes could not be ordered, possibly due to a complex cycle. '
+                f'Check the logs above for details.'
             )
 
-        logger.info(f"  Ordering by references completed: {len(ordered)} changes ordered")
+        logger.info(f'  Ordering by references completed: {len(ordered)} changes ordered')
         return ordered
 
     @staticmethod
@@ -858,7 +841,7 @@ class SquashMergeStrategy(MergeStrategy):
 
         Returns: ordered list of CollapsedChange objects
         """
-        logger.info(f"Ordering {len(collapsed_changes)} collapsed changes...")
+        logger.info(f'Ordering {len(collapsed_changes)} collapsed changes...')
 
         # Remove skipped objects
         to_process = {}
@@ -869,8 +852,8 @@ class SquashMergeStrategy(MergeStrategy):
             else:
                 to_process[k] = v
 
-        logger.info(f"  {len(skipped)} changes will be skipped (created and deleted in branch)")
-        logger.info(f"  {len(to_process)} changes to process")
+        logger.info(f'  {len(skipped)} changes will be skipped (created and deleted in branch)')
+        logger.info(f'  {len(to_process)} changes to process')
 
         if not to_process:
             return []
@@ -882,16 +865,13 @@ class SquashMergeStrategy(MergeStrategy):
         # Group by action and sort each group by time - need this to build the
         # dependency graph correctly
         deletes = sorted(
-            [v for v in to_process.values() if v.final_action == ActionType.DELETE],
-            key=lambda c: c.last_change.time
+            [v for v in to_process.values() if v.final_action == ActionType.DELETE], key=lambda c: c.last_change.time
         )
         updates = sorted(
-            [v for v in to_process.values() if v.final_action == ActionType.UPDATE],
-            key=lambda c: c.last_change.time
+            [v for v in to_process.values() if v.final_action == ActionType.UPDATE], key=lambda c: c.last_change.time
         )
         creates = sorted(
-            [v for v in to_process.values() if v.final_action == ActionType.CREATE],
-            key=lambda c: c.last_change.time
+            [v for v in to_process.values() if v.final_action == ActionType.CREATE], key=lambda c: c.last_change.time
         )
 
         SquashMergeStrategy._build_fk_dependency_graph(deletes, updates, creates, logger)

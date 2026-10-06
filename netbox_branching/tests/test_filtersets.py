@@ -14,7 +14,6 @@ except ImportError:
     TaggableManager = None
 
 from core.choices import ObjectChangeActionChoices
-
 from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.filtersets import BranchEventFilterSet, BranchFilterSet, ChangeDiffFilterSet
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
@@ -22,7 +21,7 @@ from netbox_branching.models import Branch, BranchEvent, ChangeDiff
 EXEMPT_MODEL_FIELDS = (
     'comments',
     'custom_field_data',
-    'level',    # MPTT fields
+    'level',  # MPTT fields
     'lft',
     'rght',
     'tree_id',
@@ -35,6 +34,7 @@ class BaseFilterSetTests:
     corresponding filter defined on its FilterSet.  Fields that are
     intentionally not filterable should be listed in ignore_fields.
     """
+
     ignore_fields = ()
 
     def _get_filters_for_field(self, field):
@@ -81,7 +81,6 @@ class BaseFilterSetTests:
         defined_filters = filterset.get_filters()
 
         for model_field in model._meta.get_fields():
-
             # Skip private fields
             if model_field.name.startswith('_'):
                 continue

@@ -7,13 +7,10 @@ from django.utils.translation import gettext as _
 from .constants import COOKIE_NAME, EXEMPT_PATHS, QUERY_PARAM
 from .utilities import BranchNotReady, get_active_branch, is_api_request
 
-__all__ = (
-    'BranchMiddleware',
-)
+__all__ = ('BranchMiddleware',)
 
 
 class BranchMiddleware:
-
     def __init__(self, get_response):
         self.get_response = get_response
 
@@ -54,9 +51,9 @@ class BranchMiddleware:
         try:
             branch = get_active_branch(request)
         except ObjectDoesNotExist:
-            return HttpResponseBadRequest("Invalid branch identifier")
+            return HttpResponseBadRequest('Invalid branch identifier')
         except BranchNotReady:
-            return HttpResponseBadRequest(_("Selected branch is not ready."))
+            return HttpResponseBadRequest(_('Selected branch is not ready.'))
         request.active_branch = branch
 
         response = self.get_response(request)
@@ -71,13 +68,13 @@ class BranchMiddleware:
             # Redirect to dashboard if branch activation/deactivation results in 404
             if branch_change and response.status_code == 404:
                 # Construct a more informative error message
-                branch_name = f"branch '{branch.name}'" if branch else "main"
+                branch_name = f"branch '{branch.name}'" if branch else 'main'
                 requested_url = request.path
                 messages.warning(
                     request,
-                    _("The requested object at {url} does not exist in {branch_name}.").format(
+                    _('The requested object at {url} does not exist in {branch_name}.').format(
                         url=requested_url, branch_name=branch_name
-                    )
+                    ),
                 )
 
                 # Create redirect response and apply cookie operations to it

@@ -87,7 +87,7 @@ def emit_github_output(**values):
     path = os.environ.get('GITHUB_OUTPUT')
     if not path:
         return
-    with open(path, 'a') as f:
+    with Path(path).open('a') as f:
         f.writelines(f'{key}={value}\n' for key, value in values.items())
 
 
