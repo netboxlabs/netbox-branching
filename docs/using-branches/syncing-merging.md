@@ -120,6 +120,8 @@ The good news is that you will be able to proceed with synchronizing or merging 
 
 Alternatively, if the conflicting changes are problematic, you can go back and make the necessary changes in main to avoid overwriting data within your branch.
 
+Syncing a branch also clears the conflict: the branch adopts main's value and its conflict baseline moves with it, so any subsequent change you make in the branch to that attribute is not flagged again unless main changes it once more.
+
 ### Collisions With Objects in Main
 
 Conflicts are detected by comparing the same object in your branch and in main, so a collision between two *different* objects cannot be flagged in advance — for example, a device you place in rack unit 12 in your branch and a different device someone places in that slot in main. Both writes are valid in their own schema; the collision surfaces only when the merge replays your change against main.

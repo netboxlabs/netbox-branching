@@ -2,6 +2,7 @@ from typing import ClassVar
 
 from django.utils.translation import gettext_lazy as _
 from django.utils.translation import pgettext_lazy
+
 from utilities.choices import ChoiceSet
 
 
@@ -90,8 +91,7 @@ class BranchStatusChoices(ChoiceSet):
     # can see what is and is not lost before resetting the status. See #622.
     RECOVERY_DESCRIPTIONS: ClassVar = {
         PROVISIONING: _(
-            'The partial schema cannot be resumed; the branch will be marked as failed. Delete it and '
-            'create a new one.'
+            'The partial schema cannot be resumed; the branch will be marked as failed. Delete it and create a new one.'
         ),
         SYNCING: _('The interrupted sync was rolled back; the branch can be synced again.'),
         MIGRATING: _('The outstanding migrations can be applied after recovery.'),

@@ -1,0 +1,6 @@
+# Revisions to skip in `git blame` — bulk, mechanical reformats only.
+#
+# Enable locally with:
+#   git config blame.ignoreRevsFile .git-blame-ignore-revs
+#
+# Append the ruff-format / djlint-reformat commit SHA below once it lands.

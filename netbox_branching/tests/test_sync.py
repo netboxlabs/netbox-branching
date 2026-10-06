@@ -9,7 +9,14 @@ changes and applies them to main.
 Unlike merge, there are no different strategies for sync — changes are always
 applied iteratively in chronological order.
 """
+
 import uuid
+
+from django.contrib.auth import get_user_model
+from django.contrib.contenttypes.models import ContentType
+from django.db import connections
+from django.test import RequestFactory
+from django.urls import reverse
 
 from core.models import ObjectChange as CoreObjectChange
 from dcim.models import (
@@ -28,19 +35,13 @@ from dcim.models import (
     Site,
     VirtualChassis,
 )
-from django.contrib.auth import get_user_model
-from django.contrib.contenttypes.models import ContentType
-from django.db import connections
-from django.test import RequestFactory
-from django.urls import reverse
 from extras.models import Tag
 from netbox.context_managers import event_tracking
-from utilities.exceptions import AbortTransaction
-
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import activate_branch
+from utilities.exceptions import AbortTransaction
 
 User = get_user_model()
 
@@ -70,9 +71,7 @@ class SyncTestCase(FastTeardownTransactionTestCase):
         with event_tracking(request):
             self.manufacturer = Manufacturer.objects.create(name='Manufacturer 1', slug='manufacturer-1')
             self.device_type = DeviceType.objects.create(
-                manufacturer=self.manufacturer,
-                model='Device Type 1',
-                slug='device-type-1'
+                manufacturer=self.manufacturer, model='Device Type 1', slug='device-type-1'
             )
             self.device_role = DeviceRole.objects.create(name='Device Role 1', slug='device-role-1')
 
@@ -121,9 +120,7 @@ class SyncTestCase(FastTeardownTransactionTestCase):
         """
         # Create some sites in main before branch provisioning
         with event_tracking(self.request):
-            site_to_update = Site.objects.create(
-                name='Update Me', slug='update-me', description='Original'
-            )
+            site_to_update = Site.objects.create(name='Update Me', slug='update-me', description='Original')
             site_to_delete = Site.objects.create(name='Delete Me', slug='delete-me')
         update_id = site_to_update.id
         delete_id = site_to_delete.id
@@ -177,9 +174,7 @@ class SyncTestCase(FastTeardownTransactionTestCase):
         """
         # Create site in main before branch provisioning
         with event_tracking(self.request):
-            site = Site.objects.create(
-                name='Contested Site', slug='contested-site', description='Original'
-            )
+            site = Site.objects.create(name='Contested Site', slug='contested-site', description='Original')
             site_id = site.id
 
         # Create branch
@@ -232,7 +227,8 @@ class SyncTestCase(FastTeardownTransactionTestCase):
             site_id = site.id
 
         branch = self._create_and_provision_branch(
-            name=f'Conflict Branch {merge_strategy}', merge_strategy=merge_strategy,
+            name=f'Conflict Branch {merge_strategy}',
+            merge_strategy=merge_strategy,
         )
 
         # Main: active → staging
@@ -292,7 +288,8 @@ class SyncTestCase(FastTeardownTransactionTestCase):
             site_id = site.id
 
         branch = self._create_and_provision_branch(
-            name=f'Partial Branch {merge_strategy}', merge_strategy=merge_strategy,
+            name=f'Partial Branch {merge_strategy}',
+            merge_strategy=merge_strategy,
         )
 
         # Main: status active → staging (description unchanged)
@@ -353,7 +350,8 @@ class SyncTestCase(FastTeardownTransactionTestCase):
             site_id = site.id
 
         branch = self._create_and_provision_branch(
-            name=f'Deleted Branch {merge_strategy}', merge_strategy=merge_strategy,
+            name=f'Deleted Branch {merge_strategy}',
+            merge_strategy=merge_strategy,
         )
 
         # Branch: delete the site
@@ -370,9 +368,14 @@ class SyncTestCase(FastTeardownTransactionTestCase):
         # Capture the branch's ObjectChange count for this site before sync so we can
         # assert that the early-return path did not write a synthetic ObjectChange.
         content_type = ContentType.objects.get_for_model(Site)
-        pre_sync_change_count = CoreObjectChange.objects.using(branch.connection_name).filter(
-            changed_object_type=content_type, changed_object_id=site_id,
-        ).count()
+        pre_sync_change_count = (
+            CoreObjectChange.objects.using(branch.connection_name)
+            .filter(
+                changed_object_type=content_type,
+                changed_object_id=site_id,
+            )
+            .count()
+        )
 
         # Sync should not raise; main's update lands on a branch row that no longer exists
         branch.sync(user=self.user, commit=True)
@@ -381,9 +384,14 @@ class SyncTestCase(FastTeardownTransactionTestCase):
             self.assertFalse(Site.objects.filter(id=site_id).exists())
 
         # No synthetic ObjectChange should have been written for this object during sync
-        post_sync_change_count = CoreObjectChange.objects.using(branch.connection_name).filter(
-            changed_object_type=content_type, changed_object_id=site_id,
-        ).count()
+        post_sync_change_count = (
+            CoreObjectChange.objects.using(branch.connection_name)
+            .filter(
+                changed_object_type=content_type,
+                changed_object_id=site_id,
+            )
+            .count()
+        )
         self.assertEqual(post_sync_change_count, pre_sync_change_count)
 
         # Merge: branch's DELETE wins on main
@@ -415,7 +423,8 @@ class SyncTestCase(FastTeardownTransactionTestCase):
             site_id = site.id
 
         branch = self._create_and_provision_branch(
-            name=f'MultiField Branch {merge_strategy}', merge_strategy=merge_strategy,
+            name=f'MultiField Branch {merge_strategy}',
+            merge_strategy=merge_strategy,
         )
 
         # Main: status active → staging
@@ -464,6 +473,264 @@ class SyncTestCase(FastTeardownTransactionTestCase):
     def test_sync_multi_field_conflict_iterative(self):
         """End-to-end multi-field sync + merge (iterative)."""
         self._run_sync_multi_field_conflict_scenario(BranchMergeStrategyChoices.ITERATIVE)
+
+    def _run_sync_baseline_advance_scenario(self, merge_strategy):
+        """
+        Regression test for issue #640: a branch which syncs main's change and *then*
+        edits the same field must not be reported as conflicting. Sync advances the
+        conflict baseline to main's state, so main's absorbed change no longer reads
+        as divergence.
+        """
+        with event_tracking(self.request):
+            site = Site.objects.create(
+                name=f'Baseline Site {merge_strategy}',
+                slug=f'baseline-site-{merge_strategy}',
+                status='active',
+                description='original',
+            )
+            site_id = site.id
+
+        branch = self._create_and_provision_branch(
+            name=f'Baseline Branch {merge_strategy}',
+            merge_strategy=merge_strategy,
+        )
+
+        # Branch: description original → branch-desc (status untouched)
+        with activate_branch(branch), event_tracking(self.request):
+            branch_site = Site.objects.get(id=site_id)
+            branch_site.snapshot()
+            branch_site.description = 'branch-desc'
+            branch_site.save()
+
+        # Main: status active → staging
+        with event_tracking(self.request):
+            main_site = Site.objects.get(id=site_id)
+            main_site.snapshot()
+            main_site.status = 'staging'
+            main_site.save()
+
+        branch.sync(user=self.user, commit=True)
+
+        # The baseline now holds main's synced state, not the branch's pre-change state
+        content_type = ContentType.objects.get_for_model(Site)
+        diff = ChangeDiff.objects.get(branch=branch, object_type=content_type, object_id=site_id)
+        self.assertEqual(diff.original['status'], 'staging')
+        self.assertEqual(diff.original['description'], 'original')
+        self.assertIsNone(diff.conflicts)
+
+        # Branch edits the synced field *after* the sync: not a conflict, main has not
+        # changed it since.
+        with activate_branch(branch), event_tracking(self.request):
+            branch_site = Site.objects.get(id=site_id)
+            branch_site.snapshot()
+            branch_site.status = 'planned'
+            branch_site.save()
+
+        diff.refresh_from_db()
+        self.assertIsNone(diff.conflicts)
+
+        # Merge carries both the branch's post-sync status and its description to main
+        branch.merge(user=self.user, commit=True)
+        merged = Site.objects.get(id=site_id)
+        self.assertEqual(merged.status, 'planned')
+        self.assertEqual(merged.description, 'branch-desc')
+
+    def test_sync_baseline_advance_squash(self):
+        """Post-sync branch edit of a synced field is not a conflict (squash)."""
+        self._run_sync_baseline_advance_scenario(BranchMergeStrategyChoices.SQUASH)
+
+    def test_sync_baseline_advance_iterative(self):
+        """Post-sync branch edit of a synced field is not a conflict (iterative)."""
+        self._run_sync_baseline_advance_scenario(BranchMergeStrategyChoices.ITERATIVE)
+
+    def test_sync_baseline_advance_preserves_real_conflict(self):
+        """
+        Advancing the baseline (#640) must not mask a genuine conflict: a change main
+        makes *after* the sync, to a field the branch has also changed, is still flagged.
+        """
+        with event_tracking(self.request):
+            site = Site.objects.create(
+                name='Real Conflict Site',
+                slug='real-conflict-site',
+                status='active',
+                description='original',
+            )
+            site_id = site.id
+
+        branch = self._create_and_provision_branch(name='Real Conflict Branch')
+
+        # Branch: description original → branch-desc
+        with activate_branch(branch), event_tracking(self.request):
+            branch_site = Site.objects.get(id=site_id)
+            branch_site.snapshot()
+            branch_site.description = 'branch-desc'
+            branch_site.save()
+
+        # Main: status active → staging, then sync
+        with event_tracking(self.request):
+            main_site = Site.objects.get(id=site_id)
+            main_site.snapshot()
+            main_site.status = 'staging'
+            main_site.save()
+
+        branch.sync(user=self.user, commit=True)
+
+        content_type = ContentType.objects.get_for_model(Site)
+        diff = ChangeDiff.objects.get(branch=branch, object_type=content_type, object_id=site_id)
+        self.assertIsNone(diff.conflicts)
+
+        # Main now changes the description too — neither side saw the other's value
+        with event_tracking(self.request):
+            main_site = Site.objects.get(id=site_id)
+            main_site.snapshot()
+            main_site.description = 'main-desc'
+            main_site.save()
+
+        diff.refresh_from_db()
+        self.assertEqual(diff.conflicts, ['description'])
+
+    def test_sync_baseline_not_advanced_for_branch_deleted_object(self):
+        """
+        An object the branch has deleted is never buffered during sync, so its baseline
+        must stay put and its conflicts must survive the sync (#640).
+        """
+        with event_tracking(self.request):
+            site = Site.objects.create(
+                name='Deleted Baseline Site',
+                slug='deleted-baseline-site',
+                status='active',
+                description='original',
+            )
+            site_id = site.id
+
+        branch = self._create_and_provision_branch(name='Deleted Baseline Branch')
+
+        # Branch: delete the site
+        with activate_branch(branch), event_tracking(self.request):
+            Site.objects.get(id=site_id).delete()
+
+        # Main: update the site afterward
+        with event_tracking(self.request):
+            main_site = Site.objects.get(id=site_id)
+            main_site.snapshot()
+            main_site.status = 'staging'
+            main_site.save()
+
+        content_type = ContentType.objects.get_for_model(Site)
+        diff = ChangeDiff.objects.get(branch=branch, object_type=content_type, object_id=site_id)
+        original_before_sync = diff.original
+
+        branch.sync(user=self.user, commit=True)
+
+        diff.refresh_from_db()
+        self.assertEqual(diff.original, original_before_sync)
+        self.assertIn('status', diff.conflicts or [])
+
+    def test_sync_baseline_advance_preserves_conflict_on_resynced_field(self):
+        """
+        The issue #640 step-8 case: after the sync has advanced the baseline for a
+        field, the branch edits that same field and main then changes it again. The
+        two sides diverged from the advanced baseline without seeing each other, so
+        the field must still be flagged. Advancing the baseline must not amount to
+        exempting synced fields from conflict detection.
+        """
+        with event_tracking(self.request):
+            site = Site.objects.create(
+                name='Resynced Field Site',
+                slug='resynced-field-site',
+                status='active',
+                description='original',
+            )
+            site_id = site.id
+
+        branch = self._create_and_provision_branch(name='Resynced Field Branch')
+
+        # Branch: description original → branch-desc (gives the object a ChangeDiff)
+        with activate_branch(branch), event_tracking(self.request):
+            branch_site = Site.objects.get(id=site_id)
+            branch_site.snapshot()
+            branch_site.description = 'branch-desc'
+            branch_site.save()
+
+        # Main: status active → staging, then sync (baseline status becomes 'staging')
+        with event_tracking(self.request):
+            main_site = Site.objects.get(id=site_id)
+            main_site.snapshot()
+            main_site.status = 'staging'
+            main_site.save()
+
+        branch.sync(user=self.user, commit=True)
+
+        content_type = ContentType.objects.get_for_model(Site)
+        diff = ChangeDiff.objects.get(branch=branch, object_type=content_type, object_id=site_id)
+        self.assertEqual(diff.original['status'], 'staging')
+        self.assertIsNone(diff.conflicts)
+
+        # Branch edits the field the sync just advanced
+        with activate_branch(branch), event_tracking(self.request):
+            branch_site = Site.objects.get(id=site_id)
+            branch_site.snapshot()
+            branch_site.status = 'planned'
+            branch_site.save()
+
+        # Main moves the same field somewhere else again, after the sync
+        with event_tracking(self.request):
+            main_site = Site.objects.get(id=site_id)
+            main_site.snapshot()
+            main_site.status = 'decommissioning'
+            main_site.save()
+
+        diff.refresh_from_db()
+        self.assertEqual(diff.conflicts, ['status'])
+
+    def test_sync_baseline_not_advanced_on_dry_run(self):
+        """
+        The baseline advance (#640) runs inside sync()'s atomic block, so a dry run
+        must leave ``original`` exactly as it was — otherwise previewing a sync would
+        permanently alter how conflicts are detected for the branch.
+        """
+        with event_tracking(self.request):
+            site = Site.objects.create(
+                name='Dry Run Baseline Site',
+                slug='dry-run-baseline-site',
+                status='active',
+                description='original',
+            )
+            site_id = site.id
+
+        branch = self._create_and_provision_branch(name='Dry Run Baseline Branch')
+
+        # Branch: description original → branch-desc
+        with activate_branch(branch), event_tracking(self.request):
+            branch_site = Site.objects.get(id=site_id)
+            branch_site.snapshot()
+            branch_site.description = 'branch-desc'
+            branch_site.save()
+
+        # Main: status active → staging
+        with event_tracking(self.request):
+            main_site = Site.objects.get(id=site_id)
+            main_site.snapshot()
+            main_site.status = 'staging'
+            main_site.save()
+
+        content_type = ContentType.objects.get_for_model(Site)
+        diff = ChangeDiff.objects.get(branch=branch, object_type=content_type, object_id=site_id)
+        original_before_sync = diff.original
+        conflicts_before_sync = diff.conflicts
+        self.assertEqual(original_before_sync['status'], 'active')
+
+        with self.assertRaises(AbortTransaction):
+            branch.sync(user=self.user, commit=False)
+
+        diff.refresh_from_db()
+        self.assertEqual(diff.original, original_before_sync)
+        self.assertEqual(diff.conflicts, conflicts_before_sync)
+
+        # A real sync afterward still advances it
+        branch.sync(user=self.user, commit=True)
+        diff.refresh_from_db()
+        self.assertEqual(diff.original['status'], 'staging')
 
     def test_sync_m2m_tags_concurrent_changes(self):
         """
@@ -565,9 +832,7 @@ class SyncTestCase(FastTeardownTransactionTestCase):
             branch_region.save()
 
             branch_site = Site.objects.create(
-                name='Branch Site',
-                slug='branch-site',
-                region=Region.objects.get(id=region_id)
+                name='Branch Site', slug='branch-site', region=Region.objects.get(id=region_id)
             )
             branch_site_id = branch_site.id
 
@@ -616,15 +881,11 @@ class SyncTestCase(FastTeardownTransactionTestCase):
                 name='Main Device',
                 site=Site.objects.get(id=site_id),
                 device_type=self.device_type,
-                role=self.device_role
+                role=self.device_role,
             )
             device_id = device.id
 
-            interface = Interface.objects.create(
-                device=device,
-                name='eth0',
-                type='1000base-t'
-            )
+            interface = Interface.objects.create(device=device, name='eth0', type='1000base-t')
             interface_id = interface.id
 
         # Sync branch
@@ -711,9 +972,7 @@ class SyncTestCase(FastTeardownTransactionTestCase):
         # In branch: add a grandchild (third level)
         with activate_branch(branch), event_tracking(self.request):
             grandchild = Region.objects.create(
-                name='Grandchild Region',
-                slug='grandchild-region',
-                parent=Region.objects.get(id=child_id)
+                name='Grandchild Region', slug='grandchild-region', parent=Region.objects.get(id=child_id)
             )
             grandchild_id = grandchild.id
 
@@ -1100,8 +1359,7 @@ class SyncTestCase(FastTeardownTransactionTestCase):
         with activate_branch(branch):
             self.assertTrue(Cable.objects.filter(id=cable_id).exists())
             self.assertEqual(
-                CablePath.objects.count(), 2,
-                'Cable paths not populated in branch after sync (#150 regression)'
+                CablePath.objects.count(), 2, 'Cable paths not populated in branch after sync (#150 regression)'
             )
 
         branch.refresh_from_db()
@@ -1215,9 +1473,7 @@ class SyncTestCase(FastTeardownTransactionTestCase):
         """
         # Create site in main before branch provisioning
         with event_tracking(self.request):
-            site = Site.objects.create(
-                name='Contested Site', slug='contested-site', description='Original'
-            )
+            site = Site.objects.create(name='Contested Site', slug='contested-site', description='Original')
             site_id = site.id
 
         # Create branch (inherits the site)
@@ -1277,5 +1533,5 @@ class SyncTestCase(FastTeardownTransactionTestCase):
         with activate_branch(branch):
             self.assertFalse(
                 Site.objects.filter(slug='pending-site-dryrun').exists(),
-                msg="commit=False must not persist the synced change into the branch schema",
+                msg='commit=False must not persist the synced change into the branch schema',
             )

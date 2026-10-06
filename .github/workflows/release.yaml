@@ -166,7 +166,7 @@ jobs:
       - name: Install the wheel into a clean virtual environment
         # --no-deps: importing the plugin requires a full NetBox installation, which this
         # job deliberately does not build. It verifies that the distribution installs and
-        # that the package data lands on disk; the test suite in lint-tests.yaml covers
+        # that the package data lands on disk; the test suite in test.yml covers
         # the plugin running inside NetBox. --no-compile keeps pip from byte-compiling the
         # package, so the installed tree can be held to the same no-bytecode rule as the
         # wheel it came from.

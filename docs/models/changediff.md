@@ -36,7 +36,7 @@ The type of change made to the object. This must be one of the following:
 
 ### Original
 
-A snapshot of the object's data prior to any changes (i.e. at the point the branch diverged from main). This is `null` for objects which were created within the branch.
+A snapshot of the object's data in main at the point the branch last diverged from it: the state at branch creation, or main's state at the most recent [sync](../using-branches/syncing-merging.md) which touched the object. It serves as the baseline against which conflicts are detected. This is `null` for objects which were created within the branch.
 
 ### Modified
 

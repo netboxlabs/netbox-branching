@@ -13,21 +13,21 @@ critically:
     are routed through build_error_report and re-raised so the job ends in
     a FAILED state with a structured report attached to job.data)
 """
+
 import weakref
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest import mock
 
-from core.models import ObjectChange
-from core.signals import handle_changed_object, handle_deleted_object
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError
 from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
-from netbox.signals import post_clean
-from utilities.exceptions import AbortTransaction
 
+from core.models import ObjectChange
+from core.signals import handle_changed_object, handle_deleted_object
+from netbox.signals import post_clean
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.jobs import (
     AutoArchiveBranchJob,
@@ -40,6 +40,7 @@ from netbox_branching.jobs import (
 from netbox_branching.models import Branch
 from netbox_branching.signal_receivers import validate_branching_operations
 from netbox_branching.utilities import BranchActionIndicator
+from utilities.exceptions import AbortTransaction
 
 
 def _receivers_for(signal):
@@ -78,8 +79,8 @@ class DisconnectObjectChangeSignalHandlersTestCase(SimpleTestCase):
         """Sanity check the precondition the other tests depend on."""
         self.assertTrue(
             _all_handlers_connected(),
-            "Expected object-change signal handlers to be connected at test start; "
-            "another test likely failed to clean up.",
+            'Expected object-change signal handlers to be connected at test start; '
+            'another test likely failed to clean up.',
         )
 
     def test_handlers_are_disconnected_inside_context(self):
@@ -245,9 +246,7 @@ class AutoArchiveBranchJobTestCase(TestCase):
     def _make_merged_branch(self, name, days_ago):
         branch = Branch(name=name, status=BranchStatusChoices.MERGED)
         branch.save(provision=False)
-        Branch.objects.filter(pk=branch.pk).update(
-            merged_time=timezone.now() - timedelta(days=days_ago)
-        )
+        Branch.objects.filter(pk=branch.pk).update(merged_time=timezone.now() - timedelta(days=days_ago))
         branch.refresh_from_db()
         return branch
 

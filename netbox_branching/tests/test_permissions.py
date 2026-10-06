@@ -3,14 +3,14 @@ from django.contrib.auth.context_processors import PermWrapper
 from django.test import RequestFactory
 from django.test import TestCase as _TestCase
 from django.urls import reverse
-from users.models import ObjectPermission
-from utilities.testing import TestCase
 
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
 from netbox_branching.models import Branch
 from netbox_branching.template_content import BranchSelector
 from netbox_branching.utilities import get_active_branch, get_branches_for_user, resolve_request_user
+from users.models import ObjectPermission
+from utilities.testing import TestCase
 
 User = get_user_model()
 
@@ -43,6 +43,7 @@ class BranchPermissionTestCase(TestCase):
     @property
     def branch_object_type(self):
         from core.models import ObjectType
+
         return ObjectType.objects.get_for_model(Branch)
 
     #
@@ -127,9 +128,7 @@ class BulkMigratePermissionTestCase(TestCase):
     def test_unpermitted_branch_is_rejected(self):
         from core.models import ObjectType
 
-        obj_perm = ObjectPermission(
-            name='Other branches', actions=['migrate'], constraints={'name': 'Branch 2'}
-        )
+        obj_perm = ObjectPermission(name='Other branches', actions=['migrate'], constraints={'name': 'Branch 2'})
         obj_perm.save()
         obj_perm.users.add(self.user)
         obj_perm.object_types.add(ObjectType.objects.get_for_model(Branch))
@@ -175,7 +174,7 @@ class BranchAPIPermissionTestCase(_TestCase):
 
     def test_list_excludes_unpermitted_branches(self):
         url = reverse('plugins-api:netbox_branching-api:branch-list')
-        response = self.client.get(url, HTTP_ACCEPT='application/json')
+        response = self.client.get(url, headers={'accept': 'application/json'})
         self.assertEqual(response.status_code, 200)
 
         names = [b['name'] for b in response.json()['results']]
@@ -183,22 +182,22 @@ class BranchAPIPermissionTestCase(_TestCase):
 
     def test_detail_hides_unpermitted_branch(self):
         url = reverse('plugins-api:netbox_branching-api:branch-detail', kwargs={'pk': self.theirs.pk})
-        response = self.client.get(url, HTTP_ACCEPT='application/json')
+        response = self.client.get(url, headers={'accept': 'application/json'})
         self.assertEqual(response.status_code, 404)
 
     def test_action_on_unpermitted_branch_is_indistinguishable_from_missing(self):
         # A branch outside the user's constraint must not be distinguishable from one which does not
         # exist, so both report 404 rather than 403.
         url = reverse('plugins-api:netbox_branching-api:branch-sync', kwargs={'pk': self.theirs.pk})
-        self.assertEqual(self.client.post(url, HTTP_ACCEPT='application/json').status_code, 404)
+        self.assertEqual(self.client.post(url, headers={'accept': 'application/json'}).status_code, 404)
 
         url = reverse('plugins-api:netbox_branching-api:branch-sync', kwargs={'pk': 99999})
-        self.assertEqual(self.client.post(url, HTTP_ACCEPT='application/json').status_code, 404)
+        self.assertEqual(self.client.post(url, headers={'accept': 'application/json'}).status_code, 404)
 
     def test_action_without_permission_is_forbidden(self):
         # The user holds no merge permission at all, which is reported as such
         url = reverse('plugins-api:netbox_branching-api:branch-merge', kwargs={'pk': self.mine.pk})
-        response = self.client.post(url, HTTP_ACCEPT='application/json')
+        response = self.client.post(url, headers={'accept': 'application/json'})
         self.assertEqual(response.status_code, 403)
 
     def test_malformed_pk_is_reported_as_missing(self):
@@ -206,7 +205,7 @@ class BranchAPIPermissionTestCase(_TestCase):
         # compare must be reported as a missing branch rather than raised as a server error.
         url = reverse('plugins-api:netbox_branching-api:branch-sync', kwargs={'pk': self.mine.pk})
         url = url.replace(f'/{self.mine.pk}/', '/not-a-pk/')
-        self.assertEqual(self.client.post(url, HTTP_ACCEPT='application/json').status_code, 404)
+        self.assertEqual(self.client.post(url, headers={'accept': 'application/json'}).status_code, 404)
 
     #
     # Branch activation by header
@@ -227,9 +226,11 @@ class BranchAPIPermissionTestCase(_TestCase):
         self.client.logout()
         response = self.client.get(
             reverse('api-root'),
-            HTTP_ACCEPT='application/json',
-            HTTP_AUTHORIZATION=self._token_header(),
-            HTTP_X_NETBOX_BRANCH=self.mine.schema_id,
+            headers={
+                'accept': 'application/json',
+                'authorization': self._token_header(),
+                'x-netbox-branch': self.mine.schema_id,
+            },
         )
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.wsgi_request.active_branch, self.mine)
@@ -246,17 +247,20 @@ class BranchAPIPermissionTestCase(_TestCase):
         self.client.logout()
         response = self.client.get(
             reverse('api-root'),
-            HTTP_ACCEPT='application/json',
-            HTTP_AUTHORIZATION=f'Bearer {TOKEN_PREFIX}{token.key}.{token.token}',
-            HTTP_X_NETBOX_BRANCH=self.mine.schema_id,
+            headers={
+                'accept': 'application/json',
+                'authorization': f'Bearer {TOKEN_PREFIX}{token.key}.{token.token}',
+                'x-netbox-branch': self.mine.schema_id,
+            },
         )
         self.assertEqual(response.status_code, 403)
         self.assertIn('Token disabled', response.json()['detail'])
 
     def test_resolving_the_token_user_leaves_the_request_untouched(self):
         # DRF assigns request.user itself during view dispatch; identifying the user early must not
-        # pre-empt that, so the probe is required to leave the incoming request exactly as it found it.
+        # preempt that, so the probe is required to leave the incoming request exactly as it found it.
         from django.contrib.auth.models import AnonymousUser
+
         from users.constants import TOKEN_PREFIX
         from users.models import Token
 
@@ -275,8 +279,10 @@ class BranchAPIPermissionTestCase(_TestCase):
         self.client.logout()
         response = self.client.get(
             reverse('api-root'),
-            HTTP_ACCEPT='application/json',
-            HTTP_AUTHORIZATION=self._token_header(),
-            HTTP_X_NETBOX_BRANCH=self.theirs.schema_id,
+            headers={
+                'accept': 'application/json',
+                'authorization': self._token_header(),
+                'x-netbox-branch': self.theirs.schema_id,
+            },
         )
         self.assertEqual(response.status_code, 400)

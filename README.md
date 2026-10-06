@@ -5,7 +5,7 @@ This [NetBox](http://netboxlabs.com/oss/netbox/) plugin introduces branching fun
 See the [compatibility matrix](COMPATIBILITY.md) for supported NetBox versions.
 
 > [!TIP]
-> To use NetBox Branching with NetBox Docker, click [here](./docs/netbox-docker.md)  
+> To use NetBox Branching with NetBox Docker, click [here](./docs/netbox-docker.md)
 
 ## Installation
 

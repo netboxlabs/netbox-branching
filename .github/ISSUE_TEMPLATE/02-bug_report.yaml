@@ -1,5 +1,6 @@
 ---
 name: 🐛 Bug Report
+type: Bug
 description: Report a reproducible bug in the current stable release
 labels: ["app: branching", "type: bug", "status: needs triage"]
 body:
@@ -15,10 +16,14 @@ body:
       description: What version of NetBox are you currently running?
     validations:
       required: true
-  - type: input
+  - type: dropdown
     attributes:
       label: Python Version
       description: What version of Python are you currently running?
+      options:
+        - "3.12"
+        - "3.13"
+        - "3.14"
     validations:
       required: true
   - type: textarea

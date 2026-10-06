@@ -1,0 +1,276 @@
+---
+# .github/workflows/test.yml
+#
+# PR validation: lint (pre-commit + mkdocs) then test matrix. The test job is
+# gated on the lint job passing, so expensive CI minutes are spent only on
+# green code. The Python axis lists the interpreter versions this plugin
+# supports. NetBox is tested at main only: features gated on unreleased NetBox
+# changes would fail against a pinned release.
+#
+# Test config:
+#   testing/configuration.py is loaded via NETBOX_CONFIGURATION + PYTHONPATH
+#   rather than symlinked into the NetBox checkout. The plugin is installed
+#   editable so its tests package resolves from the source tree.
+#
+# NetBox ref override:
+#   A PR labelled `test-against:<ref>` swaps main for that ref;
+#   workflow_dispatch takes an explicit ref. Both let a PR be validated
+#   against an unreleased NetBox branch. All three sources are resolved and
+#   validated in one step, so the checkout consumes only its output.
+#
+# Coverage:
+#   Collected on a SINGLE matrix leg (see the matrix `include`). The suite is
+#   not run with --parallel: branch provisioning is schema-scoped and has not
+#   been validated against Django's parallel test runner.
+
+name: Test
+
+"on":
+  workflow_dispatch:
+    inputs:
+      netbox_ref:
+        description: 'NetBox ref to checkout (branch, tag, or commit)'
+        required: false
+        default: 'main'
+        type: string
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  # Keyed per ref so unrelated PRs run side by side instead of queueing behind
+  # one another, and superseded runs on the same ref are cancelled.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Superseded PR runs are cancelled; pushes to main always run to completion
+  # so every landed commit keeps a result.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint (pre-commit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        # actions/checkout v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Setup Python
+        # actions/setup-python v6.2.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            .github/workflows/test.yml
+      - name: Install docs and lint tooling
+        # The mkdocs-build pre-commit hook shells out to the local mkdocs.
+        run: |
+          python -m pip install --upgrade pip
+          pip install pre-commit
+          pip install '.[docs]'
+      - name: Run pre-commit
+        run: pre-commit run --all-files --show-diff-on-failure --color=always
+
+  test:
+    name: >-
+      py${{ matrix.python-version }} / netbox-${{ matrix.netbox-ref }}${{
+      matrix.coverage && ' (coverage)' || '' }}
+    needs: lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NETBOX_CONFIGURATION: configuration
+      PYTHONPATH: ${{ github.workspace }}/netbox-branching/testing
+      COVERAGE_RCFILE: ${{ github.workspace }}/netbox-branching/pyproject.toml
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.12', '3.13', '3.14']
+        netbox-ref:
+          - 'main'
+        include:
+          - coverage: false
+          # Collect coverage once, on the newest Python against NetBox main.
+          - python-version: '3.14'
+            netbox-ref: 'main'
+            coverage: true
+    services:
+      redis:
+        image: redis
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      postgres:
+        # Pinned: the tag was unpinned and had silently moved to 18, which also
+        # relocated PGDATA (17: /var/lib/postgresql/data, 18:
+        # /var/lib/postgresql/18/docker). The tmpfs below mounts the shared
+        # parent so it stays correct across either layout.
+        image: postgres:18
+        env:
+          POSTGRES_USER: netbox
+          POSTGRES_PASSWORD: netbox
+        ports:
+          - 5432:5432
+        options: >-
+          --mount type=tmpfs,destination=/var/lib/postgresql
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Checkout plugin
+        # actions/checkout v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: netbox-branching
+          persist-credentials: false
+
+      - name: Resolve NetBox ref
+        id: netbox-ref
+        # A `test-against:<ref>` PR label, or the workflow_dispatch input,
+        # overrides main.
+        env:
+          MATRIX_REF: ${{ matrix.netbox-ref }}
+          INPUT_REF: ${{ inputs.netbox_ref }}
+          LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
+        run: |
+          REF="${INPUT_REF:-$MATRIX_REF}"
+          if [[ -z "$INPUT_REF" && "$MATRIX_REF" == "main" ]]; then
+            # LABELS is `null` for push / workflow_dispatch events.
+            OVERRIDE=$(jq -r 'if type == "array" then .[] else empty end
+              | select(startswith("test-against:")) | split(":")[1]' \
+              <<<"$LABELS" | head -n1)
+            if [[ -n "$OVERRIDE" && "$OVERRIDE" != "null" ]]; then
+              REF="$OVERRIDE"
+            fi
+          fi
+          # Only plain branch/tag names. Blocks refs/pull/N/head, which would
+          # run unreviewed upstream code on the runner.
+          if [[ ! "$REF" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo "::error::Refusing to check out NetBox ref '$REF';" \
+              "expected a plain branch or tag name."
+            exit 1
+          fi
+          echo "Testing against NetBox ref: $REF"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout NetBox
+        # actions/checkout v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          repository: netbox-community/netbox
+          ref: ${{ steps.netbox-ref.outputs.ref }}
+          path: netbox
+          persist-credentials: false
+
+      - name: Setup Python ${{ matrix.python-version }}
+        # actions/setup-python v6.2.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          # After both checkouts so the cache key can hash their dependency files.
+          cache-dependency-path: |
+            netbox/requirements.txt
+            netbox-branching/pyproject.toml
+            netbox-branching/.github/workflows/test.yml
+
+      - name: Use prebuilt psycopg wheels
+        working-directory: netbox
+        run: |
+          # Skips compiling psycopg against libpq; the version pin is unchanged.
+          sed -i 's/^psycopg\[c,pool\]==/psycopg[binary,pool]==/' requirements.txt
+          grep -q '^psycopg\[binary,pool\]==' requirements.txt \
+            || { echo "::error::NetBox's requirements.txt no longer pins psycopg[c,pool]=="; exit 1; }
+
+      - name: Install NetBox dependencies
+        working-directory: netbox
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install plugin (editable, with test extras)
+        working-directory: netbox-branching
+        run: pip install -e '.[test]'
+
+      - name: Fingerprint the schema inputs
+        id: schema
+        run: |
+          # Path and blob of every file that shapes the migrated schema, so renames count too.
+          # NetBox is checked out at a moving ref, so its schema inputs are hashed, not its SHA.
+          netbox_inputs=$(git -C netbox ls-files --stage -- \
+            requirements.txt \
+            netbox/netbox/settings.py \
+            netbox/core/signals.py \
+            ':(glob)netbox/**/migrations/**' \
+            ':(glob)netbox/*/fields.py' \
+            netbox/netbox/models/ltree.py \
+            netbox/ipam/lookups.py \
+            netbox/utilities/query_functions.py \
+            netbox/utilities/ltree.py \
+            netbox/utilities/migration.py \
+            netbox/utilities/mptt_to_ltree.py)
+          branching_inputs=$(git -C netbox-branching ls-files --stage -- \
+            .github/workflows/test.yml \
+            pyproject.toml \
+            testing/configuration.py \
+            ':(glob)netbox_branching/migrations/**')
+          echo "hash=$(sha256sum <<< "$netbox_inputs$branching_inputs" | cut -c1-32)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore the migrated test database
+        id: test-db
+        # actions/cache/restore v6.1.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/test_netbox.dump
+          key: test-db-py${{ matrix.python-version }}-${{ steps.schema.outputs.hash }}
+          # Pushes to main migrate from scratch, re-validating the migration chain.
+          lookup-only: ${{ github.event_name == 'push' }}
+
+      - name: Build the migrated test database
+        if: github.event_name == 'push' || steps.test-db.outputs.cache-hit != 'true'
+        working-directory: netbox
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          python netbox/manage.py migrate --no-input --run-syncdb
+          docker exec "$POSTGRES_CONTAINER" pg_dump -U netbox -Fc netbox > "$RUNNER_TEMP/test_netbox.dump"
+
+      - name: Load the test database
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$POSTGRES_CONTAINER" createdb -U netbox test_netbox
+          docker exec -i "$POSTGRES_CONTAINER" pg_restore -U netbox -d test_netbox --exit-on-error \
+            < "$RUNNER_TEMP/test_netbox.dump"
+
+      - name: Cache the migrated test database
+        if: steps.test-db.outputs.cache-hit != 'true'
+        # actions/cache/save v6.1.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
+        with:
+          path: ${{ runner.temp }}/test_netbox.dump
+          key: ${{ steps.test-db.outputs.cache-primary-key }}
+
+      - name: Run tests
+        if: ${{ ! matrix.coverage }}
+        working-directory: netbox
+        run: python netbox/manage.py test netbox_branching.tests --keepdb --timing
+
+      - name: Run tests with coverage
+        if: ${{ matrix.coverage }}
+        working-directory: netbox
+        run: coverage run netbox/manage.py test netbox_branching.tests --keepdb --timing
+
+      - name: Show coverage report
+        if: ${{ matrix.coverage }}
+        working-directory: netbox
+        run: coverage report
