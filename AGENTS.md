@@ -260,7 +260,7 @@ GitHub Actions workflows in `.github/workflows/`:
 
 - **`test.yml`** — Runs on every PR. Two jobs, the second gated on the first:
   - *Lint*: Python 3.12, runs the full `pre-commit` stack (which includes `mkdocs build`).
-  - *Test*: Matrix of Python 3.12, 3.13, 3.14 against both the declared minimum NetBox version and `main`. Spins up PostgreSQL + Redis services, installs the plugin editable, loads `testing/configuration.py` via `NETBOX_CONFIGURATION` + `PYTHONPATH` (no symlink), and runs `python netbox/manage.py test netbox_branching.tests --keepdb`. The `main` leg can be pointed at another ref with a `test-against:<ref>` PR label or a `workflow_dispatch` input. One leg additionally collects coverage. The suite is not run with `--parallel`.
+  - *Test*: Matrix of Python 3.12, 3.13, 3.14 against NetBox `main` only (a pinned release would break on features gated on unreleased NetBox changes). Spins up PostgreSQL + Redis services, installs the plugin editable, loads `testing/configuration.py` via `NETBOX_CONFIGURATION` + `PYTHONPATH` (no symlink), and runs `python netbox/manage.py test netbox_branching.tests --keepdb`. It can be pointed at another ref with a `test-against:<ref>` PR label or a `workflow_dispatch` input. One leg additionally collects coverage. The suite is not run with `--parallel`.
 - **`release.yaml`** — Driven by pushing a `v*` tag, not by publishing a GitHub release, so pre-releases follow the same automated path as final releases. Builds sdist + wheel with `python -m build`, runs `twine check`, verifies the tag against the version declared in `pyproject.toml`, `AppConfig.version` and the wheel metadata (`scripts/verify_release_tag.py`), verifies the wheel's contents (`scripts/verify_wheel_contents.py`), rebuilds a wheel from the sdist, and smoke-tests a clean `--no-deps` install whose installed tree is held to the same content checks as the wheel. Only then does it publish to PyPI using OIDC trusted publishing and attach the artifacts to the GitHub release, drafting an empty one (marked as a pre-release when PEP 440 says the version is one) if the tag doesn't already have a release. Release notes are never generated — they are written by hand. Also runs — build and verification only, no publish — on pull requests that touch packaging inputs, which catches a version bump applied to only one of the two declaration sites. A `workflow_dispatch` from a `v*` tag publishes to Test PyPI instead, as an opt-in rehearsal.
 - **`claude-review.yml`** — Claude Code automation hook; triggers on issue/PR comments mentioning `@claude`.
 
@@ -287,6 +287,7 @@ The scaffold targets *private* plugins, so a few surfaces are deliberately diver
 | `testing/configuration.py` | Maintained by hand for this plugin's `DynamicSchemaDict` / `BranchAwareRouter` requirements. |
 | `docs/changelog.md` | This repo's change log; the scaffold ships `docs/releases.md`. |
 | `.yamllint` | The scaffold ships the `yamllint` hook but renders no config, so this one is adapted from the scaffold's own root config. |
+| `.github/workflows/test.yml` matrix | Tests NetBox `main` only. The scaffold adds `netbox_test_min_ref` / `netbox_test_max_ref` legs, which break as soon as a feature depends on unreleased NetBox changes. Coverage runs on the `main` leg. |
 
 The scaffold's `ui/` and `graphql/` stub packages are intentionally absent — this plugin has
 neither surface. A `copier update` will offer to add them; decline.
@@ -320,9 +321,8 @@ neither surface. A `copier update` will offer to add them; decline.
 
 1. Update `min_version` / `max_version` in `netbox_branching/__init__.py`.
 2. Update `COMPATIBILITY.md`.
-3. Adjust the NetBox refs in the `.github/workflows/test.yml` matrix, and the
-   `netbox_min_version` / `netbox_max_version` / `netbox_test_min_ref` / `netbox_test_max_ref`
-   answers in `.copier-answers.yml`.
+3. Update the `netbox_min_version` / `netbox_max_version` / `netbox_test_min_ref` /
+   `netbox_test_max_ref` answers in `.copier-answers.yml`.
 4. Run the suite locally against the new version.
 5. Note any compatibility changes or breaking changes in `docs/changelog.md`.
 

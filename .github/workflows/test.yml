@@ -4,8 +4,8 @@
 # PR validation: lint (pre-commit + mkdocs) then test matrix. The test job is
 # gated on the lint job passing, so expensive CI minutes are spent only on
 # green code. The Python axis lists the interpreter versions this plugin
-# supports; the NetBox axis covers the declared min / max supported versions
-# plus main as an early-warning canary.
+# supports. NetBox is tested at main only: features gated on unreleased NetBox
+# changes would fail against a pinned release.
 #
 # Test config:
 #   testing/configuration.py is loaded via NETBOX_CONFIGURATION + PYTHONPATH
@@ -13,7 +13,7 @@
 #   editable so its tests package resolves from the source tree.
 #
 # NetBox ref override:
-#   A PR labelled `test-against:<ref>` swaps the `main` leg for that ref;
+#   A PR labelled `test-against:<ref>` swaps main for that ref;
 #   workflow_dispatch takes an explicit ref. Both let a PR be validated
 #   against an unreleased NetBox branch. All three sources are resolved and
 #   validated in one step, so the checkout consumes only its output.
@@ -91,7 +91,6 @@ jobs:
       matrix:
         python-version: ['3.12', '3.13', '3.14']
         netbox-ref:
-          - 'v4.7.0'
           - 'main'
         include:
           - coverage: false
@@ -137,7 +136,7 @@ jobs:
       - name: Resolve NetBox ref
         id: netbox-ref
         # A `test-against:<ref>` PR label, or the workflow_dispatch input,
-        # overrides the `main` leg only; the declared-floor leg always runs.
+        # overrides main.
         env:
           MATRIX_REF: ${{ matrix.netbox-ref }}
           INPUT_REF: ${{ inputs.netbox_ref }}
