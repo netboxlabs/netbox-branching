@@ -4,7 +4,8 @@
     <i class="mdi mdi-alert"></i>
     {% trans "This object has been modified in the following branches:" %}
     {% for branch in branches %}
-      <a href="{{ branch.get_absolute_url }}">{{ branch }}</a>{% if not forloop.last %}, {% endif %}
+      <a href="{{ branch.get_absolute_url }}">{{ branch }}</a>
+      {% if not forloop.last %},{% endif %}
     {% endfor %}
   </div>
 {% endif %}

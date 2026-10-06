@@ -1,6 +1,6 @@
 from django.core.exceptions import ObjectDoesNotExist
-from extras.webhooks import register_webhook_callback
 
+from extras.webhooks import register_webhook_callback
 from netbox_branching.utilities import BranchNotReady, get_active_branch
 
 
@@ -14,14 +14,7 @@ def set_active_branch(object_type, event_type, data, request):
         branch = get_active_branch(request)
     except (BranchNotReady, ObjectDoesNotExist):
         branch = None
-    if branch:
-        attrs = {
-            'id': branch.pk,
-            'name': branch.name,
-            'schema_id': branch.schema_id,
-        }
-    else:
-        attrs = None
+    attrs = {'id': branch.pk, 'name': branch.name, 'schema_id': branch.schema_id} if branch else None
     return {
         'active_branch': attrs,
     }

@@ -1,16 +1,21 @@
 {% load i18n %}
 <div class="dropdown">
-  <button class="btn btn-primary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+  <button class="btn btn-primary dropdown-toggle"
+          type="button"
+          data-bs-toggle="dropdown"
+          aria-expanded="false">
     <i class="mdi mdi-source-branch"></i>
     {{ active_branch|default:"Main" }}
   </button>
   <div class="dropdown-menu dropdown-menu-end">
     <a class="dropdown-item d-flex justify-content-between" href="?_branch=">
-      Main {% if not active_branch %}<span class="badge bg-green ms-auto"></span>{% endif %}
+      Main
+      {% if not active_branch %}<span class="badge bg-green ms-auto"></span>{% endif %}
     </a>
     {% for branch in branches %}
       {% if branch.ready %}
-        <a class="dropdown-item d-flex justify-content-between" href="?_branch={{ branch.schema_id }}">
+        <a class="dropdown-item d-flex justify-content-between"
+           href="?_branch={{ branch.schema_id }}">
           {{ branch.name }}
           {% if branch.is_active %}<span class="badge bg-green ms-auto"></span>{% endif %}
         </a>
@@ -18,16 +23,15 @@
         <a class="dropdown-item disabled" aria-disabled="true">{{ branch.name }} ({{ branch.get_status_display }})</a>
       {% endif %}
     {% endfor %}
-    {% if active_branch or perms.netbox_branching.add_branch %}
-      <hr class="dropdown-divider">
-    {% endif %}
+    {% if active_branch or perms.netbox_branching.add_branch %}<hr class="dropdown-divider">{% endif %}
     {% if active_branch %}
       <a class="dropdown-item" href="{{ active_branch.get_absolute_url }}">
         <i class="mdi mdi-arrow-right-thick"></i> {% trans "View Branch" %}
       </a>
     {% endif %}
     {% if perms.netbox_branching.add_branch %}
-      <a class="dropdown-item text-primary" href="{% url 'plugins:netbox_branching:branch_add' %}">
+      <a class="dropdown-item text-primary"
+         href="{% url 'plugins:netbox_branching:branch_add' %}">
         <i class="mdi mdi-plus-thick"></i> {% trans "Create a Branch" %}
       </a>
     {% endif %}

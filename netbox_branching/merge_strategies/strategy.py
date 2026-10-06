@@ -13,6 +13,7 @@ class MergeStrategy(ABC):
     """
     Abstract base class for merge strategies.
     """
+
     # Ordering for changes queryset in revert() operation
     # Merge always uses chronological order ('time')
     revert_changes_ordering = '-time'  # Reverse chronological order (newest first)
@@ -50,10 +51,9 @@ class MergeStrategy(ABC):
         logger = logging.getLogger('netbox_branching.branch')
 
         for model in models:
-
             # Recalculate MPTT as needed
             if issubclass(model, MPTTModel):
-                logger.debug(f"Recalculating MPTT for model {model}")
+                logger.debug(f'Recalculating MPTT for model {model}')
                 model.objects.rebuild()
 
 
@@ -87,4 +87,4 @@ def get_merge_strategy(strategy_name):
     try:
         return strategies[strategy_name]
     except KeyError as exc:
-        raise ValueError(f"Invalid strategy name: {strategy_name}") from exc
+        raise ValueError(f'Invalid strategy name: {strategy_name}') from exc

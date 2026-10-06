@@ -2,6 +2,7 @@ from django.urls import reverse_lazy
 
 try:
     from botocore.exceptions import ClientError as BotocoreClientError
+
     _FILE_NOT_FOUND_EXCEPTIONS = (FileNotFoundError, BotocoreClientError)
 except ImportError:
     _FILE_NOT_FOUND_EXCEPTIONS = (FileNotFoundError,)
@@ -35,9 +36,7 @@ BRANCH_ACTIONS = (
 )
 
 # Paths exempt from branch activation
-EXEMPT_PATHS = (
-    reverse_lazy('api-status'),
-)
+EXEMPT_PATHS = (reverse_lazy('api-status'),)
 
 # URL query parameter name
 QUERY_PARAM = '_branch'
@@ -66,7 +65,6 @@ EXEMPT_MODELS = (
     'extras.notificationgroup',
     'extras.savedfilter',
     'extras.webhook',
-
     # Exempt all models from this plugin and from netbox-changes
     'netbox_branching.*',
     'netbox_changes.*',
@@ -80,7 +78,7 @@ PG_UNIQUE_VIOLATION = '23505'
 # in earlier NetBox releases.
 # TODO: Remove in v0.6.0
 SKIP_INDEXES = (
-    'dcim_cabletermination_termination_type_id_termination_id_idx',     # Removed in dcim.0207_remove_redundant_indexes
+    'dcim_cabletermination_termination_type_id_termination_id_idx',  # Removed in dcim.0207_remove_redundant_indexes
     'vpn_l2vpntermination_assigned_object_type_id_assigned_objec_idx',  # Removed in vpn.0009_remove_redundant_indexes
-    'vpn_tunneltermination_termination_type_id_termination_id_idx',     # Removed in vpn.0009_remove_redundant_indexes
+    'vpn_tunneltermination_termination_type_id_termination_id_idx',  # Removed in vpn.0009_remove_redundant_indexes
 )

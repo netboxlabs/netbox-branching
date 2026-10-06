@@ -2,22 +2,29 @@
 {% load form_helpers %}
 {% load helpers %}
 {% load i18n %}
-
-{% block title %}{% trans action %} {{ branch }}{% endblock %}
-
+{% block title %}
+  {% trans action %} {{ branch }}
+{% endblock %}
 {% block tabs %}
   <ul class="nav nav-tabs">
     <li class="nav-item" role="presentation">
-      <button class="nav-link active" id="action-form-tab" data-bs-toggle="tab" data-bs-target="#action-form" type="button" role="tab" aria-controls="merge-form" aria-selected="true">
-        {% trans action %}
-      </button>
+      <button class="nav-link active"
+              id="action-form-tab"
+              data-bs-toggle="tab"
+              data-bs-target="#action-form"
+              type="button"
+              role="tab"
+              aria-controls="merge-form"
+              aria-selected="true">{% trans action %}</button>
     </li>
   </ul>
 {% endblock tabs %}
-
 {% block content %}
   {# Form tab #}
-  <div class="tab-pane show active" id="action-form" role="tabpanel" aria-labelledby="action-form-tab">
+  <div class="tab-pane show active"
+       id="action-form"
+       role="tabpanel"
+       aria-labelledby="action-form-tab">
     {% if not action_permitted %}
       <div class="alert alert-warning">
         <i class="mdi mdi-alert-circle"></i>
@@ -49,7 +56,11 @@
             {% if changes_summary.creates %}
               <div class="list-group-item">
                 <a class="d-flex justify-content-between align-items-center text-decoration-none text-body"
-                   data-bs-toggle="collapse" href="#{{ action_name }}-creates" role="button" aria-expanded="false" aria-controls="{{ action_name }}-creates">
+                   data-bs-toggle="collapse"
+                   href="#{{ action_name }}-creates"
+                   role="button"
+                   aria-expanded="false"
+                   aria-controls="{{ action_name }}-creates">
                   <span>{% trans "Creates" %}</span>
                   <span class="badge bg-success rounded-pill text-white">{{ changes_summary.creates_total }}</span>
                 </a>
@@ -70,7 +81,11 @@
             {% if changes_summary.updates %}
               <div class="list-group-item">
                 <a class="d-flex justify-content-between align-items-center text-decoration-none text-body"
-                   data-bs-toggle="collapse" href="#{{ action_name }}-updates" role="button" aria-expanded="false" aria-controls="{{ action_name }}-updates">
+                   data-bs-toggle="collapse"
+                   href="#{{ action_name }}-updates"
+                   role="button"
+                   aria-expanded="false"
+                   aria-controls="{{ action_name }}-updates">
                   <span>{% trans "Updates" %}</span>
                   <span class="badge bg-primary rounded-pill text-white">{{ changes_summary.updates_total }}</span>
                 </a>
@@ -91,7 +106,11 @@
             {% if changes_summary.deletes %}
               <div class="list-group-item">
                 <a class="d-flex justify-content-between align-items-center text-decoration-none text-body"
-                   data-bs-toggle="collapse" href="#{{ action_name }}-deletes" role="button" aria-expanded="false" aria-controls="{{ action_name }}-deletes">
+                   data-bs-toggle="collapse"
+                   href="#{{ action_name }}-deletes"
+                   role="button"
+                   aria-expanded="false"
+                   aria-controls="{{ action_name }}-deletes">
                   <span>{% trans "Deletes" %}</span>
                   <span class="badge bg-danger rounded-pill text-white">{{ changes_summary.deletes_total }}</span>
                 </a>
@@ -126,10 +145,9 @@
         <div class="col col-6 offset-3">
           {% render_form form %}
           <div class="text-center my-3">
-            <a href="{{ branch.get_absolute_url }}" class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
-            <button type="submit" name="_update" class="btn btn-primary">
-              {% trans action %}
-            </button>
+            <a href="{{ branch.get_absolute_url }}"
+               class="btn btn-outline-secondary">{% trans "Cancel" %}</a>
+            <button type="submit" name="_update" class="btn btn-primary">{% trans action %}</button>
           </div>
         </div>
       </div>
