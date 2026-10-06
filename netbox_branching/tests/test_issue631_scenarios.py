@@ -4,7 +4,13 @@ NetBox fix for netbox-community/netbox#23160 covers the scenario as reported:
 a FrontPort (not just an Interface), a disconnect that happens in its own
 request, and unrelated changes accumulated afterwards in a long-lived branch.
 """
+
 import uuid
+
+from django.contrib.auth import get_user_model
+from django.db import connections
+from django.test import RequestFactory, TransactionTestCase
+from django.urls import reverse
 
 from dcim.models import (
     Cable,
@@ -18,12 +24,7 @@ from dcim.models import (
     RearPort,
     Site,
 )
-from django.contrib.auth import get_user_model
-from django.db import connections
-from django.test import RequestFactory, TransactionTestCase
-from django.urls import reverse
 from netbox.context_managers import event_tracking
-
 from netbox_branching.choices import BranchMergeStrategyChoices
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch

@@ -8,16 +8,17 @@ update (dcim.signals.nullify_connected_endpoints), which emits no ObjectChange.
 The branch is therefore left with a single "update" change for the terminating
 object pointing at a Cable which no longer exists, and merging fails.
 """
+
 import uuid
 
-from dcim.models import Cable, CableTermination, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
-from netbox.context_managers import event_tracking
 
+from dcim.models import Cable, CableTermination, Device, DeviceRole, DeviceType, Interface, Manufacturer, Site
+from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchMergeStrategyChoices
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch
@@ -97,8 +98,8 @@ class ConnectThenDisconnectMixin:
             extra = ''
             if change.changed_object_type_id == iface_ct.pk:
                 extra = (
-                    f"  pre.cable={(change.prechange_data or {}).get('cable')}"
-                    f"  post.cable={(change.postchange_data or {}).get('cable')}"
+                    f'  pre.cable={(change.prechange_data or {}).get("cable")}'
+                    f'  post.cable={(change.postchange_data or {}).get("cable")}'
                 )
             print(
                 f'{change.time}  {change.action:8s} {change.changed_object_type.model:18s} '
@@ -156,8 +157,8 @@ class SameRequestMixin(ConnectThenDisconnectMixin):
             extra = ''
             if change.changed_object_type_id == iface_ct.pk:
                 extra = (
-                    f"  pre.cable={(change.prechange_data or {}).get('cable')}"
-                    f"  post.cable={(change.postchange_data or {}).get('cable')}"
+                    f'  pre.cable={(change.prechange_data or {}).get("cable")}'
+                    f'  post.cable={(change.postchange_data or {}).get("cable")}'
                 )
             print(f'{change.action:8s} {change.changed_object_type.model:18s} id={change.changed_object_id}{extra}')
         print('--- end changes ---\n')

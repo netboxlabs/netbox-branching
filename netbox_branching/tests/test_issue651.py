@@ -8,16 +8,17 @@ Before the NetBox fix the pointer was written with a queryset update() which emi
 ObjectChange either, so nothing carried the association across and main was left with a
 circuit whose termination pointer was null.
 """
+
 import uuid
 
-from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
-from dcim.models import Site
 from django.contrib.auth import get_user_model
 from django.db import connections
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
-from netbox.context_managers import event_tracking
 
+from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
+from dcim.models import Site
+from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchMergeStrategyChoices
 from netbox_branching.models import Branch
 from netbox_branching.utilities import activate_branch

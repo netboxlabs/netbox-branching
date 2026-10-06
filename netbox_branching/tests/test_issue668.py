@@ -10,14 +10,15 @@ two-node DELETE cycle that the squash merge dependency resolver cannot order:
 _break_dependency_cycles() only breaks cycles among CREATEs, so this DELETE cycle
 reaches the topological sort and aborts the merge.
 """
+
 import uuid
 
-from dcim.models import Device, Interface, MACAddress, Site
 from django.contrib.auth import get_user_model
 from django.test import RequestFactory, TransactionTestCase
 from django.urls import reverse
-from netbox.context_managers import event_tracking
 
+from dcim.models import Device, Interface, MACAddress, Site
+from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.utilities import activate_branch
 
