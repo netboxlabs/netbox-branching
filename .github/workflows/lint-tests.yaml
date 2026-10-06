@@ -40,6 +40,10 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            .github/workflows/lint-tests.yaml
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -79,10 +83,6 @@ jobs:
         ports:
           - 5432:5432
     steps:
-      - name: Setup Python ${{ matrix.python-version }}
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
-        with:
-          python-version: ${{ matrix.python-version }}
       - name: Checkout netbox-branching
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -109,6 +109,23 @@ jobs:
           repository: "netbox-community/netbox"
           ref: ${{ inputs.netbox_ref || steps.netbox-ref.outputs.ref }}
           path: netbox
+      # After both checkouts so the pip cache key can hash their dependency files.
+      - name: Setup Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: |
+            netbox/requirements.txt
+            netbox-branching/pyproject.toml
+            netbox-branching/.github/workflows/lint-tests.yaml
+      - name: Use prebuilt psycopg wheels
+        working-directory: netbox
+        run: |
+          # Skips compiling psycopg against libpq; the version pin is unchanged.
+          sed -i 's/^psycopg\[c,pool\]==/psycopg[binary,pool]==/' requirements.txt
+          grep -q '^psycopg\[binary,pool\]==' requirements.txt \
+            || { echo "::error::NetBox's requirements.txt no longer pins psycopg[c,pool]=="; exit 1; }
       - name: Install netbox-branching
         working-directory: netbox-branching
         run: |
@@ -122,8 +139,60 @@ jobs:
         run: |
           ln -s $(pwd)/../netbox-branching/testing/configuration.py netbox/netbox/configuration.py
           python -m pip install --upgrade pip
-          pip install -r requirements.txt -U
+          pip install -r requirements.txt
+      - name: Fingerprint the schema inputs
+        id: schema
+        run: |
+          # Path and blob of every file that shapes the migrated schema, so renames count too.
+          # NetBox is checked out at a moving ref, so its schema inputs are hashed, not its SHA.
+          netbox_inputs=$(git -C netbox ls-files --stage -- \
+            requirements.txt \
+            netbox/netbox/settings.py \
+            netbox/core/signals.py \
+            ':(glob)netbox/**/migrations/**' \
+            ':(glob)netbox/*/fields.py' \
+            netbox/netbox/models/ltree.py \
+            netbox/ipam/lookups.py \
+            netbox/utilities/query_functions.py \
+            netbox/utilities/ltree.py \
+            netbox/utilities/migration.py \
+            netbox/utilities/mptt_to_ltree.py)
+          branching_inputs=$(git -C netbox-branching ls-files --stage -- \
+            .github/workflows/lint-tests.yaml \
+            pyproject.toml \
+            testing/configuration.py \
+            ':(glob)netbox_branching/migrations/**')
+          echo "hash=$(sha256sum <<< "$netbox_inputs$branching_inputs" | cut -c1-32)" >> "$GITHUB_OUTPUT"
+      - name: Restore the migrated test database
+        id: test-db
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/test_netbox.dump
+          key: test-db-py${{ matrix.python-version }}-${{ steps.schema.outputs.hash }}
+          # Pushes to main and release tags migrate from scratch, re-validating the migration chain.
+          lookup-only: ${{ github.event_name == 'push' }}
+      - name: Build the migrated test database
+        if: github.event_name == 'push' || steps.test-db.outputs.cache-hit != 'true'
+        working-directory: netbox
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          python netbox/manage.py migrate --no-input --run-syncdb
+          docker exec "$POSTGRES_CONTAINER" pg_dump -U netbox -Fc netbox > "$RUNNER_TEMP/test_netbox.dump"
+      - name: Load the test database
+        env:
+          POSTGRES_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$POSTGRES_CONTAINER" createdb -U netbox test_netbox
+          docker exec -i "$POSTGRES_CONTAINER" pg_restore -U netbox -d test_netbox --exit-on-error \
+            < "$RUNNER_TEMP/test_netbox.dump"
+      - name: Cache the migrated test database
+        if: steps.test-db.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/test_netbox.dump
+          key: ${{ steps.test-db.outputs.cache-primary-key }}
       - name: Run tests
         working-directory: netbox
         run: |
-          python netbox/manage.py test netbox_branching.tests --keepdb
+          python netbox/manage.py test netbox_branching.tests --keepdb --timing

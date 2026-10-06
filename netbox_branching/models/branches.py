@@ -770,10 +770,17 @@ class Branch(JobsMixin, PrimaryModel):
             return
         postchange_data = _serialize_for_sync(after)
 
+        # main_postchange_data is main's own state at this change, which becomes the
+        # object's new conflict baseline once the sync commits (see
+        # _advance_sync_baselines). Like postchange_data it is overwritten on each
+        # hit, so the last change replayed wins -- that is main's state at sync time.
+        main_postchange_data = change.postchange_data_clean or None
+
         if key in sync_buffer:
             # Consolidate: preserve the original prechange, overwrite postchange.
             entry = sync_buffer[key]
             entry['postchange_data'] = postchange_data
+            entry['main_postchange_data'] = main_postchange_data
             entry['object_repr'] = str(after)
             if change.user_name and change.user_name not in entry['user_names']:
                 entry['user_names'].append(change.user_name)
@@ -785,6 +792,7 @@ class Branch(JobsMixin, PrimaryModel):
                 'object_repr': str(after),
                 'prechange_data': prechange_data,
                 'postchange_data': postchange_data,
+                'main_postchange_data': main_postchange_data,
                 'user_names': [change.user_name] if change.user_name else [],
             }
 
@@ -832,6 +840,56 @@ class Branch(JobsMixin, PrimaryModel):
             logger.debug(
                 f'Recorded sync-applied change to {entry["model_class"]._meta.verbose_name} '
                 f'{entry["object_repr"]} (supersedes prior branch change on conflicting fields)'
+            )
+
+    def _advance_sync_baselines(self, sync_buffer, logger):
+        """
+        Move the conflict baseline of each synced object to main's state at sync time (#640).
+
+        ``ChangeDiff.original`` is the common ancestor ``_update_conflicts()`` compares
+        against, and it is otherwise written only once -- when the branch first changes
+        the object. Leaving it behind means a change the branch has already absorbed by
+        syncing keeps reading as divergence, so any later branch edit to that field is
+        reported as a conflict for the life of the branch.
+
+        Only objects in ``sync_buffer`` are advanced: an object whose change from main
+        could not be applied (e.g. one the branch has deleted) is never buffered, and
+        moving its baseline would hide a real conflict.
+        """
+        if not sync_buffer:
+            return
+
+        # Fetch every relevant ChangeDiff in one query rather than one per buffered
+        # object. The paired __in filters form a cross product, so this can return
+        # diffs for pairs not in the buffer; they are simply never looked up. The
+        # over-fetch is bounded by the branch's own ChangeDiff count.
+        diffs = {}
+        for diff in ChangeDiff.objects.filter(
+            branch=self,
+            object_type_id__in={key[0] for key in sync_buffer},
+            object_id__in={key[1] for key in sync_buffer},
+        ):
+            # setdefault preserves the "most recently updated wins" semantics of the
+            # per-object .first() this replaced (ChangeDiff orders by -last_updated).
+            diffs.setdefault((diff.object_type_id, diff.object_id), diff)
+
+        for key, entry in sync_buffer.items():
+            if not (baseline := entry['main_postchange_data']):
+                continue
+            diff = diffs.get(key)
+            if diff is None or diff.action != ObjectChangeActionChoices.ACTION_UPDATE or diff.original is None:
+                # A CREATE diff has no baseline, and a branch DELETE against a main update
+                # is a genuine conflict that must survive the sync.
+                continue
+            diff.original = baseline
+            # 'conflicts' is listed because ChangeDiff.save() recomputes it from the new
+            # baseline; without it in update_fields the recomputed value would not be
+            # written. object_repr is excluded because save() would recompute it from the
+            # GenericForeignKey, which resolves against the branch schema here.
+            diff.save(update_fields=('original', 'conflicts', 'last_updated'))
+            logger.debug(
+                f'Advanced conflict baseline for {entry["model_class"]._meta.verbose_name} '
+                f'{entry["object_repr"]} to main\'s synced state'
             )
 
     def _handle_sync_delete(self, change, branchable_models, user, logger, request_id=None):
@@ -918,6 +976,11 @@ class Branch(JobsMixin, PrimaryModel):
         # Emit pre-sync signal
         pre_sync.send(sender=self.__class__, branch=self, user=user)
 
+        # Watermark the sync where the change set is read: get_unsynced_changes() filters on
+        # time__gt=last_sync, so storing the completion time would skip anything main committed
+        # while this sync was running.
+        sync_started = timezone.now()
+
         # Retrieve unsynced changes before we update the Branch's status
         if changes := self.get_unsynced_changes().order_by('time'):
             logger.info(f"Found {len(changes)} changes to sync")
@@ -980,6 +1043,10 @@ class Branch(JobsMixin, PrimaryModel):
                 # record_change_diff actually fires and writes to the default DB.
                 self._flush_sync_buffer(sync_buffer, user, request_id, logger)
 
+                # Now that the branch holds main's changes, move each affected object's
+                # conflict baseline forward to match (#640).
+                self._advance_sync_baselines(sync_buffer, logger)
+
                 if not commit:
                     raise AbortTransaction()
 
@@ -996,7 +1063,7 @@ class Branch(JobsMixin, PrimaryModel):
 
         # Record the branch's last_synced time & update its status
         logger.debug(f"Setting branch status to {BranchStatusChoices.READY}")
-        self.last_sync = timezone.now()
+        self.last_sync = sync_started
         self.status = BranchStatusChoices.READY
         self.save(update_merge_sync_fields=True)
 
