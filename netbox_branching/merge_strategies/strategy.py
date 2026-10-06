@@ -49,7 +49,9 @@ class MergeStrategy(ABC):
         """
         Update the objects which depend on those just applied (e.g. the CablePaths traversing a Cable).
         Applying a create writes the object with a raw save, which bypasses Model.save() and the dependent
-        objects it maintains; models expose the work through update_dependent_objects(). (#469)
+        objects it maintains, and an update can land before the related changes it depends on (e.g. a
+        re-terminated Cable before its CableTerminations); models expose the work through
+        update_dependent_objects(). (#469)
 
         Must be called only once every change has been applied: retracing a Cable, for instance, requires
         its CableTerminations to exist.

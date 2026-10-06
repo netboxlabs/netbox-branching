@@ -204,7 +204,7 @@ class SquashMergeStrategy(MergeStrategy):
 
         # Apply collapsed changes in order
         logger.info(f'Applying {len(ordered_changes)} collapsed changes...')
-        created_pks_by_model = {}
+        applied_pks_by_model = {}
         for i, collapsed in enumerate(ordered_changes, 1):
             model_class = collapsed.model_class
             models.add(model_class)
@@ -238,11 +238,12 @@ class SquashMergeStrategy(MergeStrategy):
                     )
                     raise
 
-            if collapsed.final_action == ActionType.CREATE:
-                created_pks_by_model.setdefault(model_class, []).append(collapsed.key[1])
+            # An update counts too: re-terminating a Cable leaves its paths stale until it is retraced
+            if collapsed.final_action in (ActionType.CREATE, ActionType.UPDATE):
+                applied_pks_by_model.setdefault(model_class, []).append(collapsed.key[1])
 
         # Run outside event_tracking(): this reconciles derived state, and is not itself a change
-        self._update_dependent_objects(created_pks_by_model, logger)
+        self._update_dependent_objects(applied_pks_by_model, logger)
 
         # Perform cleanup tasks
         self._clean(models)
@@ -284,8 +285,8 @@ class SquashMergeStrategy(MergeStrategy):
                 dummy_change = collapsed.generate_object_change()
                 dummy_change.undo(branch, using=DEFAULT_DB_ALIAS, logger=logger)
 
-            # Undoing a delete restores the object, which lands the same way an applied create does
-            if collapsed.final_action == ActionType.DELETE:
+            # Undoing a delete restores the object as an applied create does; undoing an update can re-terminate
+            if collapsed.final_action in (ActionType.DELETE, ActionType.UPDATE):
                 restored_pks_by_model.setdefault(model_class, []).append(collapsed.key[1])
 
         # Run outside event_tracking(): this reconciles derived state, and is not itself a change

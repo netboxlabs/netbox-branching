@@ -1299,6 +1299,67 @@ class BaseMergeTests:
         # A successful cable connection creates two CablePath records (one per endpoint)
         self.assertEqual(CablePath.objects.count(), 2, 'Cable paths not populated after merge')
 
+    def _assert_cable_path(self, interface_id, peer_id):
+        """Assert that the given Interface has a complete CablePath ending at its peer."""
+        path = Interface.objects.get(id=interface_id).path
+        self.assertIsNotNone(path, f'Interface {interface_id} has no cable path')
+        self.assertTrue(path.is_complete, f'Cable path from interface {interface_id} is incomplete')
+        self.assertEqual([obj.pk for obj in path.destinations], [peer_id])
+
+    def test_merge_and_revert_cable_retermination(self):
+        """
+        Test that cable paths are retraced when merging, then reverting, a branch which moves one
+        end of an existing cable to another interface. Refs: #469
+        """
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        device_a = Device.objects.create(
+            name='Device A',
+            site=site,
+            device_type=self.device_type,
+            role=self.device_role,
+        )
+        device_b = Device.objects.create(
+            name='Device B',
+            site=site,
+            device_type=self.device_type,
+            role=self.device_role,
+        )
+        interface_a = Interface.objects.create(device=device_a, name='eth0', type='1000base-t')
+        interface_b = Interface.objects.create(device=device_b, name='eth0', type='1000base-t')
+        interface_c = Interface.objects.create(device=device_b, name='eth1', type='1000base-t')
+
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            cable = Cable(a_terminations=[interface_a], b_terminations=[interface_b])
+            cable.save()
+        cable_id = cable.id
+        self._assert_cable_path(interface_a.id, interface_b.id)
+
+        branch = self._create_and_provision_branch()
+
+        # In branch: move the cable's B end from interface B to interface C
+        request.id = uuid.uuid4()
+        with activate_branch(branch), event_tracking(request):
+            cable = Cable.objects.get(id=cable_id)
+            cable.snapshot()
+            cable.b_terminations = [Interface.objects.get(id=interface_c.id)]
+            cable.save()
+
+        branch.merge(user=self.user, commit=True)
+
+        self._assert_cable_path(interface_a.id, interface_c.id)
+        self._assert_cable_path(interface_c.id, interface_a.id)
+        self.assertIsNone(Interface.objects.get(id=interface_b.id).path)
+
+        branch.revert(user=self.user, commit=True)
+
+        self._assert_cable_path(interface_a.id, interface_b.id)
+        self._assert_cable_path(interface_b.id, interface_a.id)
+        self.assertIsNone(Interface.objects.get(id=interface_c.id).path)
+
     def _create_ports(self, device):
         """Helper to create a front/rear port pair on a device, with no mapping between them."""
         rear_port = RearPort.objects.create(device=device, name='rear', type='8p8c', positions=4)
