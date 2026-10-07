@@ -283,6 +283,12 @@ class Branch(JobsMixin, PrimaryModel):
     def clean(self):
         super().clean()
 
+        # "Main" is reserved for the primary schema; pre-existing branches keep their name (#682)
+        if self.name.strip().casefold() == 'main' and (
+            not self.pk or Branch.objects.filter(pk=self.pk).exclude(name=self.name).exists()
+        ):
+            raise ValidationError({'name': _('"{name}" is a reserved branch name.').format(name=self.name)})
+
         # Enforce the maximum number of total branches
         if not self.pk and (max_branches := get_plugin_config('netbox_branching', 'max_branches')):
             total_branch_count = Branch.objects.exclude(status=BranchStatusChoices.ARCHIVED).count()

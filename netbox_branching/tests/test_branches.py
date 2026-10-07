@@ -151,6 +151,27 @@ class BranchTestCase(FastTeardownTransactionTestCase):
         with self.assertRaises(ValidationError):
             branch.full_clean()
 
+    def test_reserved_name_main(self):
+        """
+        Verify that "main" can't be used as a branch name, but an existing branch with that name stays editable.
+        """
+        for name in ('main', 'Main', ' MAIN '):
+            with self.subTest(name=name), self.assertRaises(ValidationError):
+                Branch(name=name).full_clean()
+
+        # Renaming an existing branch to "main" should fail
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+        branch.name = 'Main'
+        with self.assertRaises(ValidationError):
+            branch.full_clean()
+
+        # A branch created before the restriction can still be edited
+        branch = Branch(name='main')
+        branch.save(provision=False)
+        branch.description = 'Updated'
+        branch.full_clean()
+
     @override_settings(
         CUSTOM_VALIDATORS={
             'netbox_branching.branch': [

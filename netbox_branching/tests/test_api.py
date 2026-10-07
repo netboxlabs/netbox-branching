@@ -192,6 +192,31 @@ class BranchArchiveAPITestCase(BaseAPITestCase, TestCase):
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
 
+class BranchReservedNameAPITestCase(BaseAPITestCase, TestCase):
+    def test_create_reserved_name_rejected(self):
+        url = reverse('plugins-api:netbox_branching-api:branch-list')
+        response = self.client.post(
+            url, data=json.dumps({'name': 'Main'}), content_type='application/json', **self.header
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn('name', json.loads(response.content))
+        self.assertFalse(Branch.objects.filter(name='Main').exists())
+
+    def test_patch_existing_reserved_name_allowed(self):
+        branch = Branch(name='main')
+        branch.save(provision=False)
+
+        url = reverse('plugins-api:netbox_branching-api:branch-detail', kwargs={'pk': branch.pk})
+        response = self.client.patch(
+            url, data=json.dumps({'description': 'Updated'}), content_type='application/json', **self.header
+        )
+
+        self.assertEqual(response.status_code, 200)
+        branch.refresh_from_db()
+        self.assertEqual(branch.description, 'Updated')
+
+
 class BaseBranchAPITestCase(BaseAPITestCase):
     """
     Base mixin for sync/merge/revert endpoint tests. Subclasses set:
