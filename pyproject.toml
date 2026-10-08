@@ -16,7 +16,7 @@ build-backend = "setuptools.build_meta"
 [project]
 # Distribution name is published on PyPI and must not be renamed to match repo_slug.
 name = "netboxlabs-netbox-branching"
-version = "1.2.1"
+version = "1.2.2"
 description = "A git-like branching implementation for NetBox"
 readme = { file = "README.md", content-type = "text/markdown" }
 license-files = ["LICENSE.md"]
