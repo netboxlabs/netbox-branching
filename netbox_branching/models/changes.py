@@ -63,6 +63,9 @@ class ObjectChange(ObjectChange_):
     Proxy model for NetBox's ObjectChange.
     """
 
+    # Set by the squash strategy, see get_merge_data()
+    replay_fields = ()
+
     class Meta:
         proxy = True
 
@@ -87,10 +90,15 @@ class ObjectChange(ObjectChange_):
         whereas merging needs to drop removed nested JSON keys entirely. ``diff_for_merge``
         tracks those removals with the ``DELETED`` sentinel so ``update_object`` can apply
         them rather than leave stale ``None`` values behind. (#588, #592)
+
+        Fields in ``replay_fields`` are written from the target snapshot even when unchanged.
         """
+        source, target = self.prechange_data_clean, self.postchange_data_clean
         if reverse:
-            return diff_for_merge(self.postchange_data_clean, self.prechange_data_clean)
-        return diff_for_merge(self.prechange_data_clean, self.postchange_data_clean)
+            source, target = target, source
+        data = diff_for_merge(source, target)
+        data.update({field: target[field] for field in self.replay_fields if field in target})
+        return data
 
     def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None, skip_missing=False):
         """
