@@ -1,5 +1,19 @@
 # Change Log
 
+## v1.2.2
+
+### Bug Fixes
+
+* [#469](https://github.com/netboxlabs/netbox-branching/issues/469) - Recalculate cable paths after a squash merge or revert
+* [#632](https://github.com/netboxlabs/netbox-branching/issues/632) - Include the underlying validation error in merge failure reports
+* [#640](https://github.com/netboxlabs/netbox-branching/issues/640) - Advance the conflict baseline when syncing a branch
+* [#641](https://github.com/netboxlabs/netbox-branching/issues/641) - Deprovision a branch before deleting its database record
+* [#642](https://github.com/netboxlabs/netbox-branching/issues/642) - Return a 400 response instead of a 500 error for API requests against a branch that is not ready
+* [#649](https://github.com/netboxlabs/netbox-branching/issues/649) - Skip branch activation in scripts when the plugin is not installed
+* [#668](https://github.com/netboxlabs/netbox-branching/issues/668) - Break circular DELETE dependencies during squash merges
+
+---
+
 ## v1.2.1
 
 ### Bug Fixes
