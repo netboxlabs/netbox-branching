@@ -17,6 +17,9 @@ from .strategy import MergeStrategy
 
 __all__ = ('SquashMergeStrategy',)
 
+# Written together by CableTermination.save() and delete() on the terminating object
+CABLE_ASSOCIATION_FIELDS = ('cable', 'cable_end', 'cable_connector', 'cable_positions')
+
 
 class ActionType(StrEnum):
     """
@@ -43,6 +46,7 @@ class CollapsedChange:
         self.postchange_data = {}
         self.last_change = None  # The most recent ObjectChange (for metadata)
         self.synthetic = False  # True for UPDATEs injected by cycle breaking
+        self.replay_fields = ()  # Fields the generated change writes even when unchanged
 
         # Dependencies for ordering
         self.depends_on = set()  # Set of keys this change depends on
@@ -137,6 +141,7 @@ class CollapsedChange:
         )
         # Use last_change for migrate() to have the correct metadata
         dummy_change.pk = self.last_change.pk
+        dummy_change.replay_fields = self.replay_fields
         return dummy_change
 
 
@@ -189,6 +194,24 @@ class SquashMergeStrategy(MergeStrategy):
                     )
                     collapsed.final_action = ActionType.SKIP
 
+    @staticmethod
+    def _replay_cable_associations(collapsed_changes):
+        """
+        Make each object whose CableTermination is deleted replay its whole cable association: replaying the delete
+        clears it in main, and the raw-saved CableTermination that replaces it never sets it again.
+        """
+        targets = set()
+        for collapsed in collapsed_changes.values():
+            if collapsed.key[0] == 'dcim.cabletermination' and collapsed.final_action == ActionType.DELETE:
+                data = collapsed.prechange_data
+                ct_id = data.get('termination_type') or data.get('termination_type_id')
+                app_label, model = ContentType.objects.get_for_id(ct_id).natural_key()
+                targets.add((f'{app_label}.{model}', data.get('termination_id')))
+        for key in targets:
+            collapsed = collapsed_changes.get(key)
+            if collapsed is not None and collapsed.final_action == ActionType.UPDATE:
+                collapsed.replay_fields = CABLE_ASSOCIATION_FIELDS
+
     def merge(self, branch, changes, request, logger, user):
         """
         Apply changes after collapsing them by object and ordering by dependencies.
@@ -198,6 +221,7 @@ class SquashMergeStrategy(MergeStrategy):
         logger.info('Collapsing ObjectChanges by object (incremental)...')
         collapsed_changes, _ = SquashMergeStrategy._collapse_changes(changes, logger)
         SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
+        SquashMergeStrategy._replay_cable_associations(collapsed_changes)
 
         # Order collapsed changes based on dependencies
         ordered_changes = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger, operation='merge')
@@ -258,6 +282,7 @@ class SquashMergeStrategy(MergeStrategy):
         collapsed_changes, change_count = SquashMergeStrategy._collapse_changes(changes, logger)
         logger.info(f'  {change_count} changes collapsed into {len(collapsed_changes)} objects')
         SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
+        SquashMergeStrategy._replay_cable_associations(collapsed_changes)
 
         # Order collapsed changes for revert (reverse of merge order)
         merge_order = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger, operation='revert')

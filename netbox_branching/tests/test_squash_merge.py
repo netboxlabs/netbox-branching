@@ -10,6 +10,7 @@ from django.test import RequestFactory
 from django.urls import reverse
 
 from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
+from dcim.choices import CableProfileChoices
 from dcim.models import Cable, CablePath, Device, Interface, Location, MACAddress, Region, Site, VirtualChassis
 from ipam.models import IPAddress
 from netbox.context_managers import event_tracking
@@ -26,6 +27,52 @@ class SquashMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
     """Test cases for Branch merge with ObjectChange collapsing and ordering using squash strategy."""
 
     MERGE_STRATEGY = BranchMergeStrategyChoices.SQUASH
+
+    def _create_interfaces(self, count=2):
+        """Create one Interface on each of ``count`` Devices in main and return their IDs."""
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        interface_ids = []
+        for name in ('Device A', 'Device B', 'Device C', 'Device D')[:count]:
+            device = Device.objects.create(name=name, site=site, device_type=self.device_type, role=self.device_role)
+            interface_ids.append(Interface.objects.create(device=device, name='eth0', type='1000base-t').pk)
+        return interface_ids
+
+    def _create_cable(self, interface_ids, profile=''):
+        """Connect the two Interfaces with a Cable and return its ID."""
+        a_id, b_id = interface_ids
+        cable = Cable(
+            a_terminations=[Interface.objects.get(pk=a_id)],
+            b_terminations=[Interface.objects.get(pk=b_id)],
+            profile=profile,
+        )
+        cable.save()
+        return cable.pk
+
+    def _set_cable_profile(self, cable_id, profile):
+        """Change a Cable's profile the way the edit view does."""
+        cable = Cable.objects.get(pk=cable_id)
+        cable.snapshot()
+        cable.profile = profile
+        cable.full_clean()
+        cable.save()
+
+    def _assert_cable_association(self, cable_id, interface_ids, profile):
+        """Assert the Cable's profile and that each Interface matches its CableTermination."""
+        positions = {CableProfileChoices.SINGLE_1C1P: [1], CableProfileChoices.SINGLE_1C2P: [1, 2]}.get(profile)
+        connector = 1 if positions else None
+        self.assertEqual(Cable.objects.get(pk=cable_id).profile, profile)
+        for cable_end, interface_id in (('A', interface_ids[0]), ('B', interface_ids[1])):
+            interface = Interface.objects.get(pk=interface_id)
+            termination = interface.cable_terminations.get()
+            expected = (cable_id, cable_end, connector, positions)
+            self.assertEqual(
+                (interface.cable_id, interface.cable_end, interface.cable_connector, interface.cable_positions),
+                expected,
+            )
+            self.assertEqual(
+                (termination.cable_id, termination.cable_end, termination.connector, termination.positions),
+                expected,
+            )
 
     def test_merge_delete_then_create_same_slug(self):
         """
@@ -1093,6 +1140,213 @@ class SquashMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
 
         self.assertTrue(Cable.objects.filter(id=cable_id).exists())
         self.assertEqual(CablePath.objects.count(), 2, 'Cable paths not restored after revert')
+
+    def test_merge_and_revert_cable_profile_assignment(self):
+        """Assigning a Cable profile keeps both Interfaces attached through a squash merge and its revert."""
+        interface_ids = self._create_interfaces()
+        cable_id = self._create_cable(interface_ids)
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            self._set_cable_profile(cable_id, CableProfileChoices.SINGLE_1C1P)
+            interface = Interface.objects.get(pk=interface_ids[0])
+            interface.snapshot()
+            interface.description = 'Branch description'
+            interface.save()
+
+        branch.merge(user=self.user, commit=True)
+
+        self._assert_cable_association(cable_id, interface_ids, CableProfileChoices.SINGLE_1C1P)
+        self.assertEqual(Interface.objects.get(pk=interface_ids[0]).description, 'Branch description')
+
+        branch.refresh_from_db()
+        branch.revert(user=self.user, commit=True)
+
+        self._assert_cable_association(cable_id, interface_ids, '')
+        self.assertEqual(Interface.objects.get(pk=interface_ids[0]).description, '')
+        self._assert_cable_path(interface_ids[0], interface_ids[1])
+        self._assert_cable_path(interface_ids[1], interface_ids[0])
+
+    def test_merge_cable_profile_assignment_rebuilds_paths(self):
+        """Assigning a Cable profile leaves both Interfaces with a complete path to each other after a squash merge."""
+        interface_ids = self._create_interfaces()
+        cable_id = self._create_cable(interface_ids)
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            self._set_cable_profile(cable_id, CableProfileChoices.SINGLE_1C1P)
+
+        branch.merge(user=self.user, commit=True)
+
+        self._assert_cable_path(interface_ids[0], interface_ids[1])
+        self._assert_cable_path(interface_ids[1], interface_ids[0])
+
+    def test_merge_and_revert_cable_profile_removal(self):
+        """Removing a Cable profile keeps both Interfaces attached through a squash merge and its revert."""
+        interface_ids = self._create_interfaces()
+        cable_id = self._create_cable(interface_ids, profile=CableProfileChoices.SINGLE_1C1P)
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            self._set_cable_profile(cable_id, '')
+
+        branch.merge(user=self.user, commit=True)
+
+        self._assert_cable_association(cable_id, interface_ids, '')
+
+        branch.refresh_from_db()
+        branch.revert(user=self.user, commit=True)
+
+        self._assert_cable_association(cable_id, interface_ids, CableProfileChoices.SINGLE_1C1P)
+
+    def test_merge_cable_profile_round_trip(self):
+        """Assigning and then removing a Cable profile in one branch keeps both Interfaces attached."""
+        interface_ids = self._create_interfaces()
+        cable_id = self._create_cable(interface_ids)
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            self._set_cable_profile(cable_id, CableProfileChoices.SINGLE_1C1P)
+            self._set_cable_profile(cable_id, '')
+
+        branch.merge(user=self.user, commit=True)
+
+        self._assert_cable_association(cable_id, interface_ids, '')
+
+    def test_merge_cable_profile_removal_round_trip(self):
+        """Removing and then restoring a Cable profile in one branch keeps both Interfaces attached."""
+        interface_ids = self._create_interfaces()
+        cable_id = self._create_cable(interface_ids, profile=CableProfileChoices.SINGLE_1C1P)
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            self._set_cable_profile(cable_id, '')
+            self._set_cable_profile(cable_id, CableProfileChoices.SINGLE_1C1P)
+
+        branch.merge(user=self.user, commit=True)
+
+        self._assert_cable_association(cable_id, interface_ids, CableProfileChoices.SINGLE_1C1P)
+
+    def test_merge_interface_edit_keeps_cable_added_in_main(self):
+        """An Interface edit made in a branch does not detach a Cable connected to it in main since."""
+        interface_ids = self._create_interfaces()
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            interface = Interface.objects.get(pk=interface_ids[0])
+            interface.snapshot()
+            interface.description = 'Branch description'
+            interface.save()
+
+        cable_id = self._create_cable(interface_ids)
+
+        branch.merge(user=self.user, commit=True)
+
+        self._assert_cable_association(cable_id, interface_ids, '')
+        self.assertEqual(Interface.objects.get(pk=interface_ids[0]).description, 'Branch description')
+
+    def test_merge_interface_edit_keeps_cable_replaced_in_main(self):
+        """An Interface edit made in a branch keeps the Cable that replaced its original in main since."""
+        interface_ids = self._create_interfaces()
+        original_cable_id = self._create_cable(interface_ids)
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            interface = Interface.objects.get(pk=interface_ids[0])
+            interface.snapshot()
+            interface.description = 'Branch description'
+            interface.save()
+
+        Cable.objects.get(pk=original_cable_id).delete()
+        cable_id = self._create_cable(interface_ids)
+
+        branch.merge(user=self.user, commit=True)
+
+        self._assert_cable_association(cable_id, interface_ids, '')
+        self.assertEqual(Interface.objects.get(pk=interface_ids[0]).description, 'Branch description')
+
+    def test_merge_cable_created_and_deleted_in_branch_keeps_cable_added_in_main(self):
+        """A Cable created and deleted in a branch does not detach a Cable connected in main since."""
+        interface_ids = self._create_interfaces()
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            Cable.objects.get(pk=self._create_cable(interface_ids)).delete()
+
+        cable_id = self._create_cable(interface_ids)
+
+        branch.merge(user=self.user, commit=True)
+
+        self._assert_cable_association(cable_id, interface_ids, '')
+
+    def test_merge_and_revert_cable_profile_change(self):
+        """Changing a Cable to another profile keeps both Interfaces attached through a squash merge and its revert."""
+        interface_ids = self._create_interfaces()
+        cable_id = self._create_cable(interface_ids, profile=CableProfileChoices.SINGLE_1C1P)
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            self._set_cable_profile(cable_id, CableProfileChoices.SINGLE_1C2P)
+
+        branch.merge(user=self.user, commit=True)
+
+        self._assert_cable_association(cable_id, interface_ids, CableProfileChoices.SINGLE_1C2P)
+
+        branch.refresh_from_db()
+        branch.revert(user=self.user, commit=True)
+
+        self._assert_cable_association(cable_id, interface_ids, CableProfileChoices.SINGLE_1C1P)
+
+    def test_merge_and_revert_cable_replacement(self):
+        """Replacing a Cable between the same Interfaces keeps both attached through a squash merge and its revert."""
+        interface_ids = self._create_interfaces()
+        original_cable_id = self._create_cable(interface_ids)
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            Cable.objects.get(pk=original_cable_id).delete()
+            cable_id = self._create_cable(interface_ids)
+
+        branch.merge(user=self.user, commit=True)
+
+        self.assertFalse(Cable.objects.filter(pk=original_cable_id).exists())
+        self._assert_cable_association(cable_id, interface_ids, '')
+
+        branch.refresh_from_db()
+        branch.revert(user=self.user, commit=True)
+
+        self.assertFalse(Cable.objects.filter(pk=cable_id).exists())
+        self._assert_cable_association(original_cable_id, interface_ids, '')
+
+    def test_merge_after_sync_keeps_cable_moved_in_main(self):
+        """A change synced from main does not move an Interface back to a Cable it left in main since."""
+        interface_ids = self._create_interfaces(count=4)
+        original_cable_id = self._create_cable(interface_ids[:2])
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            interface = Interface.objects.get(pk=interface_ids[0])
+            interface.snapshot()
+            interface.description = 'Branch description'
+            interface.save()
+
+        with event_tracking(self._make_request()):
+            self._set_cable_profile(original_cable_id, CableProfileChoices.SINGLE_1C1P)
+        branch.sync(user=self.user, commit=True)
+
+        with event_tracking(self._make_request()):
+            original_cable = Cable.objects.get(pk=original_cable_id)
+            original_cable.snapshot()
+            original_cable.a_terminations = [Interface.objects.get(pk=interface_ids[2])]
+            original_cable.full_clean()
+            original_cable.save()
+            moved_ids = [interface_ids[0], interface_ids[3]]
+            cable_id = self._create_cable(moved_ids, profile=CableProfileChoices.SINGLE_1C1P)
+
+        branch.merge(user=self.user, commit=True)
+
+        self._assert_cable_association(cable_id, moved_ids, CableProfileChoices.SINGLE_1C1P)
+        self.assertEqual(Interface.objects.get(pk=interface_ids[0]).description, 'Branch description')
 
     def _make_request(self):
         """Build a per-test request for event_tracking()."""
