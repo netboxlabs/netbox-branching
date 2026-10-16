@@ -324,7 +324,7 @@ Subclass `netbox_branching.backends.BranchingBackend` and implement the abstract
 | Method | Responsibility |
 |---|---|
 | `provision(branch, user)` | Assign the branch an identifier (see below), then make the isolated dataset exist, or raise. On failure, clean up your own partial state before raising. |
-| `deprovision(branch)` | Destroy the isolated dataset. Must be safe to call for a branch that was never successfully provisioned, including one with no `backend_id`. |
+| `deprovision(branch)` | Destroy the isolated dataset. Must be safe to call for a branch that was never successfully provisioned, including one with no `backend_id`. Called only once a branch's deletion or archival has been committed (see [Transactions](#transactions)). |
 | `get_connection_alias(branch)` | Return the Django connection alias addressing the branch. Must begin with the backend's `connection_alias_prefix`. |
 | `get_connection_config(alias, default_config)` | Return the `DATABASES` entry for `alias`, or `None` if the alias isn't yours. |
 
@@ -344,6 +344,7 @@ The rest have useful defaults and only need overriding for specific needs:
 | `run_migration_plan(branch, executor, targets, plan)` | `executor.migrate(targets)` |
 | `validate_configuration()` | Asserts the host requirements below; **call `super()`** if you add your own |
 | `get_detail_fields(branch)` | No rows; override to add `(label, value)` rows to the branch detail page |
+| `get_api_fields(branch)` | An empty dict; override to report the same facts as the branch's `backend_details` in the REST API |
 | `objectchange_table` | The name of NetBox's change log table (property) |
 | `get_branch_tables()` | Every branchable model's table, plus the change log |
 | `provision_logger` / `migrate_logger` | The `netbox_branching.branch.provision` / `.migrate` channels (properties) |
@@ -405,7 +406,7 @@ def provision(self, branch, user):
 
 The value must be unique across all branches and no longer than 255 characters. `Branch.set_backend_id()` persists it, scoping the write to that one column so it cannot clobber the status transition `Branch.provision()` is wrapped in.
 
-The identifier is **immutable once assigned** — it is what addresses the branch's dataset, so changing it would orphan the data the branch already holds. `set_backend_id()` raises `ValueError` on an attempt to change one, and assigning only when the field is empty means a re-provision — of an archived branch, or after a failed attempt — reuses the identifier the branch already had.
+The identifier is **immutable once assigned** — it is what addresses the branch's dataset, so changing it would orphan the data the branch already holds. `set_backend_id()` raises `ValueError` on an attempt to change one; setting the value already in place is a no-op, so a backend need not check first. The identifier stays in place after a failed provision. Nothing re-provisions a branch: one whose provision failed is marked "failed" and can only be deleted, which calls `deprovision()` with the identifier still set, so a backend whose cleanup did not finish gets a second chance to remove whatever it addresses.
 
 `SchemaBranchingBackend` generates a random eight-character alphanumeric string, kept short because the schema name it produces (`schema_prefix` + `backend_id`) must fit within PostgreSQL's 63-byte limit on identifiers. A backend addressing a remote service is free to use whatever identifier that service assigns.
 
@@ -413,7 +414,7 @@ The identifier is **immutable once assigned** — it is what addresses the branc
 
 The two connection methods have deliberately different contracts, and the distinction matters:
 
-- **`get_connection_alias(branch)`** is the single funnel every branch-aware query passes through, and a `Branch` row is always in hand. It **may** query the database. It is therefore the one place to read `branch.connection_params` (a nullable JSON field reserved for backend use — an out-of-tree backend cannot add its own migrations to this app) and hand the result to `register_connection_params()`.
+- **`get_connection_alias(branch)`** is the single funnel every branch-aware query passes through, and a `Branch` row is always in hand. It **may** query the database. It is therefore the one place to read `branch.connection_params` (a nullable JSON field reserved for backend use — an out-of-tree backend cannot add its own migrations to this app) and hand the result to `register_connection_params()`. The field is never serialized, so it stays out of the change log, event payloads and the REST API, but it is stored in plaintext on the `Branch` row: store a *reference* to any credential (a secret's name, or an environment variable to read) rather than the credential itself, and resolve it here.
 - **`get_connection_config(alias, default_config)`** is called from inside Django's `ConnectionHandler` *while a connection is being created*. It **must not** query the database — doing so recurses. Retrieve anything you need via `get_registered_connection_params()` instead.
 
 A backend that registers real endpoints or credentials must discard them in its own `deprovision()`, so that it does not hold a dead branch's credentials for the life of the process. `invalidate_connection(alias)` does that and drops the branch's open connection with it:
@@ -493,6 +494,18 @@ def get_detail_fields(self, branch):
 
 Gate anything describing a live dataset on `branch.provisioned`: `backend_id` outlives the dataset, so a branch that has been archived still has an identifier to build a name from. `SchemaBranchingBackend` uses this to show its "Database schema" row, which is why that row does not appear under a backend that has no schema.
 
+The REST API reports the same facts as the branch's read-only `backend_details` field. Override `get_api_fields(branch)` alongside `get_detail_fields()` to return them as a dictionary:
+
+```python
+def get_api_fields(self, branch):
+    return {'cluster_endpoint': branch.connection_params['host'] if branch.provisioned else None}
+```
+
+API clients may rely on the keys, so keep them stable and untranslated, and return `None` for a fact which does not currently apply; values must be JSON-serializable. The method is called for every branch in a list response, so keep it cheap. `SchemaBranchingBackend` returns `{'schema': <schema name>}`.
+
+!!! warning
+    Both methods expose their values to anyone permitted to view the branch. Never include credentials, or anything else from `connection_params` that is not safe to show.
+
 ### Invariants
 
 These are requirements of the surrounding machinery, not of any particular storage mechanism:
@@ -504,6 +517,14 @@ These are requirements of the surrounding machinery, not of any particular stora
 3. **Exempt-model visibility.** Non-branchable models (`auth.User`, `contenttypes`, `core.*`, the plugin's own models) are routed to main by `routes_model()`, but a join issued on the branch connection resolves against whatever *that* connection can see. A backend whose branch holds a point-in-time copy of those tables accepts display staleness there. Authentication and object permissions always evaluate against main, because those queries are routed there.
 
 4. **Branch identity is assigned at provisioning time.** A `Branch` row exists in status "new" with `backend_id` unset; `provision()` is what gives the branch an identifier. Nothing may address the branch's dataset before then, and UI or API code which reads a branch's identifier must tolerate its absence. Note that the identifier outlives the dataset — it survives deprovisioning, and a failed `provision()` leaves behind whatever it had already assigned — so code asking whether a branch can be connected to must test `Branch.provisioned`, never `backend_id`. `Branch.ready`, which gates branch activation, tests it too: a branch in status "ready" whose dataset has gone missing cannot be activated.
+
+### Transactions
+
+Main and a branch are reached through different Django connections: main through `default`, a branch through the alias `get_connection_alias()` returns. No transaction spans both, even when a backend's datasets live in main's database, as `SchemaBranchingBackend`'s do. The machinery above the seam orders its writes accordingly:
+
+- **Merge and revert** apply their changes to main in a single transaction on `default`.
+- **Sync** nests a transaction on `default` (for `ChangeDiff` updates) around one on the branch's connection. The branch's transaction commits first, so a failure committing main's leaves the branch's writes committed while the `ChangeDiff` updates roll back.
+- **Delete and archive** commit their change to the `Branch` row first, and call `deprovision()` only once that has been committed. A failure to deprovision is logged rather than raised, so that one branch's failure cannot skip another's cleanup, and it leaves an orphaned dataset rather than a branch whose dataset is gone. After a failed archive, the branch is left archived but still flagged as provisioned, so deleting it later retries the cleanup; after a failed delete, the row is already gone and the dataset must be removed by hand.
 
 ### Registration
 

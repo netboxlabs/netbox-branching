@@ -234,7 +234,7 @@ def handle_branch_event(event_type, branch, user=None, **kwargs):
 
     # Serialize the branch & process EventRules
     username = user.username if user else None
-    data = serialize_object(branch)
+    data = branch.serialize_object()
     data['id'] = branch.pk
     # NetBox 4.5.2+ consolidates event fields into a single dict; older versions use separate params
     nb_version = tuple(int(x) for x in settings.RELEASE.version.split('.')[:3])

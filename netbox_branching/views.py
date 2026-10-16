@@ -1,4 +1,5 @@
 from collections import defaultdict
+from urllib.parse import urlencode
 
 from core.choices import JobStatusChoices, ObjectChangeActionChoices
 from core.filtersets import ObjectChangeFilterSet
@@ -230,7 +231,7 @@ class BranchJobReportView(generic.ObjectView):
                             raise
                         obj = ct.model_class()._default_manager.using(instance.connection_name).get(pk=obj_id)
                     if hasattr(obj, 'get_absolute_url'):
-                        object_url = f'{obj.get_absolute_url()}?{QUERY_PARAM}={instance.backend_id}'
+                        object_url = f'{obj.get_absolute_url()}?{urlencode({QUERY_PARAM: instance.backend_id})}'
                     object_str = str(obj)
                     if not entry.get('value') and (field := entry.get('field')):
                         value = getattr(obj, field, None)

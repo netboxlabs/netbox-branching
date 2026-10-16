@@ -1,4 +1,5 @@
 import uuid
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from core.choices import ObjectChangeActionChoices
@@ -9,7 +10,8 @@ from django.contrib.contenttypes.models import ContentType
 from django.contrib.messages import get_messages
 from django.core.exceptions import ValidationError
 from django.db import connections
-from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
+from django.template.loader import render_to_string
+from django.test import RequestFactory, SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from django_rq import get_queue
 from netbox.context import current_request
@@ -99,6 +101,39 @@ class BranchTableTestCase(TestCase):
         cell = BranchTable(Branch.objects.filter(pk=branch.pk)).rows[0].get_cell('backend_id')
 
         self.assertIn('branch01', cell)
+
+
+class BranchLinkEscapingTestCase(SimpleTestCase):
+    """
+    A backend may assign any identifier up to 255 characters, so links carrying one in the
+    query string must URL-encode it. HTML autoescaping alone leaves characters such as
+    '&' and '#' meaningful to the URL, splitting or truncating the parameter.
+    """
+    backend_id = 'a&b #c'
+    encoded = '_branch=a%26b%20%23c'
+
+    def _branch(self):
+        return Branch(
+            name='Branch 1',
+            backend_id=self.backend_id,
+            status=BranchStatusChoices.READY,
+            provisioned=True,
+        )
+
+    def test_branch_selector_encodes_backend_id(self):
+        html = render_to_string('netbox_branching/inc/branch_selector.html', {
+            'active_branch': None,
+            'branches': [self._branch()],
+        })
+        self.assertIn(self.encoded, html)
+
+    def test_share_button_encodes_backend_id(self):
+        obj = SimpleNamespace(get_absolute_url='/dcim/sites/1/')
+        html = render_to_string('netbox_branching/inc/share_button.html', {
+            'active_branch': self._branch(),
+            'object': obj,
+        })
+        self.assertIn(f'/dcim/sites/1/?{self.encoded}', html)
 
 
 class BranchBulkMigrateViewTestCase(TestCase):

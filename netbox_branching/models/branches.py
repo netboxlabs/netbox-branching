@@ -233,6 +233,9 @@ class Branch(JobsMixin, PrimaryModel):
                     ).format(max=max_working_branches)
                 )
 
+    def serialize_object(self, exclude=None):
+        return super().serialize_object(exclude=[*(exclude or []), 'connection_params'])
+
     # Fields owned by background jobs and by the branching backend; excluded from save() by default to
     # avoid clobbering.
     LIFECYCLE_FIELDS = (
@@ -280,10 +283,11 @@ class Branch(JobsMixin, PrimaryModel):
         if active_branch.get() == self:
             raise AbortRequest(_("The active branch cannot be deleted."))
 
-        # Row delete and schema drop must succeed or fail together — see #445.
-        with transaction.atomic():
-            result = super().delete(*args, **kwargs)
-            self.deprovision()
+        result = super().delete(*args, **kwargs)
+
+        # Destroy the branch's dataset only once the row's deletion has been committed. A
+        # failure is logged rather than raised, so it cannot skip other branches' cleanup.
+        transaction.on_commit(self.deprovision, robust=True)
 
         return result
 
@@ -294,8 +298,9 @@ class Branch(JobsMixin, PrimaryModel):
 
         A branch's identifier is immutable once assigned: it is what addresses the
         branch's isolated dataset, so changing it would orphan the data the branch
-        already holds. Re-assigning the value already in place is permitted, so that
-        a backend need not special-case a retried provision.
+        already holds. Re-assigning the value already in place is permitted, as it
+        changes nothing, so a backend may call this without first checking whether
+        the identifier is set.
         """
         if self.backend_id and self.backend_id != backend_id:
             raise ValueError(
@@ -1222,12 +1227,13 @@ class Branch(JobsMixin, PrimaryModel):
         if not self.can_archive:
             raise Exception("Archiving this branch is not permitted.")
 
-        # Drop the schema and flip the status atomically so a failure after the schema
-        # has been dropped does not leave an un-archived Branch with no schema.
         with transaction.atomic():
-            self.deprovision()
             Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.ARCHIVED)
             BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.ARCHIVED)
+
+            # Destroy the branch's dataset only once its archival has been committed. A
+            # failure is logged rather than raised, so it cannot skip other branches' cleanup.
+            transaction.on_commit(self.deprovision, robust=True)
 
     archive.alters_data = True
 
@@ -1246,9 +1252,8 @@ class Branch(JobsMixin, PrimaryModel):
         # responsibility, via invalidate_connection() — see BranchingBackend.deprovision().
         # Doing it here meant reading self.connection_name, and so calling the backend's
         # get_connection_alias(), at the one moment the branch's dataset is expected to be
-        # gone. For a backend which reaches its dataset to name it, that raised; and since
-        # delete() runs this inside a transaction, the raise rolled the deletion back,
-        # leaving archived and failed branches impossible to delete.
+        # gone. For a backend which reaches its dataset to name it, that raised, leaving
+        # archived and failed branches impossible to delete.
         self.backend.deprovision(self)
 
         # The dataset is gone; the branch must say so, even though backend_id is deliberately

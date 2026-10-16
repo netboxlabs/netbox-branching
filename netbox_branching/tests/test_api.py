@@ -153,6 +153,22 @@ class BranchProvisionedAPITestCase(BaseAPITestCase, TestCase):
         data = json.loads(response.content)
         self.assertIs(data['provisioned'], True)
 
+    def test_backend_details_are_returned(self):
+        branch = Branch(name='Test Branch', backend_id='apitest1')
+        branch.save(provision=False)
+        Branch.objects.filter(pk=branch.pk).update(
+            provisioned=True,
+            connection_params={'PASSWORD': 'secret'},
+        )
+
+        url = reverse('plugins-api:netbox_branching-api:branch-detail', kwargs={'pk': branch.pk})
+        response = self.client.get(url, **self.header)
+
+        self.assertEqual(response.status_code, 200)
+        data = json.loads(response.content)
+        self.assertEqual(data['backend_details'], {'schema': branch.backend.get_schema_name('apitest1')})
+        self.assertNotIn('secret', response.content.decode())
+
     def test_provisioned_is_read_only(self):
         """
         provisioned is declared editable=False, so DRF must treat it as read-only: a value

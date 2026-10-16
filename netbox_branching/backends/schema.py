@@ -240,11 +240,18 @@ class SchemaBranchingBackend(BranchingBackend):
     #
 
     def get_detail_fields(self, branch):
+        return (
+            (gettext_lazy('Database schema'), self._get_branch_schema(branch)),
+        )
+
+    def get_api_fields(self, branch):
+        return {'schema': self._get_branch_schema(branch)}
+
+    def _get_branch_schema(self, branch):
         # The schema name is derived from backend_id, which outlives the schema itself —
         # archive() drops the schema and keeps the identifier — so report a name only
         # while a schema actually exists behind it.
-        schema = self.get_schema_name(branch.backend_id) if branch.provisioned else None
-        return ((gettext_lazy('Database schema'), schema),)
+        return self.get_schema_name(branch.backend_id) if branch.provisioned else None
 
     #
     # Connection addressing
@@ -373,9 +380,9 @@ class SchemaBranchingBackend(BranchingBackend):
         main_schema = self.get_config('main_schema')
         workers = self.get_config('provision_workers') or 1
 
-        # Assign this branch its identifier, which determines its schema name. An
-        # identifier already in place is reused, so re-provisioning an archived branch
-        # recreates the schema it had before.
+        # Assign this branch its identifier, which determines its schema name. Only a new
+        # branch is ever provisioned, so one should not already be in place; if it is, it
+        # is reused, because a branch's identifier cannot be changed once assigned.
         branch_id = branch.backend_id or self.generate_branch_id()
         schema = self.get_schema_name(branch_id)
         self.validate_schema_name(schema)

@@ -35,7 +35,7 @@ The default backend, `SchemaBranchingBackend`, replicates the main schema into a
 
 See [Plugin Development: Branching Backends](./plugin-development.md#branching-backends) for the backend contract.
 
-A backend's own parameters are set under [`backend_config`](#backend_config), not alongside the plugin's. For the default backend those are [`main_schema`](#main_schema), [`schema_prefix`](#schema_prefix) and [`provision_workers`](#provision_workers), which have no effect under a different backend.
+A backend's own parameters are set under [`backend_config`](#backend_config), not alongside the plugin's. For the default backend those are [`main_schema`](#main_schema), [`schema_prefix`](#schema_prefix) and [`provision_workers`](#provision_workers); a different backend declares its own, and rejects these.
 
 ---
 
@@ -58,7 +58,7 @@ PLUGINS_CONFIG = {
 }
 ```
 
-Parameters may be set individually; anything omitted takes the backend's default. Naming a parameter the configured backend does not recognise has no effect.
+Parameters may be set individually; anything omitted takes the backend's default. Naming a parameter the configured backend does not recognise is an error: NetBox refuses to start, and reports the parameters the backend accepts.
 
 !!! note "Setting them at the root is deprecated"
     `main_schema`, `schema_prefix` and `provision_workers` predate this parameter and are still read from the root of the `netbox_branching` block, so an existing configuration continues to work unchanged:
@@ -322,8 +322,8 @@ PLUGINS_CONFIG = {
 }
 ```
 
-They have no effect under a different backend, which brings its own parameters instead. Setting them
-at the root of the `netbox_branching` block still works but is deprecated; see
+A different backend brings its own parameters instead, and refuses to start if these are set under
+`backend_config`. Setting them at the root of the `netbox_branching` block still works but is deprecated; see
 [`backend_config`](#backend_config).
 
 ### `main_schema`

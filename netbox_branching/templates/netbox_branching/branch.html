@@ -9,7 +9,7 @@
 {% block extra_controls %}
   {% if not object.is_active %}
     {% if object.ready %}
-      <a href="?_branch={{ object.backend_id }}" class="btn btn-green" role="button">
+      <a href="?_branch={{ object.backend_id|urlencode }}" class="btn btn-green" role="button">
         <i class="mdi mdi-check-bold"></i> {% trans "Activate" %}
       </a>
     {% else %}

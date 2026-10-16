@@ -522,6 +522,19 @@ class SchemaBackendIdentityTestCase(TestCase):
         ((_label, value),) = self.backend.get_detail_fields(archived)
         self.assertIsNone(value, msg="A dropped schema was reported as the branch's own")
 
+    def test_api_fields_report_the_same_schema_as_the_detail_page(self):
+        provisioned = Branch(name='Live', backend_id='live1234', provisioned=True)
+        self.assertEqual(
+            self.backend.get_api_fields(provisioned),
+            {'schema': self.backend.get_schema_name(provisioned.backend_id)},
+        )
+
+        archived = Branch(
+            name='Archived', backend_id='arch1234', provisioned=False,
+            status=BranchStatusChoices.ARCHIVED,
+        )
+        self.assertEqual(self.backend.get_api_fields(archived), {'schema': None})
+
 
 @override_settings(PLUGINS_CONFIG=DEFAULT_HOST_CONFIG)
 class BaseBackendDefaultsTestCase(TestCase):
@@ -538,6 +551,11 @@ class BaseBackendDefaultsTestCase(TestCase):
     #
     # Host configuration
     #
+
+    def test_detail_and_api_fields_default_to_nothing(self):
+        # Nothing above the seam can know what a given backend's dataset looks like.
+        self.assertEqual(tuple(self.backend.get_detail_fields(self.branch)), ())
+        self.assertEqual(self.backend.get_api_fields(self.branch), {})
 
     def test_host_checks_apply_to_a_backend_which_adds_none_of_its_own(self):
         self.backend.validate_configuration()  # must not raise
@@ -1007,8 +1025,7 @@ class BackendDelegationTestCase(TestCase):
 
     def test_a_branch_whose_alias_cannot_be_resolved_can_still_be_deleted(self):
         """
-        The user-visible consequence: delete() wraps the row delete and the deprovision in
-        one transaction, so anything raised during teardown rolled the deletion back.
+        The user-visible consequence: anything raised during teardown made the deletion fail.
         Branches whose dataset was already gone — archived ones, and failed provisions —
         could not be deleted at all.
         """
@@ -1019,10 +1036,13 @@ class BackendDelegationTestCase(TestCase):
                 'get_connection_alias',
                 side_effect=RuntimeError('no dataset behind this branch'),
             ),
-            mock.patch.object(DummyBranchingBackend, 'deprovision'),
+            mock.patch.object(DummyBranchingBackend, 'deprovision') as deprovision,
+            # delete() deprovisions on commit, which a TestCase never reaches
+            self.captureOnCommitCallbacks(execute=True),
         ):
             self.branch.delete()
 
+        deprovision.assert_called_once()
         self.assertFalse(Branch.objects.filter(pk=pk).exists())
 
     def test_provision_fails_when_the_backend_assigns_no_identifier(self):

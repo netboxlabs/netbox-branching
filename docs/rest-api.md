@@ -34,6 +34,9 @@ http://netbox:8000/api/plugins/branching/branches/ \
     },
     "description": "My new branch",
     "backend_id": null,
+    "backend_details": {
+        "schema": null
+    },
     "last_sync": null,
     "merged_time": null,
     "merged_by": null,
@@ -45,7 +48,7 @@ http://netbox:8000/api/plugins/branching/branches/ \
 }
 ```
 
-Once a new branch has been created, it will be provisioned automatically, just as when one is created via the web UI. The branch's status will show "ready" when provisioning has completed.
+Once a new branch has been created, it will be provisioned automatically, just as when one is created via the web UI. The branch's status will show "ready" when provisioning has completed. Its `backend_id`, which identifies the branch in the `X-NetBox-Branch` header, is assigned during provisioning, so it is `null` until then. `backend_details` reports what the configured [branching backend](./plugin-development.md) knows about the branch, such as the database schema backing it.
 
 Once provisioned, branches can be modified and deleted via the `/api/plugins/branching/branches/<id>/` endpoint, similar to most objects in NetBox.
 

@@ -93,6 +93,18 @@ class BranchingBackend(ABC):
        exists in status ``NEW`` with ``backend_id`` unset; ``provision()`` is what
        gives the branch an identifier. Nothing may address the branch's dataset
        before then.
+
+    Transactions
+    ------------
+    Main and a branch are reached through different connections, so no transaction
+    spans both — even for a backend whose datasets live in main's database. Merge and
+    revert write main in a single transaction. Sync nests a transaction on main (for
+    ``ChangeDiff`` updates) around one on the branch's connection; the branch's commits
+    first, so a failure committing main's leaves the branch's writes committed and the
+    ``ChangeDiff`` updates rolled back. Delete and archive commit their change to the
+    ``Branch`` row before calling ``deprovision()``, so a failure there (which is
+    logged, not raised) orphans the dataset rather than leaving a branch whose dataset
+    is gone.
     """
 
     # Prefix identifying connection aliases owned by this backend. Every backend must
@@ -193,8 +205,11 @@ class BranchingBackend(ABC):
         the identifier is how every later connection addresses the branch. Pick a
         value unique across all branches and no longer than 255 characters, and
         persist it with ``branch.set_backend_id()``. The identifier is immutable
-        once assigned, so leaving it in place after a failed provision is fine — a
-        retry reuses it rather than minting a new one.
+        once assigned, and stays in place after a failed provision. Nothing
+        re-provisions a branch: one whose provision failed is marked FAILED and can
+        only be deleted, which calls ``deprovision()`` with that identifier still
+        set, so a backend whose cleanup did not finish gets a second chance to
+        remove whatever it addresses.
 
         Args:
             branch: The Branch being provisioned
@@ -216,8 +231,12 @@ class BranchingBackend(ABC):
         ``invalidate_connection()`` does both. This is the backend's responsibility
         rather than the model's because only the backend can name the branch's alias
         without risking a failure: the dataset is already gone by the time the caller
-        is done, and ``Branch.delete()`` runs all of this inside a transaction, so an
-        alias lookup that raises there takes the deletion down with it.
+        is done.
+
+        ``Branch.delete()`` calls this only once the deletion of the branch's row has
+        been committed, by which point ``branch.pk`` is None. A failure here therefore
+        cannot restore the branch; it is logged rather than raised, and leaves an
+        orphaned dataset behind.
 
         Args:
             branch: The Branch being deprovisioned
@@ -273,6 +292,12 @@ class BranchingBackend(ABC):
         backend may read ``branch.connection_params`` and hand them to
         ``register_connection_params()`` for later retrieval by
         ``get_connection_config()``.
+
+        ``connection_params`` is never serialized (see ``Branch.serialize_object()``), so
+        it stays out of the changelog and the REST API, but it is stored in plaintext on
+        the ``Branch`` row. Store a *reference* to any credential — a secret's name, or an
+        environment variable to read — rather than the credential itself, and resolve it
+        here.
 
         The returned alias must begin with this backend's
         ``connection_alias_prefix``.
@@ -488,8 +513,7 @@ class BranchingBackend(ABC):
         3. The default declared in ``default_config``.
 
         Reads the configuration on every call rather than memoizing it, because a backend
-        instance is cached for the life of the process (and across ``override_settings()``
-        blocks in tests, which only clear the instance cache on the settings they change).
+        instance is cached for the life of the process.
 
         Args:
             name: The name of the parameter, which must appear in ``default_config``
@@ -603,6 +627,25 @@ class BranchingBackend(ABC):
             Sequence of (label, value) pairs
         """
         return ()
+
+    def get_api_fields(self, branch):
+        """
+        Return the facts ``get_detail_fields()`` renders on the branch detail page, as a
+        mapping for the REST API, where they appear as the branch's ``backend_details``.
+
+        Keys are machine-readable names which API clients may rely on, so keep them stable
+        and untranslated; values must be JSON-serializable, with None for a fact which does
+        not currently apply. This is called for every branch in a list response, so it
+        must be cheap. Whatever it returns is visible to anyone permitted to view the
+        branch: never include anything from ``connection_params``.
+
+        Args:
+            branch: The Branch being serialized
+
+        Returns:
+            dict
+        """
+        return {}
 
     #
     # Per-branch connection parameter registry

@@ -122,7 +122,6 @@ class BranchFilterSetTestCase(TestCase, BaseFilterSetTests):
 
     # Fields intentionally absent from BranchFilterSet
     ignore_fields = (
-        'backend_id',
         'applied_migrations',
         'merged_time',
         'merged_by',
@@ -179,6 +178,12 @@ class BranchFilterSetTestCase(TestCase, BaseFilterSetTests):
     def test_owner(self):
         params = {'owner': [self.users[0].username, self.users[1].username]}
         self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+
+    def test_backend_id(self):
+        params = {'backend_id': ['branch01', 'branch02']}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 2)
+        params = {'backend_id__empty': True}
+        self.assertEqual(self.filterset(params, self.queryset).qs.count(), 1)
 
     def test_provisioned(self):
         params = {'provisioned': True}

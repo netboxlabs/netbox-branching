@@ -1,11 +1,15 @@
 import re
+import uuid
 from datetime import timedelta
 
+from core.models import ObjectChange
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, connection, transaction
-from django.test import SimpleTestCase, TestCase, TransactionTestCase, override_settings
+from django.test import RequestFactory, SimpleTestCase, TestCase, TransactionTestCase, override_settings
 from django.utils import timezone
 from extras.validators import CustomValidator
+from netbox.context_managers import event_tracking
 from utilities.exceptions import AbortRequest
 
 from netbox_branching.backends import get_branching_backend
@@ -14,7 +18,7 @@ from netbox_branching.constants import SKIP_INDEXES
 from netbox_branching.forms import BranchForm
 from netbox_branching.models import Branch
 from netbox_branching.provisioning import quote_ident
-from netbox_branching.signals import post_deprovision, pre_deprovision
+from netbox_branching.signals import pre_deprovision
 from netbox_branching.utilities import BranchActionIndicator, get_tables_to_replicate
 
 from .utils import fetchall, fetchone
@@ -378,65 +382,169 @@ class BranchTestCase(TransactionTestCase):
             )
             self.assertIsNotNone(cursor.fetchone(), msg="Schema was unexpectedly dropped on blocked delete")
 
-    def _assert_branch_and_schema_intact(self, branch_pk, schema_name):
-        self.assertTrue(Branch.objects.filter(pk=branch_pk).exists())
+    def _schema_exists(self, schema_name):
         with connection.cursor() as cursor:
             cursor.execute(
                 "SELECT schema_name FROM information_schema.schemata WHERE schema_name=%s",
                 [schema_name]
             )
-            self.assertIsNotNone(cursor.fetchone(), msg="Schema unexpectedly missing")
+            return cursor.fetchone() is not None
 
-    def test_delete_rolls_back_row_when_deprovision_raises(self):
-        """
-        A failure raised inside deprovision() (before DROP SCHEMA runs) must roll back
-        the row delete that super().delete() already performed, leaving both intact.
-        """
+    def _provisioned_branch(self):
         branch = Branch(name='Branch 1')
         branch.save(provision=False)
         branch.provision(user=None)
 
         # Capture identifiers up front: Django's Collector sets instance.pk to None
         # after running the DELETE, and that mutation is not undone by rollback.
-        branch_pk = branch.pk
-        schema_name = branch.backend.get_schema_name(branch.backend_id)
+        return branch, branch.pk, branch.backend.get_schema_name(branch.backend_id)
+
+    def test_delete_deprovisions_only_once_committed(self):
+        """
+        A backend's dataset need not live in main's database, so the row delete and the
+        dataset's destruction cannot be atomic. The dataset goes only once the row's
+        deletion has been committed, so a failure can orphan a dataset but never leave a
+        branch whose dataset is gone.
+        """
+        branch, branch_pk, schema_name = self._provisioned_branch()
+
+        with transaction.atomic():
+            branch.delete()
+            self.assertTrue(self._schema_exists(schema_name), msg="Schema dropped before the delete committed")
+
+        self.assertFalse(Branch.objects.filter(pk=branch_pk).exists())
+        self.assertFalse(self._schema_exists(schema_name), msg="Schema not dropped after the delete committed")
+
+    def test_delete_rolled_back_preserves_dataset(self):
+        """
+        A deletion which is rolled back must leave the branch's dataset untouched.
+        """
+        branch, branch_pk, schema_name = self._provisioned_branch()
+
+        with self.assertRaises(RuntimeError), transaction.atomic():
+            branch.delete()
+            raise RuntimeError("simulated failure after the row delete")
+
+        self.assertTrue(Branch.objects.filter(pk=branch_pk).exists())
+        self.assertTrue(self._schema_exists(schema_name), msg="Schema dropped by a rolled-back delete")
+
+    def test_deprovision_failure_leaves_row_deleted(self):
+        """
+        A failure to deprovision is logged rather than raised, and cannot resurrect the
+        branch: its row is already gone, and the dataset is left orphaned.
+        """
+        branch, branch_pk, schema_name = self._provisioned_branch()
 
         def boom(sender, **kwargs):
             raise RuntimeError("simulated deprovision failure")
 
         pre_deprovision.connect(boom, sender=Branch, weak=False)
         try:
-            with self.assertRaises(RuntimeError):
+            with self.assertLogs('django.db.backends.base', level='ERROR'):
                 branch.delete()
         finally:
             pre_deprovision.disconnect(boom, sender=Branch)
 
-        self._assert_branch_and_schema_intact(branch_pk, schema_name)
+        try:
+            self.assertFalse(Branch.objects.filter(pk=branch_pk).exists())
+            self.assertTrue(self._schema_exists(schema_name))
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute(f"DROP SCHEMA IF EXISTS {quote_ident(schema_name)} CASCADE")
 
-    def test_delete_rolls_back_schema_drop_when_failure_follows(self):
+    def test_deprovision_failure_does_not_skip_other_deletions(self):
         """
-        If a failure is raised after DROP SCHEMA has already executed, the atomic
-        block must roll back the DDL too — verifying the PostgreSQL DDL-is-transactional
-        property the fix relies on.
+        Deleting several branches in one transaction, as the bulk delete view does, queues
+        a deprovision for each. One which fails must not keep the rest from running.
         """
-        branch = Branch(name='Branch 1')
-        branch.save(provision=False)
-        branch.provision(user=None)
+        branches = []
+        for name in ('Branch 1', 'Branch 2'):
+            branch = Branch(name=name)
+            branch.save(provision=False)
+            branch.provision(user=None)
+            branches.append((branch, branch.backend.get_schema_name(branch.backend_id)))
+        (failing, failing_schema), (other, other_schema) = branches
 
-        branch_pk = branch.pk
-        schema_name = branch.backend.get_schema_name(branch.backend_id)
+        def boom(sender, branch, **kwargs):
+            if branch is failing:
+                raise RuntimeError("simulated deprovision failure")
+
+        pre_deprovision.connect(boom, sender=Branch, weak=False)
+        try:
+            with self.assertLogs('django.db.backends.base', level='ERROR'), transaction.atomic():
+                failing.delete()
+                other.delete()
+        finally:
+            pre_deprovision.disconnect(boom, sender=Branch)
+
+        try:
+            self.assertFalse(Branch.objects.exists())
+            self.assertTrue(self._schema_exists(failing_schema))
+            self.assertFalse(self._schema_exists(other_schema), msg="A failed deprovision skipped the next")
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute(f"DROP SCHEMA IF EXISTS {quote_ident(failing_schema)} CASCADE")
+
+    def _merged_branch(self):
+        branch, branch_pk, schema_name = self._provisioned_branch()
+        Branch.objects.filter(pk=branch_pk).update(status=BranchStatusChoices.MERGED)
+        branch.refresh_from_db()
+        return branch, branch_pk, schema_name
+
+    def test_archive_deprovisions_only_once_committed(self):
+        """
+        As for delete(): the dataset goes only once the branch's archival has been
+        committed, so a failure can never leave an unarchived branch whose dataset is gone.
+        """
+        branch, _, schema_name = self._merged_branch()
+
+        with transaction.atomic():
+            branch.archive(user=None)
+            self.assertTrue(self._schema_exists(schema_name), msg="Schema dropped before the archive committed")
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.ARCHIVED)
+        self.assertFalse(branch.provisioned)
+        self.assertFalse(self._schema_exists(schema_name), msg="Schema not dropped after the archive committed")
+
+    def test_archive_rolled_back_preserves_dataset(self):
+        branch, _, schema_name = self._merged_branch()
+
+        with self.assertRaises(RuntimeError), transaction.atomic():
+            branch.archive(user=None)
+            raise RuntimeError("simulated failure after archival")
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.MERGED)
+        self.assertTrue(branch.provisioned)
+        self.assertTrue(self._schema_exists(schema_name), msg="Schema dropped by a rolled-back archive")
+
+    def test_archive_deprovision_failure_is_cleaned_up_by_delete(self):
+        """
+        A failure to deprovision leaves the branch archived but still flagged as
+        provisioned, which is the truth: its dataset still exists. Deleting the branch
+        then retries the cleanup.
+        """
+        branch, branch_pk, schema_name = self._merged_branch()
 
         def boom(sender, **kwargs):
-            raise RuntimeError("simulated post-drop failure")
+            raise RuntimeError("simulated deprovision failure")
 
-        post_deprovision.connect(boom, sender=Branch, weak=False)
+        pre_deprovision.connect(boom, sender=Branch, weak=False)
         try:
-            with self.assertRaises(RuntimeError):
-                branch.delete()
+            with self.assertLogs('django.db.backends.base', level='ERROR'):
+                branch.archive(user=None)
         finally:
-            post_deprovision.disconnect(boom, sender=Branch)
+            pre_deprovision.disconnect(boom, sender=Branch)
 
-        self._assert_branch_and_schema_intact(branch_pk, schema_name)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.ARCHIVED)
+        self.assertTrue(branch.provisioned)
+        self.assertTrue(self._schema_exists(schema_name))
+
+        branch.delete()
+        self.assertFalse(Branch.objects.filter(pk=branch_pk).exists())
+        self.assertFalse(self._schema_exists(schema_name))
 
     # -------------------------------------------------------------------------
     # Lifecycle action guards
@@ -684,6 +792,40 @@ class BranchProvisionedConstraintTestCase(TestCase):
         branch = Branch(name='Brand New')
         branch.save(provision=False)
         self.assertFalse(Branch.objects.get(pk=branch.pk).provisioned)
+
+
+class BranchSerializationTestCase(TestCase):
+    """
+    Branch is change-logged, so whatever serialize_object() returns is persisted in
+    ObjectChange data, readable by anyone permitted to view the changelog. The backend's
+    connection parameters may carry credentials, and must never get there.
+    """
+
+    def test_connection_params_excluded_from_serialization(self):
+        branch = Branch(name='Branch 1', connection_params={'PASSWORD': 'secret'})
+        branch.save(provision=False)
+        self.assertNotIn('connection_params', branch.serialize_object())
+        self.assertNotIn('connection_params', branch.serialize_object(exclude=['description']))
+
+    def test_connection_params_excluded_from_changelog(self):
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+        Branch.objects.filter(pk=branch.pk).update(connection_params={'PASSWORD': 'secret'})
+
+        request = RequestFactory().get('/')
+        request.id = uuid.uuid4()
+        request.user = get_user_model().objects.create_user(username='user1')
+
+        with event_tracking(request):
+            branch = Branch.objects.get(pk=branch.pk)
+            branch.snapshot()
+            branch.description = 'Updated'
+            branch.save()
+
+        objectchange = ObjectChange.objects.get(request_id=request.id)
+        self.assertEqual(objectchange.postchange_data['description'], 'Updated')
+        self.assertNotIn('connection_params', objectchange.prechange_data)
+        self.assertNotIn('connection_params', objectchange.postchange_data)
 
 
 class BranchProvisionPipelineTestCase(TransactionTestCase):
