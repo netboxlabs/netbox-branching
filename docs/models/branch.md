@@ -16,9 +16,14 @@ An optional short description of the branch.
 
 The NetBox user who created the branch. This value may be null if the owning user account has since been deleted.
 
-### Schema ID
+### Backend ID
 
-The unique, randomly-generated identifier of the PostgreSQL schema which houses the branch in the database. This is an eight-character alphanumeric string and is generated automatically when the branch is created. The full schema name is the `schema_id` prepended with the configured [`schema_prefix`](../configuration.md#schema_prefix).
+The branch's unique, opaque identifier, assigned by the configured [branching backend](../plugin-development.md#branching-backends) when the branch is provisioned. It is the value used to reference a branch in the `_branch` query parameter and the `X-NetBox-Branch` API header. This field is null until provisioning completes: a branch in the "new" or "provisioning" status does not yet have an identifier and cannot be activated.
+
+The default [`SchemaBranchingBackend`](../plugin-development.md#branching-backends) assigns an eight-character alphanumeric string, which doubles as the identifier of the PostgreSQL schema housing the branch: the full schema name is the backend ID prepended with the configured [`schema_prefix`](../configuration.md#schema_prefix). An alternative backend may use an identifier of any form up to 255 characters.
+
+!!! warning "Renamed in v2.0"
+    This field was named `schema_id` in earlier releases. The old name has been removed with no compatibility alias; update any code, event rule scripts, or webhook consumers which reference it.
 
 ### Status
 
@@ -42,9 +47,11 @@ The current status of the branch. This must be one of the following values:
 
 !!! info "This field was introduced in v2.0."
 
-Whether the branch is currently provisioned in the backend. It is set when provisioning completes successfully, and cleared when provisioning fails or when the branch is deprovisioned (by archiving or deleting it). The field is not editable; it is maintained automatically by the backend.
+Whether a live dataset backing the branch currently exists. It is set when provisioning completes successfully, and cleared when provisioning fails or when the branch is deprovisioned (by archiving or deleting it). The field is not editable; it is maintained automatically by the backend and exposed read-only via the REST API.
 
-This is recorded rather than inferred because [Status](#status) cannot answer the question reliably: "failed" covers both a provisioning failure, which leaves no schema, and a migration failure, which leaves one fully intact.
+A database constraint requires a [Backend ID](#backend-id) whenever this is true, since that identifier is what the dataset is addressed by.
+
+This is recorded rather than inferred because neither of the other fields can answer the question. [Backend ID](#backend-id) outlives the dataset: archiving retains the identifier so that the branch keeps its name in the changelog, and a provisioning run which fails part-way drops the schema it had begun building while keeping the identifier it had already assigned. [Status](#status) cannot stand in for it either, because "failed" covers both a provisioning failure, which leaves no dataset, and a migration failure, which leaves one fully intact.
 
 ### Applied Migrations
 
@@ -75,6 +82,12 @@ The time at which the branch was merged into main. This value will be null if th
 ### Merged By
 
 The NetBox user who merged the branch. This value will be null if the branch has not been merged. It may also be null if the user account has been deleted since the branch was merged.
+
+### Connection Parameters
+
+!!! info "This field was added in v2.0."
+
+Reserved for use by the configured [branching backend](../plugin-development.md#branching-backends) to persist per-branch connection metadata (for example, the endpoint of a branch hosted on a separate database). This field is not editable, is not exposed via the REST API, and is unused by the default `SchemaBranchingBackend`.
 
 ### Comments
 

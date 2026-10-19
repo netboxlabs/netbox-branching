@@ -11,7 +11,7 @@ def set_active_branch(object_type, event_type, data, request):
         attrs = {
             'id': branch.pk,
             'name': branch.name,
-            'schema_id': branch.schema_id,
+            'backend_id': branch.backend_id,
         }
     else:
         attrs = None

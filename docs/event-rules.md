@@ -74,6 +74,6 @@ When a branch is active, `active_branch` contains:
 |-------|-------------|
 | `id` | Branch primary key |
 | `name` | Branch name |
-| `schema_id` | Branch PostgreSQL schema identifier |
+| `backend_id` | Branch identifier assigned by the branching backend |
 
 When no branch is active (i.e. the change was made on main), `active_branch` is `None`.

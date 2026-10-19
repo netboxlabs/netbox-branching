@@ -1,15 +1,14 @@
-from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.utils.module_loading import import_string
 from netbox.plugins import PluginConfig, get_plugin_config
 from netbox.utils import register_model_feature
 
-from .constants import BRANCH_ACTIONS
+from .constants import BRANCH_ACTIONS, PLUGIN_NAME
 from .utilities import supports_branching
 
 
 class AppConfig(PluginConfig):
-    name = 'netbox_branching'
+    name = PLUGIN_NAME
     verbose_name = 'NetBox Branching'
     description = 'A git-like branching implementation for NetBox'
     version = '1.2.0'
@@ -23,6 +22,22 @@ class AppConfig(PluginConfig):
         'netbox_branching.middleware.BranchMiddleware',
     )
     default_settings = {  # noqa: RUF012
+        # The branching backend, which implements the mechanism by which each branch's data
+        # is isolated from main. Must be a dotted path to a BranchingBackend subclass.
+        'backend': 'netbox_branching.backends.SchemaBranchingBackend',
+
+        # Configuration for the backend named above. Its contents are the configured
+        # backend's business: a backend declares its own parameters and their defaults in
+        # BranchingBackend.default_config and reads them with get_config().
+        #
+        # The schema backend's 'main_schema', 'schema_prefix' and 'provision_workers' are
+        # therefore absent from this dict, and not only because defaulting them here would
+        # make every alternative backend's configuration a superset of the shipped one's:
+        # PluginConfig.validate() merges these defaults into PLUGINS_CONFIG in place, so a
+        # default here would be indistinguishable from an operator having set the parameter
+        # at the root, and check_deprecated_config() would warn on every startup.
+        'backend_config': {},
+
         # The maximum number of working branches (excludes merged & archived branches)
         'max_working_branches': None,
 
@@ -32,19 +47,8 @@ class AppConfig(PluginConfig):
         # Models from other plugins which should be excluded from branching support
         'exempt_models': [],
 
-        # The name of the main schema
-        'main_schema': 'public',
-
-        # This string is prefixed to the name of each new branch schema during provisioning
-        'schema_prefix': 'branch_',
-
         # Job timeout in seconds for long-running operations (sync, merge, revert)
         'job_timeout': 3600,
-
-        # Number of parallel workers used during branch provisioning to copy tables and build
-        # indexes. Set to 1 to disable parallelism. Each worker holds its own database
-        # connection for the duration of the provision.
-        'provision_workers': 4,
 
         # Branch action validators
         'sync_validators': [],
@@ -74,31 +78,31 @@ class AppConfig(PluginConfig):
         from django.core.signals import request_finished, request_started
 
         from . import constants, events, jobs, search, signal_receivers, webhook_callbacks  # noqa: F401
+        from .backends import get_branching_backend
         from .models import Branch
-        from .utilities import DynamicSchemaDict, close_old_branch_connections
+        from .utilities import close_old_branch_connections
 
-        # Validate required settings
-        if type(settings.DATABASES) is not DynamicSchemaDict:
+        # Validate backend_config up front. get_config() cannot raise on a malformed one —
+        # it is reached from inside Django's connection-creation path and from data
+        # migrations — so anything but a dict would be quietly ignored there, leaving every
+        # backend parameter at its default and the operator's settings with no effect.
+        backend_config = get_plugin_config('netbox_branching', 'backend_config')
+        if type(backend_config) is not dict:
             raise ImproperlyConfigured(
-                "netbox_branching: DATABASES must be a DynamicSchemaDict instance."
-            )
-        if 'netbox_branching.database.BranchAwareRouter' not in settings.DATABASE_ROUTERS:
-            raise ImproperlyConfigured(
-                "netbox_branching: DATABASE_ROUTERS must contain 'netbox_branching.database.BranchAwareRouter'."
+                "netbox_branching: 'backend_config' must be a dict of parameters for the configured "
+                "branching backend."
             )
 
-        # Validate provision_workers up front rather than letting a bad value surface as an
-        # unhandled error only when a branch is first provisioned.
-        workers = get_plugin_config('netbox_branching', 'provision_workers')
-        if workers is not None:
-            if type(workers) is not int:
-                raise ImproperlyConfigured(
-                    "netbox_branching: 'provision_workers' must be an integer."
-                )
-            if workers < 1:
-                raise ImproperlyConfigured(
-                    "netbox_branching: 'provision_workers' must be greater than or equal to 1."
-                )
+        # Validate any host configuration required by the configured branching backend. This
+        # resolves the 'backend' parameter as a side effect, so an unimportable backend path
+        # surfaces here rather than on the first branch-aware query.
+        backend = get_branching_backend()
+        backend.validate_configuration()
+
+        # Warn about any of the backend's own parameters set at the root of the plugin's
+        # configuration rather than under 'backend_config'. They still take effect; this is
+        # the only notice an operator gets before that fallback goes away.
+        backend.check_deprecated_config()
 
         # Validate auto_archive_days up front so a misconfigured value surfaces at startup rather
         # than as an opaque timedelta error the first time the daily archival job runs.

@@ -28,9 +28,9 @@ from unittest.mock import patch
 
 from core.signals import handle_changed_object, handle_deleted_object
 from dcim.models import Manufacturer
-from django.apps import apps
+from django.apps.registry import Apps
 from django.contrib.auth import get_user_model
-from django.db import connection, connections
+from django.db import connection, connections, models
 from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.test import RequestFactory, TestCase, TransactionTestCase
 from django.urls import reverse
@@ -128,17 +128,21 @@ class BranchUpgradeTestCase(TransactionTestCase):
         user, _ = User.objects.get_or_create(username='upgrade_user')
 
         Branch.objects.filter(name='upgrade-test').delete()
-        branch = Branch(name='upgrade-test')
+        # This test loads a fixture schema in place of provisioning it, so it pins the
+        # backend ID (and therefore the schema name) that provisioning would assign.
+        branch = Branch(name='upgrade-test', backend_id='upgradets')
         branch.save(provision=False)
-        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.READY)
+        # Standing in for provision(), which is what normally records both of these.
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.READY, provisioned=True)
         branch.refresh_from_db()
 
-        self._load_fixture(branch.schema_name)
+        schema = branch.backend.get_schema_name(branch.backend_id)
+        self._load_fixture(schema)
 
         # Confirm the fixture loaded with a populated migration history and
         # at least some seed data (both required for the test to be meaningful).
         with connection.cursor() as cursor:
-            cursor.execute(f'SELECT COUNT(*) FROM "{branch.schema_name}".django_migrations')
+            cursor.execute(f'SELECT COUNT(*) FROM "{schema}".django_migrations')
             self.assertGreater(
                 cursor.fetchone()[0], 0,
                 msg="Fixture django_migrations table is empty"
@@ -283,6 +287,36 @@ class MigrateBranchSignalTestCase(TransactionTestCase):
         self.assertTrue(_signal_handlers_connected())
 
 
+def historical_branch_model():
+    """
+    Branch as migration 0010 sees it, before 0011 renames ``schema_id`` to ``backend_id``.
+
+    The backfill reads ``schema_id``, which is the column's name at the point it runs. The
+    test database is fully migrated, so the live model no longer carries that name; mapping
+    it back onto the renamed column reproduces the migration's view of the table without
+    standing up a second one. Unmanaged, so it owns no schema of its own.
+
+    Built on demand into a throwaway app registry rather than declared at module scope. Test
+    modules are imported before the test databases are set up, so a model declared there
+    would be part of ``netbox_branching`` for every other test in the run and would mint a
+    ContentType row which outlives it under ``--keepdb``.
+    """
+    class HistoricalBranch(models.Model):
+        schema_id = models.CharField(max_length=255, db_column='backend_id')
+        status = models.CharField(max_length=50)
+        last_sync = models.DateTimeField(null=True)
+        provisioned = models.BooleanField(default=False)
+
+        class Meta:
+            # Register in a private registry, not the global one Django populated at startup.
+            apps = Apps()
+            app_label = 'netbox_branching'
+            db_table = 'netbox_branching_branch'
+            managed = False
+
+    return HistoricalBranch
+
+
 class ProvisionedBackfillTestCase(TestCase):
     """
     Migration 0010 backfills Branch.provisioned for branches which predate the field, by
@@ -290,24 +324,33 @@ class ProvisionedBackfillTestCase(TestCase):
     directly here: it takes only (apps, schema_editor), and the schemas it looks for are
     ordinary ones this test can create itself — provisioning a real branch would cost minutes
     and prove nothing extra. See #665.
+
+    The branches are given an identifier by hand. Under the pluggable backend one is assigned
+    at provisioning time rather than at save(), but every branch predating 0010 has one, which
+    is the population the backfill exists for. See #618.
     """
     def setUp(self):
         self.backfill = importlib.import_module(
             'netbox_branching.migrations.0010_branch_provisioned'
         ).set_provisioned
+        # The migration reads the table through the field name it had at 0010.
+        historical_branch = historical_branch_model()
+        self.migration_apps = SimpleNamespace(get_model=lambda *args, **kwargs: historical_branch)
 
     def _make_branch(self, name, status, *, with_schema, synced=False):
         branch = Branch(name=name, status=status)
         branch.save(provision=False)
+        branch.set_backend_id(branch.backend.generate_branch_id())
         if synced:
             # last_sync is shielded from save() as a lifecycle field; write it directly.
             Branch.objects.filter(pk=branch.pk).update(last_sync=timezone.now())
         if with_schema:
+            schema = branch.backend.get_schema_name(branch.backend_id)
             with connection.cursor() as cursor:
-                cursor.execute(f'CREATE SCHEMA {quote_ident(branch.schema_name)}')
+                cursor.execute(f'CREATE SCHEMA {quote_ident(schema)}')
             # The schema is created inside the test's transaction, so TestCase rollback
             # removes it; DROP it anyway in case this runs where that isn't true.
-            self.addCleanup(self._drop_schema, branch.schema_name)
+            self.addCleanup(self._drop_schema, schema)
         return branch
 
     @staticmethod
@@ -334,7 +377,7 @@ class ProvisionedBackfillTestCase(TestCase):
         new = self._make_branch('New', BranchStatusChoices.NEW, with_schema=False)
         archived = self._make_branch('Archived', BranchStatusChoices.ARCHIVED, with_schema=False)
 
-        self.backfill(apps, SimpleNamespace(connection=connection))
+        self.backfill(self.migration_apps, SimpleNamespace(connection=connection))
 
         expected = {
             ready.pk: True,

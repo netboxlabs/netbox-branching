@@ -30,7 +30,7 @@ def add_branch_context(events):
         event['data']['active_branch'] = {
             'id': branch.pk,
             'name': branch.name,
-            'schema_id': branch.schema_id,
+            'backend_id': branch.backend_id,
         } if branch else None
 
 

@@ -1,7 +1,7 @@
 from django.db import connection, migrations
-from netbox.plugins import get_plugin_config
 
 from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.migrations._utilities import get_schema_config
 from netbox_branching.utilities import get_sql_results
 
 # Indexes to ignore as they are removed in a NetBox v4.3 migration
@@ -17,8 +17,8 @@ def rename_indexes(apps, schema_editor):
     Rename all indexes within each branch to match the main schema.
     """
     Branch = apps.get_model('netbox_branching', 'Branch')
-    schema_prefix = get_plugin_config('netbox_branching', 'schema_prefix')
-    main_schema = get_plugin_config('netbox_branching', 'main_schema')
+    schema_prefix = get_schema_config('schema_prefix')
+    main_schema = get_schema_config('main_schema')
 
     with connection.cursor() as cursor:
 

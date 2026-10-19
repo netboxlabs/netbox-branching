@@ -39,14 +39,26 @@ class BranchSerializer(NetBoxModelSerializer):
         choices=BranchStatusChoices,
         read_only=True
     )
+    backend_details = serializers.SerializerMethodField(
+        read_only=True
+    )
 
     class Meta:
         model = Branch
         fields = (
-            'id', 'url', 'display', 'name', 'status', 'provisioned', 'owner', 'description', 'schema_id', 'last_sync',
-            'merged_time', 'merged_by', 'comments', 'tags', 'custom_fields', 'created', 'last_updated',
+            'id', 'url', 'display', 'name', 'status', 'provisioned', 'owner', 'description', 'backend_id',
+            'backend_details', 'last_sync', 'merged_time', 'merged_by', 'comments', 'tags', 'custom_fields', 'created',
+            'last_updated',
         )
         brief_fields = ('id', 'url', 'display', 'name', 'status', 'description')
+
+    @extend_schema_field(serializers.DictField())
+    def get_backend_details(self, obj):
+        """
+        Facts about the branch which only the configured branching backend knows, such as
+        where its dataset lives. See BranchingBackend.get_api_fields().
+        """
+        return obj.backend.get_api_fields(obj)
 
     def create(self, validated_data):
         """

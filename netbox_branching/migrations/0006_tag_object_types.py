@@ -1,7 +1,7 @@
 from django.db import connection, migrations
-from netbox.plugins import get_plugin_config
 
 from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.migrations._utilities import get_schema_config
 
 
 def copy_table(apps, schema_editor):
@@ -11,7 +11,7 @@ def copy_table(apps, schema_editor):
     Branch = apps.get_model('netbox_branching', 'Branch')
 
     table = 'extras_tag_object_types'
-    schema_prefix = get_plugin_config('netbox_branching', 'schema_prefix')
+    schema_prefix = get_schema_config('schema_prefix')
 
     with connection.cursor() as cursor:
         main_table = f'public.{table}'

@@ -33,7 +33,10 @@ http://netbox:8000/api/plugins/branching/branches/ \
         "username": "admin"
     },
     "description": "My new branch",
-    "schema_id": "td5smq0f",
+    "backend_id": null,
+    "backend_details": {
+        "schema": null
+    },
     "last_sync": null,
     "merged_time": null,
     "merged_by": null,
@@ -45,22 +48,24 @@ http://netbox:8000/api/plugins/branching/branches/ \
 }
 ```
 
-Once a new branch has been created, it will be provisioned automatically, just as when one is created via the web UI. The branch's status will show "ready" when provisioning has completed.
+Once a new branch has been created, it will be provisioned automatically, just as when one is created via the web UI. The branch's status will show "ready" when provisioning has completed. Its `backend_id`, which identifies the branch in the `X-NetBox-Branch` header, is assigned during provisioning, so it is `null` until then. `backend_details` reports what the configured [branching backend](./plugin-development.md) knows about the branch, such as the database schema backing it.
 
 Once provisioned, branches can be modified and deleted via the `/api/plugins/branching/branches/<id>/` endpoint, similar to most objects in NetBox.
 
 ## Activating a Branch
 
-Unlike the web UI, where a user's selected branch remains active until it is changed, the desired branch must be specified with each REST API request. This is accomplished by including the `X-NetBox-Branch` HTTP header specifying the branch's schema ID.
+Unlike the web UI, where a user's selected branch remains active until it is changed, the desired branch must be specified with each REST API request. This is accomplished by including the `X-NetBox-Branch` HTTP header specifying the branch's backend ID.
 
 ```no-highlight
-X-NetBox-Branch: $SCHEMA_ID
+X-NetBox-Branch: $BACKEND_ID
 ```
 
-!!! tip "Schema IDs"
-    The schema ID for a branch can be found in its REST API representation or on its detail view in the web UI. This is a pseudorandom eight-character alphanumeric identifier generated automatically when a branch is created. Note that the value passed to the HTTP header **does not include** the `branch_` prefix, which comprises part of the schema's name in the underlying database.
+!!! tip "Backend IDs"
+    The backend ID for a branch can be found in its REST API representation or on its detail view in the web UI. Under the default backend this is a pseudorandom eight-character alphanumeric identifier, assigned when the branch is provisioned. Note that the value passed to the HTTP header **does not include** the `branch_` prefix, which comprises part of the schema's name in the underlying database.
 
-The example below returns all site objects that exist within the branch with schema ID `td5smq0f`:
+    A branch which has not finished provisioning has no backend ID and cannot be activated.
+
+The example below returns all site objects that exist within the branch with backend ID `td5smq0f`:
 
 ```no-highlight title="Request"
 curl -X POST \

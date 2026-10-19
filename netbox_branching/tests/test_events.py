@@ -1,18 +1,21 @@
 import uuid
+from unittest.mock import patch
 
 import django_rq
 from core.events import OBJECT_CREATED
 from core.models import ObjectType
 from dcim.models import Site
 from django.contrib.auth import get_user_model
-from django.test import RequestFactory, TransactionTestCase, override_settings
+from django.test import RequestFactory, TestCase, TransactionTestCase, override_settings
 from django.urls import reverse
 from extras.choices import EventRuleActionChoices
 from extras.events import enqueue_event, flush_events
 from extras.models import EventRule, Webhook
 
 from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.events import BRANCH_SYNCED
 from netbox_branching.models import Branch
+from netbox_branching.signal_receivers import handle_branch_event
 
 User = get_user_model()
 
@@ -74,7 +77,7 @@ class AddBranchContextTestCase(TransactionTestCase):
         self.assertEqual(data['active_branch'], {
             'id': self.branch.pk,
             'name': self.branch.name,
-            'schema_id': self.branch.schema_id,
+            'backend_id': self.branch.backend_id,
         })
 
     @override_settings(EVENTS_PIPELINE=ENRICHED_PIPELINE)
@@ -102,3 +105,36 @@ class AddBranchContextTestCase(TransactionTestCase):
         self.assertEqual(self.queue.count, 1)
         data = self.queue.jobs[0].kwargs['data']
         self.assertIsNone(data.get('active_branch'))
+
+
+class BranchEventPayloadTestCase(TestCase):
+    """
+    Branch lifecycle events carry a serialized copy of the branch to every matching event
+    rule, and so to whatever endpoint its webhook names. The backend's connection
+    parameters may carry credentials, and must never be included.
+    """
+
+    def test_connection_params_excluded_from_event_payload(self):
+        branch = Branch(name='Branch 1')
+        branch.save(provision=False)
+        Branch.objects.filter(pk=branch.pk).update(connection_params={'PASSWORD': 'secret'})
+        branch.refresh_from_db()
+
+        webhook = Webhook.objects.create(name='Test Webhook', payload_url='http://localhost/')
+        rule = EventRule.objects.create(
+            name='Branch Synced',
+            event_types=[BRANCH_SYNCED],
+            action_type=EventRuleActionChoices.WEBHOOK,
+            action_object_type=ObjectType.objects.get_for_model(Webhook),
+            action_object_id=webhook.pk,
+        )
+        rule.object_types.set([ObjectType.objects.get_for_model(Branch)])
+
+        with patch('netbox_branching.signal_receivers.process_event_rules') as process_event_rules:
+            handle_branch_event(event_type=BRANCH_SYNCED, branch=branch)
+
+        process_event_rules.assert_called_once()
+        kwargs = process_event_rules.call_args.kwargs
+        data = kwargs['event']['data'] if 'event' in kwargs else kwargs['data']
+        self.assertEqual(data['name'], 'Branch 1')
+        self.assertNotIn('connection_params', data)
