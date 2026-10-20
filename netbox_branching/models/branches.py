@@ -56,6 +56,7 @@ from netbox_branching.utilities import (
     get_branchable_object_types,
     get_tables_to_replicate,
     is_job_abandoned,
+    prepare_changes_for_replay,
     record_applied_change,
     supports_branching,
 )
@@ -686,7 +687,7 @@ class Branch(JobsMixin, PrimaryModel):
     # Branch actions
     #
 
-    def _apply_sync_update(self, change, logger, touched_object_keys, sync_buffer):
+    def _apply_sync_update(self, change, logger, touched_object_keys, sync_buffer, tolerate_invalid=False):
         """
         Apply a non-DELETE change from main and, when the branch has also touched the
         same object, buffer the pre/post state so a single synthetic ObjectChange can
@@ -702,13 +703,21 @@ class Branch(JobsMixin, PrimaryModel):
         merge strategies replay to the same end state with or without this
         consolidation, so dropping the intermediate synthetic rows is a no-op for
         correctness while reducing ChangeDiff write traffic at flush time.
+
+        Passes ``tolerate_invalid`` to ``apply()`` (see ``prepare_changes_for_replay()``).
         """
         content_type_id = change.changed_object_type_id
         object_id = change.changed_object_id
+        apply_kwargs = {
+            'using': self.connection_name,
+            'logger': logger,
+            'skip_missing': True,
+            'tolerate_invalid': tolerate_invalid,
+        }
 
         # If the branch has not touched this object, no merge-time conflict is possible
         if (content_type_id, object_id) not in touched_object_keys:
-            change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+            change.apply(self, **apply_kwargs)
             return
 
         model_class = change.changed_object_type.model_class()
@@ -720,11 +729,11 @@ class Branch(JobsMixin, PrimaryModel):
             prechange_data = _serialize_for_sync(before)
         except model_class.DoesNotExist:
             # Branch already removed the object; let apply() handle it via skip_missing
-            change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+            change.apply(self, **apply_kwargs)
             return
 
         # Apply the change from main onto the branch
-        change.apply(self, using=self.connection_name, logger=logger, skip_missing=True)
+        change.apply(self, **apply_kwargs)
 
         # Capture the branch's state after applying main's change
         try:
@@ -987,6 +996,10 @@ class Branch(JobsMixin, PrimaryModel):
                 # multiple main updates to the same object collapse to one entry.
                 sync_buffer = {}
 
+                # Prepare the list that the loop uses, so that both use the same order
+                changes = list(changes)
+                transient_pks = prepare_changes_for_replay(changes)
+
                 # Apply each change from the main schema
                 for change in changes:
                     model_class = change.changed_object_type.model_class()
@@ -999,7 +1012,13 @@ class Branch(JobsMixin, PrimaryModel):
                         # A buffered synthetic UPDATE is invalidated by a later DELETE.
                         sync_buffer.pop((change.changed_object_type_id, change.changed_object_id), None)
                     else:
-                        self._apply_sync_update(change, logger, touched_object_keys, sync_buffer)
+                        self._apply_sync_update(
+                            change,
+                            logger,
+                            touched_object_keys,
+                            sync_buffer,
+                            tolerate_invalid=change.pk in transient_pks,
+                        )
 
                 # Flush buffered synthetic ObjectChanges. This is where
                 # record_change_diff actually fires and writes to the default DB.

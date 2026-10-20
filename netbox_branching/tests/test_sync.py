@@ -1535,3 +1535,53 @@ class SyncTestCase(FastTeardownTransactionTestCase):
                 Site.objects.filter(slug='pending-site-dryrun').exists(),
                 msg='commit=False must not persist the synced change into the branch schema',
             )
+
+    def test_sync_virtual_chassis_edit_view(self):
+        """
+        Swapping member positions through the VirtualChassis edit view in main syncs into the branch. The view
+        records a transient null vc_position for each member, which is invalid on its own. (#623)
+        """
+        site = Site.objects.create(name='VC Site', slug='vc-site')
+        vc = VirtualChassis.objects.create(name='VC 1')
+        device1, device2 = (
+            Device.objects.create(
+                name=f'VC Member {position}',
+                site=site,
+                device_type=self.device_type,
+                role=self.device_role,
+                virtual_chassis=vc,
+                vc_position=position,
+            )
+            for position in (1, 2)
+        )
+        vc.master = device1
+        vc.save()
+
+        branch = self._create_and_provision_branch()
+
+        # Swap the members' positions in main through the real view
+        self.client.force_login(User.objects.create_superuser(username='vc-editor'))
+        response = self.client.post(
+            reverse('dcim:virtualchassis_edit', kwargs={'pk': vc.pk}),
+            {
+                'name': vc.name,
+                'master': device1.pk,
+                'form-TOTAL_FORMS': 2,
+                'form-INITIAL_FORMS': 2,
+                'form-MIN_NUM_FORMS': 0,
+                'form-MAX_NUM_FORMS': 1000,
+                'form-0-id': device1.pk,
+                'form-0-vc_position': 2,
+                'form-0-vc_priority': '',
+                'form-1-id': device2.pk,
+                'form-1-vc_position': 1,
+                'form-1-vc_priority': '',
+            },
+        )
+        self.assertEqual(response.status_code, 302, msg='the VC edit form was not accepted')
+
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertEqual(Device.objects.get(pk=device1.pk).vc_position, 2)
+            self.assertEqual(Device.objects.get(pk=device2.pk).vc_position, 1)

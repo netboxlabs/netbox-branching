@@ -2,6 +2,7 @@
 Tests for Branch merge functionality with common base class and iterative merge strategy.
 """
 
+import datetime
 import unittest.mock
 import uuid
 
@@ -9,8 +10,9 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import connections
-from django.test import RequestFactory, SimpleTestCase
+from django.test import RequestFactory, SimpleTestCase, TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from dcim.choices import DeviceFaceChoices
 from dcim.models import (
@@ -35,10 +37,18 @@ from extras.choices import CustomFieldTypeChoices
 from extras.models import CustomField, Tag
 from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
+from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.error_report import build_error_report, get_entry_message, get_merge_recommendations
-from netbox_branching.models import Branch, ChangeDiff
+from netbox_branching.models import Branch, ChangeDiff, ObjectChange
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
-from netbox_branching.utilities import DELETED, _deep_merge_dict, _strip_deleted, activate_branch, diff_for_merge
+from netbox_branching.utilities import (
+    DELETED,
+    _deep_merge_dict,
+    _strip_deleted,
+    activate_branch,
+    diff_for_merge,
+    prepare_changes_for_replay,
+)
 from utilities.exceptions import AbortTransaction
 
 User = get_user_model()
@@ -1770,6 +1780,255 @@ class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
 
     MERGE_STRATEGY = BranchMergeStrategyChoices.ITERATIVE
 
+    def _create_virtual_chassis(self, member_count=2):
+        """
+        Create a virtual chassis in main with ``member_count`` member devices at positions 1..n.
+        Returns the VC and a list of member device IDs ordered by position.
+        """
+        site = Site.objects.create(name='VC Site', slug='vc-site')
+        vc = VirtualChassis.objects.create(name='Test VC')
+        device_ids = []
+        for position in range(1, member_count + 1):
+            device = Device.objects.create(
+                name=f'VC Member {position}',
+                site=site,
+                device_type=self.device_type,
+                role=self.device_role,
+                virtual_chassis=vc,
+                vc_position=position,
+            )
+            device_ids.append(device.pk)
+        return vc, device_ids
+
+    def _save_virtual_chassis_edit_page(self, branch, member_updates):
+        """
+        Make the same writes that VirtualChassisEditView.post() makes when it saves the VC edit page.
+
+        Load the members first, as the formset does. Save a fresh copy of each member with a snapshot and
+        no vc_position. Then save the first copies with their new values and no snapshot, so the second
+        ObjectChange has no prechange data.
+
+        ``member_updates`` maps device ID to a dict of field values for the final save.
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with activate_branch(branch), event_tracking(request):
+            members = [Device.objects.get(pk=pk) for pk in member_updates]
+            for member in members:
+                device = Device.objects.get(pk=member.pk)
+                device.snapshot()
+                device.vc_position = None
+                device.save()
+            for member in members:
+                for attr, value in member_updates[member.pk].items():
+                    setattr(member, attr, value)
+                member.save()
+
+        # Make sure that the fixture records the final save of each member with no prechange data
+        content_type = ContentType.objects.get_for_model(Device)
+        for pk in member_updates:
+            last_change = (
+                branch.get_unmerged_changes()
+                .filter(changed_object_type=content_type, changed_object_id=pk)
+                .order_by('time')
+                .last()
+            )
+            self.assertIsNone(last_change.prechange_data)
+
+    def test_merge_virtual_chassis_edit_page_save(self):
+        """
+        Saving the VC edit page in a branch records a transient vc_position=None update per
+        member, followed by an update with no prechange data. Merging must succeed, apply only
+        the fields the branch changed, and leave unrelated fields changed in main intact.
+        Refs: #623
+        """
+        vc, (device1_id, device2_id) = self._create_virtual_chassis()
+
+        branch = self._create_and_provision_branch()
+        self._save_virtual_chassis_edit_page(
+            branch,
+            {
+                device1_id: {'vc_position': 1, 'vc_priority': 10},
+                device2_id: {'vc_position': 2},
+            },
+        )
+
+        # Change a field in main that the branch does not change
+        Device.objects.filter(pk=device1_id).update(serial='MAIN-SERIAL')
+
+        branch.merge(user=self.user, commit=True)
+
+        device1 = Device.objects.get(pk=device1_id)
+        device2 = Device.objects.get(pk=device2_id)
+        self.assertEqual(device1.virtual_chassis_id, vc.pk)
+        self.assertEqual(device1.vc_position, 1)
+        self.assertEqual(device1.vc_priority, 10)
+        self.assertEqual(device1.serial, 'MAIN-SERIAL')
+        self.assertEqual(device2.vc_position, 2)
+
+    def test_revert_virtual_chassis_edit_page_save(self):
+        """
+        Reverting a merged VC edit page save must restore each member's original state rather
+        than clearing every field from the update that carries no prechange data. Refs: #623
+        """
+        vc, (device1_id, device2_id) = self._create_virtual_chassis()
+
+        branch = self._create_and_provision_branch()
+        self._save_virtual_chassis_edit_page(
+            branch,
+            {
+                device1_id: {'vc_position': 1, 'vc_priority': 10},
+                device2_id: {'vc_position': 2},
+            },
+        )
+        branch.merge(user=self.user, commit=True)
+
+        branch.revert(user=self.user, commit=True)
+
+        device1 = Device.objects.get(pk=device1_id)
+        device2 = Device.objects.get(pk=device2_id)
+        self.assertEqual(device1.name, 'VC Member 1')
+        self.assertEqual(device1.device_type_id, self.device_type.pk)
+        self.assertEqual(device1.virtual_chassis_id, vc.pk)
+        self.assertEqual(device1.vc_position, 1)
+        self.assertIsNone(device1.vc_priority)
+        self.assertEqual(device2.name, 'VC Member 2')
+        self.assertEqual(device2.vc_position, 2)
+
+    def _create_mastered_virtual_chassis(self):
+        """
+        Create a VirtualChassis in main with two members at positions 1 and 2, the first as master.
+        """
+        site = Site.objects.create(name='VC Site', slug='vc-site')
+        vc = VirtualChassis.objects.create(name='VC 1')
+        devices = []
+        for position, priority in ((1, 10), (2, None)):
+            devices.append(
+                Device.objects.create(
+                    name=f'VC Member {position}',
+                    site=site,
+                    device_type=self.device_type,
+                    role=self.device_role,
+                    virtual_chassis=vc,
+                    vc_position=position,
+                    vc_priority=priority,
+                )
+            )
+        vc.master = devices[0]
+        vc.save()
+        return vc, devices
+
+    def _edit_virtual_chassis(self, branch, vc, members):
+        """
+        Submit the VirtualChassis edit view within the branch. ``members`` maps each member Device to its new
+        (vc_position, vc_priority). The real view saves each changed member with a null vc_position, then again
+        with its final values and no snapshot.
+        """
+        superuser = User.objects.create_superuser(username='vc-editor')
+        self.client.force_login(superuser)
+        data = {
+            'name': vc.name,
+            'master': vc.master_id,
+            'form-TOTAL_FORMS': len(members),
+            'form-INITIAL_FORMS': len(members),
+            'form-MIN_NUM_FORMS': 0,
+            'form-MAX_NUM_FORMS': 1000,
+        }
+        for i, (device, (position, priority)) in enumerate(members.items()):
+            data[f'form-{i}-id'] = device.pk
+            data[f'form-{i}-vc_position'] = position
+            data[f'form-{i}-vc_priority'] = '' if priority is None else priority
+        url = reverse('dcim:virtualchassis_edit', kwargs={'pk': vc.pk})
+        response = self.client.post(f'{url}?{QUERY_PARAM}={branch.schema_id}', data)
+        self.assertEqual(response.status_code, 302, msg='the VC edit form was not accepted')
+
+    def test_merge_revert_virtual_chassis_edit_view(self):
+        """
+        A member edit made through the VirtualChassis edit view merges and reverts. The view records a transient
+        null vc_position, which is invalid on its own, and a follow-up save with no prechange data. (#623)
+        """
+        vc, (device1, device2) = self._create_mastered_virtual_chassis()
+        branch = self._create_and_provision_branch()
+
+        self._edit_virtual_chassis(branch, vc, {device1: (1, 20), device2: (2, None)})
+
+        # The view records two changes for the edited member, the second without prechange data
+        changes = self._assert_object_changes(branch, Device, device1.pk, 2, ['update', 'update'])
+        self.assertIsNone(changes[0].postchange_data['vc_position'])
+        self.assertIsNone(changes[1].prechange_data)
+
+        # Replay validates the transient state, and logs the error instead of raising it
+        with self.assertLogs('netbox_branching.utilities.update_object', level='WARNING') as logs:
+            branch.merge(user=self.user, commit=True)
+        self.assertIn('vc_position', logs.output[0])
+
+        device1.refresh_from_db()
+        self.assertEqual(device1.vc_position, 1)
+        self.assertEqual(device1.vc_priority, 20)
+
+        branch.revert(user=self.user, commit=True)
+
+        device1.refresh_from_db()
+        self.assertEqual(device1.vc_position, 1)
+        self.assertEqual(device1.vc_priority, 10)
+        self.assertEqual(device1.virtual_chassis_id, vc.pk)
+        self.assertEqual(device1.device_type_id, self.device_type.pk)
+        self.assertEqual(device1.role_id, self.device_role.pk)
+        self.assertEqual(device1.name, 'VC Member 1')
+
+    def test_merge_revert_virtual_chassis_edit_view_swap_positions(self):
+        """
+        Swapping member positions through the VirtualChassis edit view merges and reverts. Replay must keep the
+        transient null positions in order, or the unique (virtual_chassis, vc_position) constraint fails. (#623)
+        """
+        vc, (device1, device2) = self._create_mastered_virtual_chassis()
+        branch = self._create_and_provision_branch()
+
+        self._edit_virtual_chassis(branch, vc, {device1: (2, 10), device2: (1, None)})
+
+        branch.merge(user=self.user, commit=True)
+
+        device1.refresh_from_db()
+        device2.refresh_from_db()
+        self.assertEqual(device1.vc_position, 2)
+        self.assertEqual(device2.vc_position, 1)
+
+        branch.revert(user=self.user, commit=True)
+
+        device1.refresh_from_db()
+        device2.refresh_from_db()
+        self.assertEqual(device1.vc_position, 1)
+        self.assertEqual(device2.vc_position, 2)
+        self.assertEqual(device2.site_id, device1.site_id)
+
+    def test_merge_invalid_final_state_in_request_still_fails(self):
+        """
+        Replay tolerates a validation error only when a later change from the same request validates the object.
+        If the last change of the request leaves the object invalid, the merge fails. (#623)
+        """
+        _, (device1, _) = self._create_mastered_virtual_chassis()
+        branch = self._create_and_provision_branch()
+
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        # Two saves in one request, both leaving vc_position null (save() skips full_clean())
+        with activate_branch(branch), event_tracking(request):
+            branch_device = Device.objects.get(pk=device1.pk)
+            branch_device.snapshot()
+            branch_device.vc_position = None
+            branch_device.save()
+            branch_device.snapshot()
+            branch_device.vc_priority = 20
+            branch_device.save()
+
+        with self.assertRaises(ValidationError) as ctx:
+            branch.merge(user=self.user, commit=True)
+        self.assertIn('vc_position', ctx.exception.message_dict)
+
 
 class DiffForMergeTests(SimpleTestCase):
     """
@@ -1854,3 +2113,125 @@ class DiffForMergeTests(SimpleTestCase):
 
         _deep_merge_dict(merged, diff_for_merge(post, pre)['cfd'])
         self.assertEqual(merged, {'cf1': {'f1': '1', 'f2': '2', 'f3': None}})
+
+
+class PrepareChangesForReplayTests(TestCase):
+    """
+    Unit tests for prepare_changes_for_replay(). (#623)
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.site_type = ContentType.objects.get_for_model(Site)
+        cls.start = timezone.now()
+
+    def _change(self, pk, object_id, request_id, action='update', prechange_data=None, postchange_data=None):
+        """
+        Return an unsaved ObjectChange for a Site, recorded ``pk`` seconds after the start time.
+        """
+        return ObjectChange(
+            pk=pk,
+            time=self.start + datetime.timedelta(seconds=pk),
+            changed_object_type=self.site_type,
+            changed_object_id=object_id,
+            request_id=request_id,
+            action=action,
+            prechange_data=prechange_data,
+            postchange_data=postchange_data or {},
+        )
+
+    def test_tolerates_all_but_last_change_per_object_in_request(self):
+        request_id = uuid.uuid4()
+        changes = [self._change(1, 1, request_id), self._change(2, 1, request_id), self._change(3, 1, request_id)]
+        self.assertEqual(prepare_changes_for_replay(changes), {1, 2})
+
+    def test_tolerates_by_replay_order(self):
+        # In reverse (revert) order, the earliest recorded change is replayed last, so it validates
+        request_id = uuid.uuid4()
+        changes = [self._change(2, 1, request_id), self._change(1, 1, request_id)]
+        self.assertEqual(prepare_changes_for_replay(changes), {2})
+
+    def test_no_tolerance_across_requests_or_objects(self):
+        request_id = uuid.uuid4()
+        changes = [
+            self._change(1, 1, request_id),
+            self._change(2, 1, uuid.uuid4()),
+            self._change(3, 2, request_id),
+        ]
+        self.assertEqual(prepare_changes_for_replay(changes), set())
+
+    def test_no_tolerance_when_another_request_intervenes(self):
+        # Recurring scripts reuse one request ID for every run
+        request_id = uuid.uuid4()
+        changes = [self._change(1, 1, request_id), self._change(2, 1, uuid.uuid4()), self._change(3, 1, request_id)]
+        self.assertEqual(prepare_changes_for_replay(changes), set())
+
+    def test_only_updates_are_tolerated(self):
+        request_id = uuid.uuid4()
+        changes = [self._change(1, 1, request_id, action='create'), self._change(2, 1, request_id)]
+        self.assertEqual(prepare_changes_for_replay(changes), set())
+
+    def test_recovers_prechange_from_previous_change_in_request(self):
+        request_id = uuid.uuid4()
+        # Same result in either replay order
+        for reverted in (False, True):
+            first = self._change(
+                1, 1, request_id, prechange_data={'description': 'a'}, postchange_data={'description': 'b'}
+            )
+            second = self._change(2, 1, request_id, postchange_data={'description': 'c'})
+            changes = [second, first] if reverted else [first, second]
+            prepare_changes_for_replay(changes)
+            self.assertEqual(second.prechange_data, {'description': 'b'})
+            self.assertIsNot(second.prechange_data, first.postchange_data)
+
+    def test_no_recovery_without_previous_change_in_request(self):
+        changes = [
+            self._change(1, 1, uuid.uuid4(), prechange_data={'description': 'a'}, postchange_data={'description': 'b'}),
+            self._change(2, 1, uuid.uuid4(), postchange_data={'description': 'c'}),
+        ]
+        prepare_changes_for_replay(changes)
+        self.assertIsNone(changes[1].prechange_data)
+
+    def test_no_recovery_when_another_request_intervenes(self):
+        request_id = uuid.uuid4()
+        changes = [
+            self._change(1, 1, request_id, prechange_data={'status': 'a'}, postchange_data={'status': 'a'}),
+            self._change(2, 1, uuid.uuid4(), prechange_data={'status': 'a'}, postchange_data={'status': 'b'}),
+            self._change(3, 1, request_id, postchange_data={'status': 'a'}),
+        ]
+        prepare_changes_for_replay(changes)
+        self.assertIsNone(changes[2].prechange_data)
+
+    def test_no_recovery_when_prechange_recorded(self):
+        request_id = uuid.uuid4()
+        changes = [
+            self._change(1, 1, request_id, prechange_data={'description': 'a'}, postchange_data={'description': 'b'}),
+            self._change(2, 1, request_id, prechange_data={'description': 'x'}, postchange_data={'description': 'c'}),
+        ]
+        prepare_changes_for_replay(changes)
+        self.assertEqual(changes[1].prechange_data, {'description': 'x'})
+
+    def test_recovered_prechange_is_migrated_with_the_change(self):
+        # Each change runs its migrators before it builds its payload. The recovered prechange data must go
+        # through the migrators too.
+        def rename_legacy(objectchange):
+            for data in (objectchange.prechange_data, objectchange.postchange_data):
+                if data is not None and 'legacy' in data:
+                    data['priority'] = data.pop('legacy')
+
+        request_id = uuid.uuid4()
+        first = self._change(
+            1,
+            1,
+            request_id,
+            prechange_data={'legacy': 10, 'position': 1},
+            postchange_data={'legacy': 10, 'position': None},
+        )
+        second = self._change(2, 1, request_id, postchange_data={'legacy': 20, 'position': 1})
+        prepare_changes_for_replay([first, second])
+
+        rename_legacy(first)
+        self.assertEqual(first.get_merge_data(), {'position': None})
+
+        rename_legacy(second)
+        self.assertEqual(second.get_merge_data(reverse=True), {'position': None, 'priority': 10})
