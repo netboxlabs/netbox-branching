@@ -469,8 +469,8 @@ def prepare_changes_for_replay(changes):
       change validates the end state of the object.
     - An UPDATE with no prechange data gets a copy of the postchange data of its earlier pair, in memory only.
 
-    Some views save an object two times in one request, and the first save is not valid alone (#623). Call this
-    function before code reads the cached ``*_data_clean`` properties, so that migrators also change the copy.
+    Some views save an object two times in one request, and the first save is not valid alone (#623). The function
+    clears the cached ``prechange_data_clean`` of each change that gets a copy, so that the copy is always used.
     """
     transient_pks = set()
 
@@ -499,6 +499,7 @@ def prepare_changes_for_replay(changes):
         ):
             # Migrators change the data of each change in place
             change.prechange_data = copy.deepcopy(previous.postchange_data)
+            change.__dict__.pop('prechange_data_clean', None)
         earlier[key] = change
 
     return transient_pks

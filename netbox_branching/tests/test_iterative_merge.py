@@ -2184,6 +2184,28 @@ class PrepareChangesForReplayTests(TestCase):
             self.assertEqual(second.prechange_data, {'description': 'b'})
             self.assertIsNot(second.prechange_data, first.postchange_data)
 
+    def test_recovers_prechange_along_a_chain(self):
+        request_id = uuid.uuid4()
+        changes = [
+            self._change(1, 1, request_id, prechange_data={'description': 'a'}, postchange_data={'description': 'b'}),
+            self._change(2, 1, request_id, postchange_data={'description': 'c'}),
+            self._change(3, 1, request_id, postchange_data={'description': 'd'}),
+        ]
+        prepare_changes_for_replay(changes)
+        self.assertEqual(changes[1].prechange_data, {'description': 'b'})
+        self.assertEqual(changes[2].prechange_data, {'description': 'c'})
+
+    def test_recovered_prechange_replaces_a_cached_clean_value(self):
+        request_id = uuid.uuid4()
+        first = self._change(
+            1, 1, request_id, prechange_data={'description': 'a'}, postchange_data={'description': 'b'}
+        )
+        second = self._change(2, 1, request_id, postchange_data={'description': 'c'})
+        self.assertEqual(second.prechange_data_clean, {})
+
+        prepare_changes_for_replay([first, second])
+        self.assertEqual(second.prechange_data_clean, {'description': 'b'})
+
     def test_no_recovery_without_previous_change_in_request(self):
         changes = [
             self._change(1, 1, uuid.uuid4(), prechange_data={'description': 'a'}, postchange_data={'description': 'b'}),
