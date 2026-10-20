@@ -568,7 +568,8 @@ def get_active_branch(request):
             raise BranchNotReady(f'Branch {branch} is not ready for use (status: {branch.status})')
         return branch
 
-    # Branch activated/deactivated by URL query parameter
+    # Branch activated/deactivated by URL query parameter. Messages fail silently: the requests a
+    # background job replays (fake and rebuilt API requests) have no message storage.
     if QUERY_PARAM in request.GET:
         if schema_id := request.GET.get(QUERY_PARAM):
             branch = Branch.objects.get(schema_id=schema_id)
@@ -576,7 +577,7 @@ def get_active_branch(request):
                 if schema_id != request.COOKIES.get(COOKIE_NAME) and not getattr(
                     request, '_branch_activation_notified', False
                 ):
-                    messages.success(request, _('Activated branch {branch}').format(branch=branch))
+                    messages.success(request, _('Activated branch {branch}').format(branch=branch), fail_silently=True)
                     request._branch_activation_notified = True
                 return branch
             if not getattr(request, '_branch_activation_notified', False):
@@ -585,11 +586,12 @@ def get_active_branch(request):
                     _('Branch {branch} is not ready for use (status: {status})').format(
                         branch=branch, status=branch.status
                     ),
+                    fail_silently=True,
                 )
                 request._branch_activation_notified = True
             return None
         if not getattr(request, '_branch_activation_notified', False):
-            messages.success(request, _('Deactivated branch'))
+            messages.success(request, _('Deactivated branch'), fail_silently=True)
             request._branch_activation_notified = True
         request.COOKIES.pop(COOKIE_NAME, None)  # Delete cookie if set
         return None

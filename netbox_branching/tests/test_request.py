@@ -3,7 +3,9 @@ from unittest.mock import patch
 
 from django.test import RequestFactory, override_settings
 from django.urls import reverse
+from rest_framework.request import Request as DRFRequest
 
+from netbox.jobs import AsyncAPIJob
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
 from netbox_branching.contextvars import active_branch
@@ -255,6 +257,51 @@ class RequestTestCase(TestCase):
 
         with ActiveBranchContextManager(request):
             self.assertIsNone(active_branch.get())
+
+    def test_processor_activates_branch_from_query_param_on_fake_request(self):
+        """
+        A NetBoxFakeRequest has no message storage, so the activation toast must not fail a
+        background job (e.g. a UI script run) whose URL carried the branch query parameter.
+        """
+        branch = Branch.objects.first()
+        request = fake_request(self.user, f'{reverse("home")}?{QUERY_PARAM}={branch.schema_id}')
+
+        with ActiveBranchContextManager(request):
+            self.assertEqual(active_branch.get(), branch)
+
+    def test_processor_refuses_unready_branch_from_query_param_on_fake_request(self):
+        """
+        The not-ready error toast must not fail a background job either.
+        """
+        branch = Branch.objects.first()
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.SYNCING)
+        request = fake_request(self.user, f'{reverse("home")}?{QUERY_PARAM}={branch.schema_id}')
+
+        with ActiveBranchContextManager(request):
+            self.assertIsNone(active_branch.get())
+
+    def test_processor_deactivates_branch_from_query_param_on_fake_request(self):
+        """
+        The deactivation toast must not fail a background job either.
+        """
+        request = fake_request(self.user, f'{reverse("home")}?{QUERY_PARAM}=')
+
+        with ActiveBranchContextManager(request):
+            self.assertIsNone(active_branch.get())
+
+    def test_background_api_request_activates_branch_from_query_param(self):
+        """
+        A background REST API write (?background=true) is replayed in a worker against a request
+        AsyncAPIJob rebuilds, which has no message storage. apply_request_processors() swallows a
+        failing processor with only a warning, so a failed activation toast would silently send the
+        write to main instead of the branch.
+        """
+        branch = Branch.objects.first()
+        url = f'{reverse("dcim-api:site-list")}?{QUERY_PARAM}={branch.schema_id}&background=true'
+        django_request = AsyncAPIJob._build_request(fake_request(self.user, url), {}, 'http')
+
+        with apply_request_processors(DRFRequest(django_request)):
+            self.assertEqual(active_branch.get(), branch)
 
     def test_processor_does_not_propagate_model_import_failure(self):
         """
