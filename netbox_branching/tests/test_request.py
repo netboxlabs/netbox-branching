@@ -238,9 +238,8 @@ class RequestTestCase(TestCase):
 
     def test_processor_activates_branch_from_header_on_fake_request(self):
         """
-        Scripts run via the REST API execute in a worker against a NetBoxFakeRequest, which carries
-        headers only in META and has no `headers` attribute. The X-NetBox-Branch header must still
-        select the branch. See #675.
+        REST API scripts run in a worker against a NetBoxFakeRequest, which has no `headers`
+        attribute (#675).
         """
         branch = Branch.objects.first()
         request = fake_request(self.user, reverse('dcim-api:site-list'), headers={'x-netbox-branch': branch.schema_id})
@@ -250,8 +249,7 @@ class RequestTestCase(TestCase):
 
     def test_processor_ignores_fake_api_request_without_header(self):
         """
-        Checking for the header must not fail either, as that broke every REST API script run,
-        branch or no branch. See #675.
+        Every REST API script run takes this path, with or without a branch (#675).
         """
         request = fake_request(self.user, reverse('dcim-api:site-list'))
 
@@ -260,8 +258,8 @@ class RequestTestCase(TestCase):
 
     def test_processor_activates_branch_from_query_param_on_fake_request(self):
         """
-        A NetBoxFakeRequest has no message storage, so the activation toast must not fail a
-        background job (e.g. a UI script run) whose URL carried the branch query parameter. See #675.
+        UI script runs carry the URL's query parameters into a NetBoxFakeRequest, which has no
+        message storage (#675).
         """
         branch = Branch.objects.first()
         request = fake_request(self.user, f'{reverse("home")}?{QUERY_PARAM}={branch.schema_id}')
@@ -271,8 +269,8 @@ class RequestTestCase(TestCase):
 
     def test_processor_refuses_unready_branch_from_query_param_on_fake_request(self):
         """
-        A NetBoxFakeRequest has no message storage, so the not-ready error toast must not fail a
-        background job whose URL named an unready branch. See #675.
+        UI script runs carry the URL's query parameters into a NetBoxFakeRequest, which has no
+        message storage (#675).
         """
         branch = Branch.objects.first()
         Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.SYNCING)
@@ -283,8 +281,8 @@ class RequestTestCase(TestCase):
 
     def test_processor_deactivates_branch_from_query_param_on_fake_request(self):
         """
-        A NetBoxFakeRequest has no message storage, so the deactivation toast must not fail a
-        background job whose URL carried an empty branch query parameter. See #675.
+        UI script runs carry the URL's query parameters into a NetBoxFakeRequest, which has no
+        message storage (#675).
         """
         request = fake_request(self.user, f'{reverse("home")}?{QUERY_PARAM}=')
 
@@ -293,10 +291,8 @@ class RequestTestCase(TestCase):
 
     def test_background_api_request_activates_branch_from_query_param(self):
         """
-        A background REST API write (?background=true) is replayed in a worker against a request
-        AsyncAPIJob rebuilds, which has no message storage. apply_request_processors() swallows a
-        failing processor with only a warning, so a failed activation toast would silently send the
-        write to main instead of the branch. See #675.
+        apply_request_processors() only warns when a processor fails, so the background write lands
+        in main (#675).
         """
         branch = Branch.objects.first()
         url = f'{reverse("dcim-api:site-list")}?{QUERY_PARAM}={branch.schema_id}&background=true'

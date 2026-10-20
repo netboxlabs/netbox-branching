@@ -45,7 +45,7 @@ def provision_branch(*, user, name='Test Branch', **kwargs):
 def fake_request(user, path, headers=None):
     """
     Return the NetBoxFakeRequest a background job (script, webhook) receives for a POST to
-    `path`. A query string in `path` lands in request.GET.
+    `path`. A query string in `path` populates request.GET.
     """
     request = RequestFactory().post(path, headers=headers)
     request.user = user

@@ -56,9 +56,8 @@ class SetActiveBranchTestCase(TestCase):
 
     def test_returns_branch_attrs_for_fake_api_request_with_header(self):
         """
-        Webhooks for REST API changes are rendered in a worker from a NetBoxFakeRequest, which
-        has no `headers` attribute. The X-NetBox-Branch header must still identify the branch.
-        See #675.
+        Webhooks for REST API changes render in a worker from a NetBoxFakeRequest, which has no
+        `headers` attribute (#675).
         """
         branch = Branch(name='Webhook Branch')
         branch.status = BranchStatusChoices.READY  # Fake provisioning
