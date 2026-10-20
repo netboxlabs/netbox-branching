@@ -261,7 +261,7 @@ class RequestTestCase(TestCase):
     def test_processor_activates_branch_from_query_param_on_fake_request(self):
         """
         A NetBoxFakeRequest has no message storage, so the activation toast must not fail a
-        background job (e.g. a UI script run) whose URL carried the branch query parameter.
+        background job (e.g. a UI script run) whose URL carried the branch query parameter. See #675.
         """
         branch = Branch.objects.first()
         request = fake_request(self.user, f'{reverse("home")}?{QUERY_PARAM}={branch.schema_id}')
@@ -271,7 +271,8 @@ class RequestTestCase(TestCase):
 
     def test_processor_refuses_unready_branch_from_query_param_on_fake_request(self):
         """
-        The not-ready error toast must not fail a background job either.
+        A NetBoxFakeRequest has no message storage, so the not-ready error toast must not fail a
+        background job whose URL named an unready branch. See #675.
         """
         branch = Branch.objects.first()
         Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.SYNCING)
@@ -282,7 +283,8 @@ class RequestTestCase(TestCase):
 
     def test_processor_deactivates_branch_from_query_param_on_fake_request(self):
         """
-        The deactivation toast must not fail a background job either.
+        A NetBoxFakeRequest has no message storage, so the deactivation toast must not fail a
+        background job whose URL carried an empty branch query parameter. See #675.
         """
         request = fake_request(self.user, f'{reverse("home")}?{QUERY_PARAM}=')
 
@@ -294,7 +296,7 @@ class RequestTestCase(TestCase):
         A background REST API write (?background=true) is replayed in a worker against a request
         AsyncAPIJob rebuilds, which has no message storage. apply_request_processors() swallows a
         failing processor with only a warning, so a failed activation toast would silently send the
-        write to main instead of the branch.
+        write to main instead of the branch. See #675.
         """
         branch = Branch.objects.first()
         url = f'{reverse("dcim-api:site-list")}?{QUERY_PARAM}={branch.schema_id}&background=true'

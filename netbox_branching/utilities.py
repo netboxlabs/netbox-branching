@@ -561,15 +561,15 @@ def get_active_branch(request):
     from .models import Branch
 
     # Read META, not request.headers: the NetBoxFakeRequest a background job receives has no headers attribute.
-    header = HttpHeaders.to_wsgi_name(BRANCH_HEADER)
-    if is_api_request(request) and header in request.META:
-        branch = Branch.objects.get(schema_id=request.META[header])
+    meta_key = HttpHeaders.to_wsgi_name(BRANCH_HEADER)
+    if is_api_request(request) and meta_key in request.META:
+        branch = Branch.objects.get(schema_id=request.META[meta_key])
         if not branch.ready:
             raise BranchNotReady(f'Branch {branch} is not ready for use (status: {branch.status})')
         return branch
 
-    # Branch activated/deactivated by URL query parameter. Messages fail silently: the requests a
-    # background job replays (fake and rebuilt API requests) have no message storage.
+    # Branch activated/deactivated by URL query parameter. Messages fail silently: the requests background
+    # jobs run against (fake requests, and the request AsyncAPIJob rebuilds) have no message storage.
     if QUERY_PARAM in request.GET:
         if schema_id := request.GET.get(QUERY_PARAM):
             branch = Branch.objects.get(schema_id=schema_id)
