@@ -12,6 +12,8 @@ from netbox_branching.utilities import ActiveBranchContextManager
 from utilities.request import apply_request_processors
 from utilities.testing import TestCase
 
+from .utils import fake_request
+
 
 class RequestTestCase(TestCase):
     @classmethod
@@ -231,6 +233,28 @@ class RequestTestCase(TestCase):
                 active_branch.get(),
                 msg='A branch was activated despite netbox_branching not being installed',
             )
+
+    def test_processor_activates_branch_from_header_on_fake_request(self):
+        """
+        Scripts run via the REST API execute in a worker against a NetBoxFakeRequest, which carries
+        headers only in META and has no `headers` attribute. The X-NetBox-Branch header must still
+        select the branch. See #675.
+        """
+        branch = Branch.objects.first()
+        request = fake_request(self.user, reverse('dcim-api:site-list'), headers={'x-netbox-branch': branch.schema_id})
+
+        with ActiveBranchContextManager(request):
+            self.assertEqual(active_branch.get(), branch)
+
+    def test_processor_ignores_fake_api_request_without_header(self):
+        """
+        Checking for the header must not fail either, as that broke every REST API script run,
+        branch or no branch. See #675.
+        """
+        request = fake_request(self.user, reverse('dcim-api:site-list'))
+
+        with ActiveBranchContextManager(request):
+            self.assertIsNone(active_branch.get())
 
     def test_processor_does_not_propagate_model_import_failure(self):
         """

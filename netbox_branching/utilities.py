@@ -11,6 +11,7 @@ from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db import connections
 from django.db.models import ForeignKey, ManyToManyField
+from django.http.request import HttpHeaders
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext as _
@@ -559,8 +560,10 @@ def get_active_branch(request):
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
     from .models import Branch
 
-    if is_api_request(request) and BRANCH_HEADER in request.headers:
-        branch = Branch.objects.get(schema_id=request.headers.get(BRANCH_HEADER))
+    # Read META, not request.headers: the NetBoxFakeRequest a background job receives has no headers attribute.
+    header = HttpHeaders.to_wsgi_name(BRANCH_HEADER)
+    if is_api_request(request) and header in request.META:
+        branch = Branch.objects.get(schema_id=request.META[header])
         if not branch.ready:
             raise BranchNotReady(f'Branch {branch} is not ready for use (status: {branch.status})')
         return branch
