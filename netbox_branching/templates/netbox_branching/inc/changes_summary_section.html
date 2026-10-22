@@ -10,7 +10,8 @@
       <span>{{ label }}</span>
       <span class="badge bg-{{ color }} rounded-pill text-white">{{ total }}</span>
     </a>
-    <div class="collapse{% if expanded %} show{% endif %}" id="{{ prefix }}-{{ kind }}">
+    <div class="collapse{% if expanded %} show{% endif %}"
+         id="{{ prefix }}-{{ kind }}">
       <table class="table table-hover table-borderless mb-0">
         <tbody>
           {% for ct, count in items.items %}

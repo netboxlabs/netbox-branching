@@ -7,7 +7,7 @@
       {% spaceless %}
         <pre class="change-data m-0">
           {% for k, v in data.items %}
-            <span{% if k in altered %} class="{{ style }}{% if conflicts and k in conflicts %} conflict{% endif %}"{% endif %}>{{ k }}: {{ v|json }}</span>
+            <span {% if k in altered %} class="{{ style }}{% if conflicts and k in conflicts %} conflict{% endif %}"{% endif %}>{{ k }}: {{ v|json }}</span>
           {% endfor %}
         </pre>
       {% endspaceless %}

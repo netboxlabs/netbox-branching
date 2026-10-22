@@ -14,7 +14,9 @@
       <tbody>
         {% for field in object.conflicts %}
           <tr>
-            <td><code>{{ field }}</code></td>
+            <td>
+              <code>{{ field }}</code>
+            </td>
             <td>
               {% if object.modified %}
                 {{ object.modified|get_item:field|json }}
