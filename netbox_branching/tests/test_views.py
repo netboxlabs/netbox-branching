@@ -906,6 +906,25 @@ class BranchDetailLayoutTestCase(TestCase):
         self.assertIn(self.branch.schema_name, content)
         self.assertIn('No field-level conflicts found', content)
 
+    def test_conflicts_link_to_the_diff_tab(self):
+        site = Site.objects.create(name='Layout Conflict Site', slug='layout-conflict-site')
+        ChangeDiff(
+            branch=self.branch,
+            object_type=ContentType.objects.get_for_model(Site),
+            object_id=site.pk,
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            original={'description': ''},
+            modified={'description': 'branch'},
+            current={'description': 'main'},
+        ).save()
+        response = self.client.get(self.branch.get_absolute_url())
+        content = response.content.decode()
+        self.assertIn('1 conflict found', content)
+        self.assertIn(
+            reverse('plugins:netbox_branching:branch_diff', kwargs={'pk': self.branch.pk}) + '?has_conflicts=True',
+            content,
+        )
+
     def test_new_branch_renders_placeholders(self):
         response = self.client.get(self.new_branch.get_absolute_url())
         self.assertEqual(response.status_code, 200)

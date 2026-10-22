@@ -42,3 +42,6 @@ class ConflictsAttr(attrs.ObjectAttribute):
         if not obj.ready:
             return None
         return ChangeDiff.objects.filter(branch=obj, conflicts__isnull=False).count()
+
+    def get_context(self, obj, attr, value, context):
+        return {'object': obj}
