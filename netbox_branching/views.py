@@ -12,6 +12,7 @@ from core.filtersets import ObjectChangeFilterSet
 from core.models import ObjectChange
 from extras.ui.panels import CustomFieldsPanel, TagsPanel
 from netbox.ui import layout
+from netbox.ui.breadcrumbs import Breadcrumb
 from netbox.ui.panels import CommentsPanel, PluginContentPanel
 from netbox.views import generic
 from netbox.views.generic.base import BaseMultiObjectView
@@ -772,6 +773,7 @@ class ChangeDiffView(generic.ObjectView):
         layout.Row(
             layout.Column(PluginContentPanel('full_width_page')),
         ),
+        breadcrumbs=[Breadcrumb(label=str)],
     )
 
     def get_extra_context(self, request, instance):
