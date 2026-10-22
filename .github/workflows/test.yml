@@ -18,10 +18,18 @@
 #   against an unreleased NetBox branch. All three sources are resolved and
 #   validated in one step, so the checkout consumes only its output.
 #
+# Sharding:
+#   Each Python version runs the suite as several shards, one runner each, so
+#   every shard gets its own PostgreSQL. In-runner --parallel was measured and
+#   rejected: branch provisioning serialises on PostgreSQL DDL, so four workers
+#   on one server gave only ~1.4x. The named shards hold the heavy modules
+#   (TEST_SHARDS below, balanced by measured runtime); `rest` runs every test
+#   module the named shards do not claim, so a new module is never silently
+#   skipped.
+#
 # Coverage:
-#   Collected on a SINGLE matrix leg (see the matrix `include`). The suite is
-#   not run with --parallel: branch provisioning is schema-scoped and has not
-#   been validated against Django's parallel test runner.
+#   Collected on one Python version (see the matrix `include`), one data file
+#   per shard, and combined into a single report by the `coverage` job.
 
 name: Test
 
@@ -77,21 +85,29 @@ jobs:
 
   test:
     name: >-
-      py${{ matrix.python-version }} / netbox-${{ matrix.netbox-ref }}${{
-      matrix.coverage && ' (coverage)' || '' }}
+      py${{ matrix.python-version }} / netbox-${{ matrix.netbox-ref }} /
+      ${{ matrix.shard }}${{ matrix.coverage && ' (coverage)' || '' }}
     needs: lint
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     env:
       NETBOX_CONFIGURATION: configuration
       PYTHONPATH: ${{ github.workspace }}/netbox-branching/testing
       COVERAGE_RCFILE: ${{ github.workspace }}/netbox-branching/pyproject.toml
+      # Test modules (netbox_branching/tests/test_<name>.py) claimed by each named
+      # shard. Balanced on measured runtime: the merge suites, sync and branches
+      # are each ~100-220s; upgrade and signals are the next heaviest. Everything
+      # unlisted runs in the `rest` shard.
+      TEST_SHARDS: |
+        merge-squash: test_squash_merge test_changediff test_api test_views
+        merge-iterative: test_iterative_merge test_upgrade test_signals
     strategy:
       fail-fast: false
       matrix:
         python-version: ['3.12', '3.13', '3.14']
         netbox-ref:
           - 'main'
+        shard: [merge-squash, merge-iterative, rest]
         include:
           - coverage: false
           # Collect coverage once, on the newest Python against NetBox main.
@@ -260,17 +276,92 @@ jobs:
           path: ${{ runner.temp }}/test_netbox.dump
           key: ${{ steps.test-db.outputs.cache-primary-key }}
 
+      - name: Select this shard's test modules
+        id: shard
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: |
+          all=$(cd netbox-branching/netbox_branching/tests && ls test_*.py | sed 's/\.py$//')
+          claimed=$(sed -n 's/^[a-z-]*: *//p' <<<"$TEST_SHARDS" | tr ' ' '\n' | sed '/^$/d')
+          if dup=$(sort <<<"$claimed" | uniq -d | grep .); then
+            echo "::error::Test module listed in more than one shard: $dup"; exit 1
+          fi
+          for m in $claimed; do
+            grep -qx "$m" <<<"$all" || { echo "::error::TEST_SHARDS names a missing test module '$m'"; exit 1; }
+          done
+          if [[ "$SHARD" == rest ]]; then
+            modules=$(comm -23 <(sort <<<"$all") <(sort <<<"$claimed"))
+          else
+            modules=$(sed -n "s/^$SHARD: *//p" <<<"$TEST_SHARDS" | tr ' ' '\n')
+          fi
+          [[ -n "$modules" ]] || { echo "::error::Shard '$SHARD' selects no test modules"; exit 1; }
+          labels=$(sed 's/^/netbox_branching.tests./' <<<"$modules" | tr '\n' ' ')
+          echo "Shard $SHARD runs: $labels"
+          echo "labels=$labels" >> "$GITHUB_OUTPUT"
+
       - name: Run tests
         if: ${{ ! matrix.coverage }}
         working-directory: netbox
-        run: python netbox/manage.py test netbox_branching.tests --keepdb --timing
+        env:
+          LABELS: ${{ steps.shard.outputs.labels }}
+        run: python netbox/manage.py test $LABELS --keepdb --timing
 
       - name: Run tests with coverage
         if: ${{ matrix.coverage }}
         working-directory: netbox
-        run: coverage run netbox/manage.py test netbox_branching.tests --keepdb --timing
+        env:
+          LABELS: ${{ steps.shard.outputs.labels }}
+        # -p writes a per-shard data file (.coverage.<host>.<pid>.<n>) for the
+        # coverage job to combine.
+        run: coverage run -p netbox/manage.py test $LABELS --keepdb --timing
 
-      - name: Show coverage report
+      - name: Upload coverage data
         if: ${{ matrix.coverage }}
-        working-directory: netbox
-        run: coverage report
+        # actions/upload-artifact v7.0.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: coverage-${{ matrix.shard }}
+          path: netbox/.coverage.*
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  coverage:
+    name: Coverage report
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      COVERAGE_RCFILE: ${{ github.workspace }}/netbox-branching/pyproject.toml
+    steps:
+      - name: Checkout plugin
+        # Same path as the test job, so the absolute source paths recorded in the
+        # coverage data resolve here.
+        # actions/checkout v6.0.2
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: netbox-branching
+          persist-credentials: false
+
+      - name: Setup Python
+        # actions/setup-python v6.2.0
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.14'
+
+      - name: Install coverage
+        run: python -m pip install coverage
+
+      - name: Download coverage data
+        # actions/download-artifact v8.0.2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+          path: netbox-branching
+
+      - name: Combine and report
+        working-directory: netbox-branching
+        run: |
+          coverage combine
+          coverage report
