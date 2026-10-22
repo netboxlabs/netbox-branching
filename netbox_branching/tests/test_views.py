@@ -1037,3 +1037,36 @@ class BranchJobReportLayoutTestCase(TestCase):
         # The tab is shown on the branch page once a report exists
         response = self.client.get(self.branch.get_absolute_url())
         self.assertIn('Merge Report', response.content.decode())
+
+
+class BranchStatusAttrTestCase(TestCase):
+    """The status attribute flags the newest job only when it failed to complete."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_user(username='statusattr_super', is_superuser=True)
+        cls.branch = Branch(name='Status Attr Branch', status=BranchStatusChoices.READY)
+        cls.branch.save(provision=False)
+
+    def setUp(self):
+        self.client.force_login(self.superuser)
+
+    def _add_job(self, status):
+        return self.branch.jobs.create(
+            object_type=ContentType.objects.get_for_model(Branch),
+            job_id=uuid.uuid4(),
+            name='Sync branch',
+            status=status,
+        )
+
+    def test_failed_job_is_flagged(self):
+        job = self._add_job(JobStatusChoices.STATUS_FAILED)
+        content = self.client.get(self.branch.get_absolute_url()).content.decode()
+        self.assertIn('Job failed', content)
+        self.assertIn(job.get_absolute_url(), content)
+
+    def test_only_the_newest_job_counts(self):
+        self._add_job(JobStatusChoices.STATUS_FAILED)
+        self._add_job(JobStatusChoices.STATUS_COMPLETED)
+        content = self.client.get(self.branch.get_absolute_url()).content.decode()
+        self.assertNotIn('Job failed', content)

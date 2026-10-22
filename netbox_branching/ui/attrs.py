@@ -1,12 +1,33 @@
 from django.utils.translation import gettext_lazy as _
 
+from core.choices import JobStatusChoices
 from netbox.ui import attrs
 from netbox_branching.models import ChangeDiff
 
 __all__ = (
+    'BranchStatusAttr',
     'ConflictsAttr',
     'LatestChangeAttr',
 )
+
+
+class BranchStatusAttr(attrs.ObjectAttribute):
+    """
+    A branch's status badge, flagging the branch's most recent job if it failed to complete.
+    """
+
+    template_name = 'netbox_branching/attrs/status.html'
+    label = _('Status')
+
+    def __init__(self, accessor='status', **kwargs):
+        super().__init__(accessor, **kwargs)
+
+    def get_context(self, obj, attr, value, context):
+        last_job = obj.jobs.order_by('created').last()
+        return {
+            'object': obj,
+            'failed_job': last_job if last_job and last_job.status == JobStatusChoices.STATUS_FAILED else None,
+        }
 
 
 class LatestChangeAttr(attrs.ObjectAttribute):

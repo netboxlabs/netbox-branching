@@ -7,12 +7,10 @@
   {% else %}
     {% badge object.get_status_display object.get_status_color %}
   {% endif %}
-  {% with last_job=object.jobs.first %}
-    {% if last_job.status == 'failed' %}
-      <span class="text-red ms-2">
-        <i class="mdi mdi-alert"></i>
-        <a href="{{ last_job.get_absolute_url }}" class="text-red">{% trans "Job failed" %}</a>
-      </span>
-    {% endif %}
-  {% endwith %}
+  {% if failed_job %}
+    <span class="text-red ms-2">
+      <i class="mdi mdi-alert"></i>
+      <a href="{{ failed_job.get_absolute_url }}" class="text-red">{% trans "Job failed" %}</a>
+    </span>
+  {% endif %}
 </div>

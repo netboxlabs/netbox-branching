@@ -4,7 +4,7 @@ from django.utils.translation import gettext_lazy as _
 
 from core.choices import ObjectChangeActionChoices
 from netbox.ui import attrs, panels
-from netbox_branching.ui.attrs import ConflictsAttr, LatestChangeAttr
+from netbox_branching.ui.attrs import BranchStatusAttr, ConflictsAttr, LatestChangeAttr
 
 __all__ = (
     'BranchChangeStatsPanel',
@@ -29,7 +29,7 @@ __all__ = (
 class BranchPanel(panels.ObjectAttributesPanel):
     name = attrs.TextAttr('name', label=_('Name'))
     schema_id = attrs.TextAttr('schema_id', label=_('Schema ID'))
-    status = attrs.TemplatedAttr('status', label=_('Status'), template_name='netbox_branching/attrs/status.html')
+    status = BranchStatusAttr()
     owner = attrs.RelatedObjectAttr('owner', label=_('Owner'), linkify=True)
     description = attrs.TextAttr('description', label=_('Description'))
     last_sync = attrs.TemplatedAttr(

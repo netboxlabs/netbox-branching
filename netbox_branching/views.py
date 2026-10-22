@@ -256,7 +256,7 @@ class BranchJobReportView(generic.ObjectView):
                     if hasattr(obj, 'get_absolute_url'):
                         object_url = f'{obj.get_absolute_url()}?{QUERY_PARAM}={instance.schema_id}'
                     object_str = str(obj)
-                    if not entry.get('value') and (field := entry.get('field')):
+                    if entry.get('value') is None and (field := entry.get('field')):
                         value = getattr(obj, field, None)
                     else:
                         value = entry.get('value')
