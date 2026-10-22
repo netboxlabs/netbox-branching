@@ -63,6 +63,7 @@ __all__ = (
     'full_clean_with_file_check',
     'get_active_branch',
     'get_branchable_object_types',
+    'get_branches_for_user',
     'get_sql_results',
     'get_tables_to_replicate',
     'is_api_request',
@@ -547,9 +548,40 @@ class BranchNotReady(Exception):
     """
 
 
+def get_branches_for_user(user, action='view'):
+    """
+    Return the Branches on which the given user has been granted the specified permission. Honors any
+    object-level constraints defined for the permission, so an administrator can scope branches to their
+    owner (e.g. {"owner": "$user"}) or to any other attribute.
+    """
+    from .models import Branch
+
+    return Branch.objects.restrict(user, action)
+
+
+def _get_request_user(request):
+    """
+    Return the user making the request. REST framework authenticates an API token only once the view
+    runs, so a token is checked here first, as NetBox's GraphQL view does. A rejected token leaves the
+    user anonymous, and the view reports the failure.
+    """
+    if is_api_request(request) and not request.user.is_authenticated:
+        from rest_framework.exceptions import AuthenticationFailed
+
+        from netbox.api.authentication import TokenAuthentication
+
+        try:
+            if auth := TokenAuthentication().authenticate(request):
+                request.user = auth[0]
+        except AuthenticationFailed:
+            pass
+    return request.user
+
+
 def get_active_branch(request):
     """
-    Return the active Branch, or None if no branch is active.
+    Return the active Branch, or None if no branch is active. Only branches which the requesting
+    user is permitted to view are eligible for activation.
 
     Raises BranchNotReady if the request names a branch which exists but is not usable, and
     Branch.DoesNotExist if it names one which does not exist at all. Always returns a Branch or
@@ -557,10 +589,14 @@ def get_active_branch(request):
     branch. Callers which cannot refuse the request must treat both exceptions as "no branch".
     """
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
-    from .models import Branch
-
     if is_api_request(request) and BRANCH_HEADER in request.headers:
-        branch = Branch.objects.get(schema_id=request.headers.get(BRANCH_HEADER))
+        user = _get_request_user(request)
+        try:
+            branch = get_branches_for_user(user).get(schema_id=request.headers.get(BRANCH_HEADER))
+        except ObjectDoesNotExist:
+            if not user.is_authenticated:
+                return None  # Leave the view to report the missing or rejected credentials
+            raise
         if not branch.ready:
             raise BranchNotReady(f'Branch {branch} is not ready for use (status: {branch.status})')
         return branch
@@ -568,7 +604,7 @@ def get_active_branch(request):
     # Branch activated/deactivated by URL query parameter
     if QUERY_PARAM in request.GET:
         if schema_id := request.GET.get(QUERY_PARAM):
-            branch = Branch.objects.get(schema_id=schema_id)
+            branch = get_branches_for_user(_get_request_user(request)).get(schema_id=schema_id)
             if branch.ready:
                 if schema_id != request.COOKIES.get(COOKIE_NAME) and not getattr(
                     request, '_branch_activation_notified', False
@@ -594,7 +630,7 @@ def get_active_branch(request):
     # Branch set by cookie
     if schema_id := request.COOKIES.get(COOKIE_NAME):
         try:
-            branch = Branch.objects.get(schema_id=schema_id)
+            branch = get_branches_for_user(_get_request_user(request)).get(schema_id=schema_id)
             if branch.ready:
                 return branch
         except ObjectDoesNotExist:

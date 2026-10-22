@@ -14,6 +14,9 @@ from utilities.testing import TestCase
 
 
 class RequestTestCase(TestCase):
+    # Activating a branch requires permission to view it
+    user_permissions = ('netbox_branching.view_branch',)
+
     @classmethod
     def setUpTestData(cls):
         # Create a Branch
@@ -181,6 +184,7 @@ class RequestTestCase(TestCase):
             reverse('dcim-api:site-list'),
             headers={'x-netbox-branch': branch.schema_id},
         )
+        request.user = self.user
 
         with ActiveBranchContextManager(request):
             self.assertIsNone(active_branch.get(), msg='An unusable branch was installed as active')
@@ -196,6 +200,7 @@ class RequestTestCase(TestCase):
             reverse('dcim-api:site-list'),
             headers={'x-netbox-branch': 'nonexist'},
         )
+        request.user = self.user
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always')
