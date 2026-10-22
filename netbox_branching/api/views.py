@@ -48,18 +48,14 @@ class BranchViewSet(
     serializer_class = serializers.BranchSerializer
     filterset_class = filtersets.BranchFilterSet
 
-    def _get_branch(self, request, pk, action, verb):
+    def _get_branch(self, request, pk, action):
         """
-        Resolve the branch targeted by a custom action. These are POSTs, which BaseViewSet restricts to
-        the "add" permission, so the action's own permission is evaluated here instead: a user holding
-        none of it gets a 403, and one whose grant is constrained gets a 404 for any branch outside it.
-        This mirrors what ObjectPermissionRequiredMixin does for the equivalent UI view, and keeps a
-        branch the user may not act on indistinguishable from one which does not exist.
+        Resolve the branch targeted by a custom action under the action's own permission (BaseViewSet
+        restricts a POST to "add"). No permission at all is a 403; a branch outside the user's
+        constraints is a 404, the same as one which does not exist.
         """
-        permission = f'netbox_branching.{action}_branch'
-        if not request.user.has_perm(permission):
-            raise PermissionDenied(f'This user does not have permission to {verb} branches.')
-
+        if not request.user.has_perm(f'netbox_branching.{action}_branch'):
+            raise PermissionDenied(f'This user does not have permission to {action} branches.')
         return get_object_or_404(Branch.objects.restrict(request.user, action), pk=pk)
 
     def _check_conflicts(self, branch, serializer):
@@ -90,7 +86,7 @@ class BranchViewSet(
         """
         Enqueue a background job to synchronize a branch from main.
         """
-        branch = self._get_branch(request, pk, 'sync', 'sync')
+        branch = self._get_branch(request, pk, 'sync')
 
         if not branch.ready:
             return HttpResponseBadRequest('Branch is not ready to sync.')
@@ -116,7 +112,7 @@ class BranchViewSet(
         """
         Enqueue a background job to merge a branch.
         """
-        branch = self._get_branch(request, pk, 'merge', 'merge')
+        branch = self._get_branch(request, pk, 'merge')
 
         if not branch.ready:
             return HttpResponseBadRequest('Branch is not ready to merge.')
@@ -142,7 +138,7 @@ class BranchViewSet(
         """
         Enqueue a background job to revert a merged branch.
         """
-        branch = self._get_branch(request, pk, 'revert', 'revert')
+        branch = self._get_branch(request, pk, 'revert')
 
         if not branch.merged:
             return HttpResponseBadRequest('Only merged branches can be reverted.')
@@ -164,7 +160,7 @@ class BranchViewSet(
         """
         Archive a merged branch, deprovisioning its schema.
         """
-        branch = self._get_branch(request, pk, 'archive', 'archive')
+        branch = self._get_branch(request, pk, 'archive')
 
         if not branch.merged:
             return HttpResponseBadRequest('Only merged branches can be archived.')
@@ -188,7 +184,7 @@ class BranchViewSet(
         Reset a branch which is stuck in a transitional status because the job responsible for it is
         no longer running (e.g. its worker was killed).
         """
-        branch = self._get_branch(request, pk, 'change', 'modify')
+        branch = self._get_branch(request, pk, 'change')
 
         if branch.status not in BranchStatusChoices.TRANSITIONAL:
             return HttpResponseBadRequest('Branch is not in a transitional status.')

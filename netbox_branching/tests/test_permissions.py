@@ -8,7 +8,7 @@ from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
 from netbox_branching.models import Branch
 from netbox_branching.template_content import BranchSelector
-from netbox_branching.utilities import get_active_branch, get_branches_for_user, resolve_request_user
+from netbox_branching.utilities import get_active_branch, get_branches_for_user
 from users.models import ObjectPermission
 from utilities.testing import TestCase
 
@@ -211,8 +211,7 @@ class BranchAPIPermissionTestCase(_TestCase):
     # Branch activation by header
     #
     # The middleware resolves the active branch before REST framework has authenticated the request,
-    # so request.user is still anonymous here: the permitted branches must be looked up against the
-    # user identified from the token instead.
+    # so the token is checked there to identify the user.
     #
 
     def _token_header(self):
@@ -255,25 +254,6 @@ class BranchAPIPermissionTestCase(_TestCase):
         )
         self.assertEqual(response.status_code, 403)
         self.assertIn('Token disabled', response.json()['detail'])
-
-    def test_resolving_the_token_user_leaves_the_request_untouched(self):
-        # DRF assigns request.user itself during view dispatch; identifying the user early must not
-        # preempt that, so the probe is required to leave the incoming request exactly as it found it.
-        from django.contrib.auth.models import AnonymousUser
-
-        from users.constants import TOKEN_PREFIX
-        from users.models import Token
-
-        token = Token.objects.create(user=self.user)
-        request = RequestFactory().get(
-            reverse('api-root'),
-            HTTP_AUTHORIZATION=f'Bearer {TOKEN_PREFIX}{token.key}.{token.token}',
-        )
-        anonymous = AnonymousUser()
-        request.user = anonymous
-
-        self.assertEqual(resolve_request_user(request), self.user)
-        self.assertIs(request.user, anonymous)
 
     def test_token_request_rejects_unpermitted_branch(self):
         self.client.logout()

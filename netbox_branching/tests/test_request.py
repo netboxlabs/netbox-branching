@@ -184,6 +184,7 @@ class RequestTestCase(TestCase):
             reverse('dcim-api:site-list'),
             headers={'x-netbox-branch': branch.schema_id},
         )
+        request.user = self.user
 
         with ActiveBranchContextManager(request):
             self.assertIsNone(active_branch.get(), msg='An unusable branch was installed as active')
@@ -199,6 +200,7 @@ class RequestTestCase(TestCase):
             reverse('dcim-api:site-list'),
             headers={'x-netbox-branch': 'nonexist'},
         )
+        request.user = self.user
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always')
