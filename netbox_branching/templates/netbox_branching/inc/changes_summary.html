@@ -1,0 +1,17 @@
+{% comment %}
+Collapsible per-model counts of creates, updates and deletes.
+
+Context:
+  - changes_summary: dict with creates/updates/deletes mappings and *_total counts
+  - prefix: unique prefix for the collapse element IDs
+  - expanded: if true, the lists render open
+{% endcomment %}
+{% load i18n %}
+<div class="list-group list-group-flush">
+  {% trans "Creates" as label %}
+  {% include 'netbox_branching/inc/changes_summary_section.html' with kind='creates' label=label color='success' items=changes_summary.creates total=changes_summary.creates_total %}
+  {% trans "Updates" as label %}
+  {% include 'netbox_branching/inc/changes_summary_section.html' with kind='updates' label=label color='primary' items=changes_summary.updates total=changes_summary.updates_total %}
+  {% trans "Deletes" as label %}
+  {% include 'netbox_branching/inc/changes_summary_section.html' with kind='deletes' label=label color='danger' items=changes_summary.deletes total=changes_summary.deletes_total %}
+</div>

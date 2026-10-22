@@ -1,0 +1,20 @@
+{% extends "ui/panels/_base.html" %}
+{% load i18n %}
+{% block panel_content %}
+  <table class="table table-hover table-sm mb-0">
+    <thead>
+      <tr>
+        <th class="text-end text-muted" style="width: 3rem">#</th>
+        <th>{% trans "Message" %}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in log %}
+        <tr>
+          <td class="text-end text-muted small">{{ forloop.counter }}</td>
+          <td class="font-monospace small">{{ entry }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock panel_content %}

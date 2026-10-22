@@ -1,0 +1,21 @@
+{% extends "ui/panels/_base.html" %}
+{% load helpers %}
+{% load i18n %}
+{% block panel_content %}
+  <div class="card-body">
+    {% if added is None %}
+      <span class="text-muted">
+        {% if object.action == 'create' %}
+          {% trans "Object Created" %}
+        {% elif object.action == 'delete' %}
+          {% trans "Object Deleted" %}
+        {% else %}
+          {% trans "No Changes" %}
+        {% endif %}
+      </span>
+    {% else %}
+      <pre class="change-diff change-removed">{{ removed|json }}</pre>
+      <pre class="change-diff change-added">{{ added|json }}</pre>
+    {% endif %}
+  </div>
+{% endblock panel_content %}

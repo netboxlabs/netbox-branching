@@ -32,9 +32,7 @@ class BranchFilterForm(NetBoxModelFilterSetForm):
 class ChangeDiffFilterForm(NetBoxModelFilterSetForm):
     model = ChangeDiff
     fieldsets = (
-        FieldSet(
-            'filter_id',
-        ),
+        FieldSet('q', 'filter_id'),
         FieldSet('branch_id', 'object_type_id', 'action', name=_('Change')),
     )
     branch_id = DynamicModelMultipleChoiceField(queryset=Branch.objects.all(), required=False, label=_('Branch'))

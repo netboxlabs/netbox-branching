@@ -1,0 +1,6 @@
+{% load helpers %}
+{% load i18n %}
+<div>
+  {{ value.time|isodatetime }}
+  <div class="small text-muted">{{ value.time|timesince }} {% trans "ago" %}</div>
+</div>

@@ -1,0 +1,18 @@
+{% load helpers %}
+{% load i18n %}
+<div>
+  {% if object.is_active %}
+    {% trans "Active" as status %}
+    {% badge status "blue" %}
+  {% else %}
+    {% badge object.get_status_display object.get_status_color %}
+  {% endif %}
+  {% with last_job=object.jobs.first %}
+    {% if last_job.status == 'failed' %}
+      <span class="text-red ms-2">
+        <i class="mdi mdi-alert"></i>
+        <a href="{{ last_job.get_absolute_url }}" class="text-red">{% trans "Job failed" %}</a>
+      </span>
+    {% endif %}
+  {% endwith %}
+</div>

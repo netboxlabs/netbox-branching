@@ -10,12 +10,13 @@ from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django_rq import get_queue
 
-from core.choices import ObjectChangeActionChoices
+from core.choices import JobStatusChoices, ObjectChangeActionChoices
 from core.models import ObjectChange
 from dcim.models import Site
 from netbox.context import current_request
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import QUERY_PARAM
+from netbox_branching.jobs import MergeBranchJob
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tables import ChangesGroupedTable, ChangesTable
 from netbox_branching.tests.plugin_testing import PluginTestCases
@@ -306,16 +307,17 @@ class BranchArchiveViewTestCase(TestCase):
         mock_archive.assert_called_once()
         self.assertEqual(response.status_code, 302)
 
-    def test_archive_get_for_non_merged_branch_shows_error(self):
-        """
-        BranchArchiveView._validate flashes an error and returns a redirect
-        when status != MERGED. The view calls self._validate but ignores its
-        return value in get(), so the page still renders — but the error
-        message must be present.
-        """
+    def test_archive_get_for_non_merged_branch_redirects_with_error(self):
         response = self.client.get(self.url_ready)
+        self.assertRedirects(response, self.ready.get_absolute_url(), fetch_redirect_response=False)
         msg_texts = [str(m) for m in get_messages(response.wsgi_request)]
         self.assertTrue(any('merged' in t.lower() for t in msg_texts))
+
+    def test_archive_post_for_non_merged_branch_redirects_without_archiving(self):
+        with patch.object(Branch, 'archive') as mock_archive:
+            response = self.client.post(self.url_ready, data={'confirm': 'on'})
+        mock_archive.assert_not_called()
+        self.assertRedirects(response, self.ready.get_absolute_url(), fetch_redirect_response=False)
 
 
 class BranchMigrateViewTestCase(TestCase):
@@ -876,3 +878,143 @@ class BranchChangesViewTableSelectionTestCase(TestCase):
         self.assertIsInstance(response.context['table'], ChangesTable)
         # Flat table shows both raw rows
         self.assertEqual(len(response.context['table'].rows), 2)
+
+
+class BranchDetailLayoutTestCase(TestCase):
+    """
+    Cover the declarative layout on BranchView: the attribute panel, the event history and
+    change-count panels, and the alerts kept in the template.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_user(username='layout_super', is_superuser=True)
+        cls.branch = Branch(name='Layout Branch', status=BranchStatusChoices.READY)
+        cls.branch.save(provision=False)
+        cls.new_branch = Branch(name='Layout New Branch', status=BranchStatusChoices.NEW)
+        cls.new_branch.save(provision=False)
+
+    def setUp(self):
+        self.client.force_login(self.superuser)
+
+    def test_ready_branch_renders_panels(self):
+        response = self.client.get(self.branch.get_absolute_url())
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        for text in ('Database schema', 'Event History', 'Created', 'Updated', 'Deleted', 'No changes'):
+            self.assertIn(text, content)
+        self.assertIn(self.branch.schema_name, content)
+        self.assertIn('No field-level conflicts found', content)
+
+    def test_new_branch_renders_placeholders(self):
+        response = self.client.get(self.new_branch.get_absolute_url())
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertNotIn('No field-level conflicts found', content)
+        self.assertIn('Activate', content)
+
+    def test_pending_migrations_alert_is_rendered(self):
+        with patch.object(Branch, 'pending_migrations', ['dcim.0001_initial']):
+            response = self.client.get(self.branch.get_absolute_url())
+        self.assertIn('pending migrations detected', response.content.decode())
+
+    def test_merge_report_tab_hidden_without_failures(self):
+        response = self.client.get(self.branch.get_absolute_url())
+        self.assertNotIn('Merge Report', response.content.decode())
+
+
+class ChangeDiffLayoutTestCase(TestCase):
+    """Cover the panels on ChangeDiffView, including the conditional main-diff row."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_user(username='difflayout_super', is_superuser=True)
+        cls.branch = Branch(name='Diff Layout Branch', status=BranchStatusChoices.READY)
+        cls.branch.save(provision=False)
+        cls.site = Site.objects.create(name='Diff Layout Site', slug='diff-layout-site')
+        cls.site_ct = ContentType.objects.get_for_model(Site)
+
+    def setUp(self):
+        self.client.force_login(self.superuser)
+
+    def _make_diff(self, **kwargs):
+        diff = ChangeDiff(
+            branch=self.branch,
+            object_type=self.site_ct,
+            object_id=self.site.pk,
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            **kwargs,
+        )
+        diff.save()
+        return diff
+
+    def test_branch_only_change_omits_main_row(self):
+        diff = self._make_diff(
+            original={'name': 'Diff Layout Site', 'description': ''},
+            modified={'name': 'Diff Layout Site', 'description': 'branch'},
+            current={'name': 'Diff Layout Site', 'description': ''},
+        )
+        response = self.client.get(diff.get_absolute_url())
+        content = response.content.decode()
+        self.assertIn(f'Changed in {self.branch.name}', content)
+        self.assertNotIn('Changed in main', content)
+        self.assertNotIn('Difference (Main)', content)
+        self.assertNotIn('btn-yellow', content)  # No edit/delete buttons
+
+    def test_conflicting_change_renders_main_row_and_conflicts(self):
+        diff = self._make_diff(
+            original={'name': 'Diff Layout Site', 'description': ''},
+            modified={'name': 'Diff Layout Site', 'description': 'branch'},
+            current={'name': 'Diff Layout Site', 'description': 'main'},
+        )
+        self.assertEqual(diff.conflicts, ['description'])
+        response = self.client.get(diff.get_absolute_url())
+        content = response.content.decode()
+        self.assertIn('Changed in main', content)
+        self.assertIn('Difference (Main)', content)
+        self.assertIn('border-danger', content)
+        self.assertIn('<code>description</code>', content)
+
+
+class BranchJobReportLayoutTestCase(TestCase):
+    """Cover the merge report panels and the tab's visibility."""
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_user(username='report_super', is_superuser=True)
+        cls.branch = Branch(name='Report Branch', status=BranchStatusChoices.MERGED)
+        cls.branch.save(provision=False)
+
+    def setUp(self):
+        self.client.force_login(self.superuser)
+        self.url = reverse('plugins:netbox_branching:branch_job-report', kwargs={'pk': self.branch.pk})
+
+    def test_report_without_merge_job(self):
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        self.assertIn('No merge has been run for this branch.', content)
+        self.assertNotIn('Merge Failures', content)
+
+    def test_report_with_failures(self):
+        job = self.branch.jobs.create(
+            object_type=ContentType.objects.get_for_model(Branch),
+            job_id=uuid.uuid4(),
+            name=MergeBranchJob.Meta.name,
+            status=JobStatusChoices.STATUS_ERRORED,
+            data={
+                'merge_strategy': 'iterative',
+                'has_unsynced_changes': True,
+                'log': ['Replaying change 1', 'Failed'],
+                'report': [{'model': 'site', 'field': 'name', 'value': 'x', 'error': 'invalid'}],
+            },
+        )
+        response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        content = response.content.decode()
+        for text in ('Merge Failures', 'Recommendations', 'Replaying change 1', 'Iterative', 'out of sync'):
+            self.assertIn(text, content)
+        self.assertIn(job.get_absolute_url(), content)
+        # The tab is shown on the branch page once a report exists
+        response = self.client.get(self.branch.get_absolute_url())
+        self.assertIn('Merge Report', response.content.decode())
