@@ -9,6 +9,7 @@ from core.choices import ObjectChangeActionChoices
 from netbox.context_managers import event_tracking
 
 from ..error_report import annotate_validation_error
+from ..utilities import prepare_changes_for_replay
 from .strategy import MergeStrategy
 
 __all__ = ('IterativeMergeStrategy',)
@@ -26,6 +27,10 @@ class IterativeMergeStrategy(MergeStrategy):
         models = set()
         applied_pks_by_model = {}
 
+        # Prepare the list that the loop uses, so that both use the same order
+        changes = list(changes)
+        transient_pks = prepare_changes_for_replay(changes)
+
         for change in changes:
             model_class = change.changed_object_type.model_class()
             models.add(model_class)
@@ -35,7 +40,9 @@ class IterativeMergeStrategy(MergeStrategy):
                 request.id = change.request_id
                 request.user = change.user
                 try:
-                    change.apply(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+                    change.apply(
+                        branch, using=DEFAULT_DB_ALIAS, logger=logger, tolerate_invalid=change.pk in transient_pks
+                    )
                 except ValidationError as e:
                     annotate_validation_error(e, model_class, change.changed_object_id, change.changed_object_type_id)
                     raise
@@ -52,6 +59,9 @@ class IterativeMergeStrategy(MergeStrategy):
         models = set()
         restored_pks_by_model = {}
 
+        changes = list(changes)
+        transient_pks = prepare_changes_for_replay(changes)
+
         # Undo each change from the Branch
         for change in changes:
             model_class = change.changed_object_type.model_class()
@@ -61,7 +71,7 @@ class IterativeMergeStrategy(MergeStrategy):
             with event_tracking(request):
                 request.id = change.request_id
                 request.user = change.user
-                change.undo(branch, logger=logger)
+                change.undo(branch, logger=logger, tolerate_invalid=change.pk in transient_pks)
 
         # Run outside event_tracking(): this reconciles derived state, and is not itself a change
         self._update_dependent_objects(restored_pks_by_model, logger)

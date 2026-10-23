@@ -92,7 +92,7 @@ class ObjectChange(ObjectChange_):
             return diff_for_merge(self.postchange_data_clean, self.prechange_data_clean)
         return diff_for_merge(self.prechange_data_clean, self.postchange_data_clean)
 
-    def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None, skip_missing=False):
+    def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None, skip_missing=False, tolerate_invalid=False):
         """
         Apply the change using the specified database connection.
         """
@@ -139,7 +139,7 @@ class ObjectChange(ObjectChange_):
                 logger.debug(f'Updating {model._meta.verbose_name} {instance}')
                 # Use a deletion-aware payload (pre -> post) rather than diff()['post'],
                 # which cannot represent removed nested JSON keys. (#592)
-                update_object(instance, self.get_merge_data(), using=using)
+                update_object(instance, self.get_merge_data(), using=using, tolerate_invalid=tolerate_invalid)
             except model.DoesNotExist:
                 if skip_missing:
                     logger.debug(f'{model._meta.verbose_name} ID {self.changed_object_id} already deleted; skipping')
@@ -157,7 +157,7 @@ class ObjectChange(ObjectChange_):
 
     apply.alters_data = True
 
-    def undo(self, branch, using=DEFAULT_DB_ALIAS, logger=None):
+    def undo(self, branch, using=DEFAULT_DB_ALIAS, logger=None, tolerate_invalid=False):
         """
         Revert a previously applied change using the specified database connection.
         """
@@ -180,8 +180,12 @@ class ObjectChange(ObjectChange_):
         # Reverting a modification to an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             instance = model.objects.using(using).get(pk=self.changed_object_id)
+            if self.prechange_data is None:
+                logger.warning(
+                    f'Change {self.pk} has no pre-change data, so undoing it sets every recorded field to None'
+                )
             # Reverse direction (post -> pre); keys the branch added are removed. (#592)
-            update_object(instance, self.get_merge_data(reverse=True), using=using)
+            update_object(instance, self.get_merge_data(reverse=True), using=using, tolerate_invalid=tolerate_invalid)
 
         # Restoring a deleted object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:

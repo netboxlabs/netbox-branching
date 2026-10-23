@@ -1,3 +1,4 @@
+import copy
 import datetime
 import logging
 from collections import namedtuple
@@ -8,14 +9,14 @@ from functools import cached_property
 from asgiref.local import Local
 from django.apps import apps
 from django.contrib import messages
-from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
+from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist, ValidationError
 from django.db import connections
 from django.db.models import ForeignKey, ManyToManyField
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext as _
 
-from core.choices import JobStatusChoices
+from core.choices import JobStatusChoices, ObjectChangeActionChoices
 from netbox.plugins import get_plugin_config
 from netbox.utils import register_request_processor
 
@@ -67,6 +68,7 @@ __all__ = (
     'get_tables_to_replicate',
     'is_api_request',
     'is_job_abandoned',
+    'prepare_changes_for_replay',
     'record_applied_change',
     'register_branching_resolver',
     'register_objectchange_field_migrator',
@@ -456,7 +458,54 @@ def _deep_merge_dict(target, source):
     return target
 
 
-def update_object(instance, data, using):
+def prepare_changes_for_replay(changes):
+    """
+    Prepare ``changes``, a list of ObjectChanges in replay order, and return the PKs of the UPDATEs whose
+    validation errors replay tolerates.
+
+    Two changes are a pair when they are consecutive changes to the same object and have the same request ID.
+
+    - Replay tolerates a validation error on an UPDATE when the next change to its object is its pair. That
+      change validates the end state of the object.
+    - An UPDATE with no prechange data gets a copy of the postchange data of its earlier pair, in memory only.
+
+    Some views save an object two times in one request, and the first save is not valid alone (#623). The function
+    clears the cached ``prechange_data_clean`` of each change that gets a copy, so that the copy is always used.
+    """
+    transient_pks = set()
+
+    # Recurring scripts use the same request ID for each run, so only consecutive changes can be a pair
+    later = {}
+    for change in reversed(changes):
+        key = (change.changed_object_type_id, change.changed_object_id)
+        if (
+            change.action == ObjectChangeActionChoices.ACTION_UPDATE
+            and key in later
+            and later[key].request_id == change.request_id
+        ):
+            transient_pks.add(change.pk)
+        later[key] = change
+
+    # Revert replays in reverse order, so find the earlier change by the time it was recorded
+    earlier = {}
+    for change in sorted(changes, key=lambda c: (c.time, c.pk)):
+        key = (change.changed_object_type_id, change.changed_object_id)
+        previous = earlier.get(key)
+        if (
+            change.action == ObjectChangeActionChoices.ACTION_UPDATE
+            and change.prechange_data is None
+            and previous is not None
+            and previous.request_id == change.request_id
+        ):
+            # Migrators change the data of each change in place
+            change.prechange_data = copy.deepcopy(previous.postchange_data)
+            change.__dict__.pop('prechange_data_clean', None)
+        earlier[key] = change
+
+    return transient_pks
+
+
+def update_object(instance, data, using, tolerate_invalid=False):
     """
     Set an attribute on an object depending on the type of model field.
 
@@ -467,6 +516,10 @@ def update_object(instance, data, using):
 
     The migrator hook is internal and subject to change; external plugins
     should not rely on it.
+
+    ``tolerate_invalid=True`` logs a validation error and does not raise it.
+    Use it for a transient state that a later change validates (see
+    ``prepare_changes_for_replay()``). Database constraints still apply.
     """
     # Avoid AppRegistryNotReady exception
     from taggit.managers import TaggableManager
@@ -511,7 +564,15 @@ def update_object(instance, data, using):
         else:
             setattr(instance, attr, value)
 
-    full_clean_with_file_check(instance, logger)
+    try:
+        full_clean_with_file_check(instance, logger)
+    except ValidationError as e:
+        if not tolerate_invalid:
+            raise
+        logger.warning(
+            f'Saving {instance._meta.verbose_name} {instance.pk} in a transient state which a later change '
+            f'validates: {e}'
+        )
     instance.save(using=using)
 
     for m2m_manager, value in m2m_assignments.items():
