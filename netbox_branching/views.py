@@ -10,6 +10,10 @@ from django.utils.translation import gettext_lazy as _
 from core.choices import JobStatusChoices, ObjectChangeActionChoices
 from core.filtersets import ObjectChangeFilterSet
 from core.models import ObjectChange
+from extras.ui.panels import CustomFieldsPanel, TagsPanel
+from netbox.ui import layout
+from netbox.ui.breadcrumbs import Breadcrumb
+from netbox.ui.panels import CommentsPanel, PluginContentPanel
 from netbox.views import generic
 from netbox.views.generic.base import BaseMultiObjectView
 from utilities.views import GetReturnURLMixin, ViewTab, register_model_view
@@ -21,6 +25,7 @@ from .error_report import get_entry_message, get_merge_recommendations
 from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
 from .object_actions import BulkMigrate
+from .ui import panels
 from .utilities import resolve_changes_summary
 
 #
@@ -42,30 +47,35 @@ class BranchListView(generic.ObjectListView):
 @register_model_view(Branch)
 class BranchView(generic.ObjectView):
     queryset = Branch.objects.all()
+    layout = layout.Layout(
+        layout.Row(
+            layout.Column(
+                panels.BranchPanel(),
+                CustomFieldsPanel(),
+                TagsPanel(),
+                CommentsPanel(),
+                PluginContentPanel('left_page'),
+            ),
+            layout.Column(
+                panels.BranchEventHistoryPanel(),
+                PluginContentPanel('right_page'),
+            ),
+        ),
+        layout.Row(
+            layout.Column(panels.BranchChangeStatsPanel(ObjectChangeActionChoices.ACTION_CREATE), width=4),
+            layout.Column(panels.BranchChangeStatsPanel(ObjectChangeActionChoices.ACTION_UPDATE), width=4),
+            layout.Column(panels.BranchChangeStatsPanel(ObjectChangeActionChoices.ACTION_DELETE), width=4),
+        ),
+        layout.Row(
+            layout.Column(PluginContentPanel('full_width_page')),
+        ),
+    )
 
     def get_extra_context(self, request, instance):
-        qs = instance.get_changes().values_list('changed_object_type').annotate(count=Count('pk'))
         if instance.ready or instance.merged:
-            stats = {
-                'created': {
-                    ContentType.objects.get(pk=ct): count
-                    for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_CREATE)
-                },
-                'updated': {
-                    ContentType.objects.get(pk=ct): count
-                    for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_UPDATE)
-                },
-                'deleted': {
-                    ContentType.objects.get(pk=ct): count
-                    for ct, count in qs.filter(action=ObjectChangeActionChoices.ACTION_DELETE)
-                },
-            }
-            latest_change = instance.get_changes().order_by('time').last()
             last_job = instance.jobs.order_by('created').last()
             last_merge_job = instance.jobs.filter(name=MergeBranchJob.Meta.name).order_by('created').last()
         else:
-            stats = {}
-            latest_change = None
             last_job = None
             last_merge_job = None
 
@@ -74,13 +84,11 @@ class BranchView(generic.ObjectView):
         recovery_status = BranchStatusChoices.RECOVERY_STATUS.get(instance.status)
 
         return {
-            'stats': stats,
             'is_stuck': is_stuck,
             'stuck_job': stuck_job,
             'recovery_status': recovery_status,
             'recovery_status_display': dict(BranchStatusChoices).get(recovery_status, recovery_status),
             'recovery_description': BranchStatusChoices.RECOVERY_DESCRIPTIONS.get(instance.status),
-            'latest_change': latest_change,
             'last_job': last_job,
             'last_job_errored': last_job is not None and last_job.status == JobStatusChoices.STATUS_ERRORED,
             'last_merge_job': last_merge_job,
@@ -89,7 +97,6 @@ class BranchView(generic.ObjectView):
                 and last_merge_job == last_job
                 and last_merge_job.status == JobStatusChoices.STATUS_ERRORED
             ),
-            'conflicts_count': ChangeDiff.objects.filter(branch=instance, conflicts__isnull=False).count(),
         }
 
 
@@ -203,10 +210,32 @@ class BranchChangesAheadView(GroupedChangesViewMixin, generic.ObjectChildrenView
         return parent.get_unmerged_changes().order_by('time')
 
 
+def _get_last_merge_job(branch):
+    return branch.jobs.filter(name=MergeBranchJob.Meta.name).order_by('created').last()
+
+
+def _get_merge_failure_count(branch):
+    job = _get_last_merge_job(branch)
+    return len(job.data.get('report', [])) if job and job.data else 0
+
+
 @register_model_view(Branch, 'job-report')
 class BranchJobReportView(generic.ObjectView):
     queryset = Branch.objects.all()
     template_name = 'netbox_branching/branch_job_report.html'
+    actions = ()
+    tab = ViewTab(
+        label=_('Merge Report'),
+        badge=_get_merge_failure_count,
+        permission='netbox_branching.view_branch',
+        hide_if_empty=True,
+    )
+    layout = layout.Layout(
+        layout.Row(layout.Column(panels.MergeReportSummaryPanel())),
+        layout.Row(layout.Column(panels.MergeReportFailuresPanel())),
+        layout.Row(layout.Column(panels.MergeReportRecommendationsPanel())),
+        layout.Row(layout.Column(panels.MergeReportLogPanel())),
+    )
 
     def _build_report_entries(self, instance, last_job, merge_strategy):
         """Resolve each raw report entry into a display-ready dict with message, recommendations, and object info."""
@@ -227,7 +256,7 @@ class BranchJobReportView(generic.ObjectView):
                     if hasattr(obj, 'get_absolute_url'):
                         object_url = f'{obj.get_absolute_url()}?{QUERY_PARAM}={instance.schema_id}'
                     object_str = str(obj)
-                    if not entry.get('value') and (field := entry.get('field')):
+                    if entry.get('value') is None and (field := entry.get('field')):
                         value = getattr(obj, field, None)
                     else:
                         value = entry.get('value')
@@ -249,7 +278,7 @@ class BranchJobReportView(generic.ObjectView):
         return entries
 
     def get_extra_context(self, request, instance):
-        last_job = instance.jobs.filter(name=MergeBranchJob.Meta.name).order_by('created').last()
+        last_job = _get_last_merge_job(instance)
         job_data = last_job.data if last_job and last_job.data else {}
         merge_strategy = job_data.get('merge_strategy')
         report_entries = self._build_report_entries(instance, last_job, merge_strategy) if last_job and job_data else []
@@ -470,7 +499,8 @@ class BranchArchiveView(generic.ObjectView):
 
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        self._validate(request, branch)
+        if response := self._validate(request, branch):
+            return response
         form = forms.ConfirmationForm()
 
         return render(
@@ -484,7 +514,8 @@ class BranchArchiveView(generic.ObjectView):
 
     def post(self, request, **kwargs):
         branch = self.get_object(**kwargs)
-        self._validate(request, branch)
+        if response := self._validate(request, branch):
+            return response
         form = forms.ConfirmationForm(request.POST)
 
         if form.is_valid():
@@ -706,6 +737,44 @@ class ChangeDiffListView(generic.ObjectListView):
 @register_model_view(ChangeDiff)
 class ChangeDiffView(generic.ObjectView):
     queryset = ChangeDiff.objects.all()
+    actions = ()
+    layout = layout.Layout(
+        layout.Row(
+            layout.Column(panels.ChangeDiffPanel()),
+            layout.Column(panels.ChangeDiffConflictsPanel()),
+        ),
+        # Original vs. branch
+        layout.Row(
+            layout.Column(panels.ChangeDiffDataPanel('original', 'altered_in_modified', 'removed'), width=4),
+            layout.Column(panels.ChangeDiffDataPanel('modified', 'altered_in_modified', 'added'), width=4),
+            layout.Column(panels.ChangeDiffDifferencePanel('branch_diff_removed', 'branch_diff_added'), width=4),
+        ),
+        # Original vs. main (only when main has diverged)
+        layout.Row(
+            layout.Column(
+                panels.ChangeDiffDataPanel('original', 'altered_in_current', 'removed', requires='main_diff_added'),
+                width=4,
+            ),
+            layout.Column(
+                panels.ChangeDiffDataPanel('current', 'altered_in_current', 'added', requires='main_diff_added'),
+                width=4,
+            ),
+            layout.Column(
+                panels.ChangeDiffDifferencePanel(
+                    'main_diff_removed', 'main_diff_added', requires='main_diff_added', title=_('Difference (Main)')
+                ),
+                width=4,
+            ),
+        ),
+        layout.Row(
+            layout.Column(PluginContentPanel('left_page')),
+            layout.Column(PluginContentPanel('right_page')),
+        ),
+        layout.Row(
+            layout.Column(PluginContentPanel('full_width_page')),
+        ),
+        breadcrumbs=[Breadcrumb(label=str)],
+    )
 
     def get_extra_context(self, request, instance):
         # Safely compute altered field sets only when the required data is present

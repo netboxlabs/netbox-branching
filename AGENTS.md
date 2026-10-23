@@ -69,8 +69,13 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 │   │   ├── branch_buttons.py
 │   │   └── branch_filters.py
 │   ├── templates/netbox_branching/
+│   │   ├── attrs/             — Templates for custom ObjectAttribute renderers.
 │   │   ├── buttons/
-│   │   └── inc/
+│   │   ├── inc/
+│   │   └── panels/            — Templates for the declarative-layout panels in ui/.
+│   ├── ui/
+│   │   ├── attrs.py           — ObjectAttribute subclasses used by the Branch panel.
+│   │   └── panels.py          — Panel subclasses for the branch, change diff and merge report layouts.
 │   └── tests/
 │       ├── utils.py                    — Shared test utilities.
 │       ├── test_api.py
@@ -290,8 +295,9 @@ The scaffold targets *private* plugins, so a few surfaces are deliberately diver
 | `.yamllint` | The scaffold ships the `yamllint` hook but renders no config, so this one is adapted from the scaffold's own root config. |
 | `.github/workflows/test.yml` matrix | Tests NetBox `main` only. The scaffold adds `netbox_test_min_ref` / `netbox_test_max_ref` legs, which break as soon as a feature depends on unreleased NetBox changes. Coverage runs on the `main` leg. |
 
-The scaffold's `ui/` and `graphql/` stub packages are intentionally absent — this plugin has
-neither surface. A `copier update` will offer to add them; decline.
+The scaffold's `graphql/` stub package is intentionally absent — this plugin has no GraphQL
+surface. A `copier update` will offer to add it; decline. The `ui/` package is maintained by hand
+(see below), so reject the scaffold's stub for it too.
 
 ## Common Tasks
 
@@ -351,6 +357,9 @@ To rehearse a publish without touching production PyPI, run the workflow manuall
 - **Plugin code stays in the plugin package.** Don't monkey-patch NetBox.
 - **Use NetBox's mixins and base classes** (`PrimaryModel`, `BaseModel`, `NetBoxModelSerializer`, `NetBoxModelFilterSet`) rather than re-implementing behaviour.
 - **All UI views use `@register_model_view`** from `utilities.views`. All views live in `views.py`.
+- **Detail views use declarative layouts.** `BranchView`, `ChangeDiffView` and `BranchJobReportView` declare a
+  `layout` built from `netbox.ui` panels plus the plugin's own `Panel` subclasses in `ui/panels.py`; the
+  per-model templates only override blocks the layout cannot express (alerts, extra control buttons, title).
 - **FK filters** must declare an explicit `<field>_id = ModelMultipleChoiceFilter(field_name='<field>', ...)` in the filterset; do not rely on `Meta.fields` to auto-generate `_id` variants.
 - **Signal receivers** for Django ORM events (`post_save`, `pre_delete`, etc.) live in `signal_receivers.py` and are imported in `AppConfig.ready()`.
 - **Branch operation signals** (pre/post lifecycle events) are defined in `signals.py` and documented for third-party use.

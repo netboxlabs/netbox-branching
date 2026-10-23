@@ -1,0 +1,6 @@
+{% load helpers %}
+{% if object.object.get_absolute_url %}
+  {{ object.object|linkify }}
+{% else %}
+  {{ value }}
+{% endif %}

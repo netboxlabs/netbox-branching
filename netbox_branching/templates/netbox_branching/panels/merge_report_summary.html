@@ -1,0 +1,47 @@
+{% extends "ui/panels/_base.html" %}
+{% load helpers %}
+{% load i18n %}
+{% block panel_content %}
+  {% if not last_job %}
+    <div class="card-body text-secondary">{% trans "No merge has been run for this branch." %}</div>
+  {% else %}
+    <table class="table table-hover attr-table">
+      <tr>
+        <th scope="row">{% trans "Job" %}</th>
+        <td>
+          <a href="{{ last_job.get_absolute_url }}">{{ last_job.name }}</a>
+        </td>
+      </tr>
+      <tr>
+        <th scope="row">{% trans "Started by" %}</th>
+        <td>{{ last_job.user|placeholder }}</td>
+      </tr>
+      <tr>
+        <th scope="row">{% trans "Time" %}</th>
+        <td>{{ last_job.created|isodatetime }}</td>
+      </tr>
+      <tr>
+        <th scope="row">{% trans "Merge strategy" %}</th>
+        <td>{{ merge_strategy|title|placeholder }}</td>
+      </tr>
+      <tr>
+        <th scope="row">{% trans "Result" %}</th>
+        <td>
+          {% if report_entries %}
+            <span class="text-danger">
+              <i class="mdi mdi-alert"></i>
+              {% blocktrans count count=report_entries|length %}{{ count }} error occurred.{% plural %}{{ count }} errors occurred.{% endblocktrans %}
+            </span>
+          {% elif last_job.error %}
+            <span class="text-danger"><i class="mdi mdi-alert"></i> {{ last_job.error }}</span>
+          {% else %}
+            <span class="text-success"><i class="mdi mdi-check-bold"></i> {% trans "Merge completed successfully." %}</span>
+          {% endif %}
+        </td>
+      </tr>
+    </table>
+    {% if changes_summary %}
+      {% include 'netbox_branching/inc/changes_summary.html' with prefix='report' expanded=True %}
+    {% endif %}
+  {% endif %}
+{% endblock panel_content %}

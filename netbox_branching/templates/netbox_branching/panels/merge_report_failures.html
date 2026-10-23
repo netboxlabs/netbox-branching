@@ -1,0 +1,45 @@
+{% extends "ui/panels/_base.html" %}
+{% load helpers %}
+{% load i18n %}
+{% block panel_content %}
+  <table class="table table-hover mb-0">
+    <thead>
+      <tr>
+        <th>{% trans "Type" %}</th>
+        <th>{% trans "Object" %}</th>
+        <th>{% trans "Field" %}</th>
+        <th>{% trans "Value" %}</th>
+        <th>{% trans "Error" %}</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in report_entries %}
+        <tr>
+          <td>
+            {% if entry.model %}
+              {% badge entry.model|title "secondary" %}
+            {% else %}
+              {{ ''|placeholder }}
+            {% endif %}
+          </td>
+          <td>
+            {% if entry.object_url %}
+              <a href="{{ entry.object_url }}">{{ entry.object_str }}</a>
+            {% else %}
+              {{ entry.object_str|placeholder }}
+            {% endif %}
+          </td>
+          <td>{{ entry.field|placeholder }}</td>
+          <td>
+            {% if entry.value is not None %}
+              <code>{{ entry.value }}</code>
+            {% else %}
+              {{ ''|placeholder }}
+            {% endif %}
+          </td>
+          <td>{{ entry.message }}</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endblock panel_content %}

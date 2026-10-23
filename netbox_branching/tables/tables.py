@@ -86,7 +86,7 @@ class BranchTable(NetBoxTable):
         verbose_name=_('Stale'),
     )
     conflicts = ConflictsColumn(verbose_name=_('Conflicts'))
-    schema_id = tables.TemplateColumn(template_code='<span class="font-monospace">{{ value }}</code>')
+    schema_id = tables.TemplateColumn(template_code='<span class="font-monospace">{{ value }}</span>')
     tags = columns.TagColumn(url_name='plugins:netbox_branching:branch_list')
 
     class Meta(NetBoxTable.Meta):

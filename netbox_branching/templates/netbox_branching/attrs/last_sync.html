@@ -1,0 +1,17 @@
+{% load helpers %}
+{% load i18n %}
+<div>
+  {{ value|isodatetime }}
+  {% if object.is_stale %}
+    <span class="text-danger"
+          title="{% trans "Branch is stale and can no longer be synced" %}">
+      <i class="mdi mdi-alert-circle"></i>
+    </span>
+  {% elif object.stale_warning %}
+    <span class="text-warning"
+          title="{% trans "Branch is at risk of becoming stale" %}">
+      <i class="mdi mdi-alert"></i>
+    </span>
+  {% endif %}
+  <div class="small text-muted">{{ value|timesince }} {% trans "ago" %}</div>
+</div>

@@ -1,0 +1,31 @@
+{% extends "ui/panels/_base.html" %}
+{% load helpers %}
+{% load i18n %}
+{% block panel_content %}
+  <div class="list-group list-group-flush">
+    {% for event in object.get_event_history %}
+      <div class="list-group-item">
+        <div class="row align-items-center">
+          {% if event.pk %}
+            {# Event object #}
+            <div class="col-3 text-end">{% badge event.get_type_display bg_color=event.get_type_color %}</div>
+            <div class="col text-truncate">
+              <span>{{ event.get_type_display }}
+                {% if event.user %}by <strong>{{ event.user }}</strong>{% endif %}
+              </span>
+              <small class="d-block text-muted">{{ event.time|isodatetime }}</small>
+            </div>
+          {% else %}
+            {# Change summary #}
+            <div class="col offset-3 text-truncate">
+              <a href="{% url 'plugins:netbox_branching:branch_changes-ahead' pk=object.pk %}?time_after={{ event.start.isoformat }}&time_before={{ event.end.isoformat }}"
+                 class="text-muted">{{ event.count }} {% trans "changes" %}</a>
+            </div>
+          {% endif %}
+        </div>
+      </div>
+    {% empty %}
+      <div class="list-group-item text-muted">{% trans "None" %}</div>
+    {% endfor %}
+  </div>
+{% endblock panel_content %}
