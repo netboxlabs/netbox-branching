@@ -11,7 +11,6 @@ from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db import connections
 from django.db.models import ForeignKey, ManyToManyField
-from django.http.request import HttpHeaders
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext as _
@@ -22,7 +21,7 @@ from netbox.utils import register_request_processor
 
 from .constants import (
     _FILE_NOT_FOUND_EXCEPTIONS,
-    BRANCH_HEADER,
+    BRANCH_HEADER_META,
     COOKIE_NAME,
     EXEMPT_MODELS,
     EXEMPT_PATHS,
@@ -561,9 +560,8 @@ def get_active_branch(request):
     from .models import Branch
 
     # A background job receives a NetBoxFakeRequest, which has no headers attribute (#675).
-    meta_key = HttpHeaders.to_wsgi_name(BRANCH_HEADER)
-    if is_api_request(request) and meta_key in request.META:
-        branch = Branch.objects.get(schema_id=request.META[meta_key])
+    if is_api_request(request) and BRANCH_HEADER_META in request.META:
+        branch = Branch.objects.get(schema_id=request.META[BRANCH_HEADER_META])
         if not branch.ready:
             raise BranchNotReady(f'Branch {branch} is not ready for use (status: {branch.status})')
         return branch
