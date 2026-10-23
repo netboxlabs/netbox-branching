@@ -31,7 +31,7 @@
           </td>
           <td>{{ entry.field|placeholder }}</td>
           <td>
-            {% if entry.value %}
+            {% if entry.value is not None %}
               <code>{{ entry.value }}</code>
             {% else %}
               {{ ''|placeholder }}
