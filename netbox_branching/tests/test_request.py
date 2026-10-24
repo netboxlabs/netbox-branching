@@ -3,7 +3,9 @@ from unittest.mock import patch
 
 from django.test import RequestFactory, override_settings
 from django.urls import reverse
+from rest_framework.request import Request as DRFRequest
 
+from netbox.jobs import AsyncAPIJob
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
 from netbox_branching.contextvars import active_branch
@@ -11,6 +13,8 @@ from netbox_branching.models import Branch
 from netbox_branching.utilities import ActiveBranchContextManager
 from utilities.request import apply_request_processors
 from utilities.testing import TestCase
+
+from .utils import fake_request
 
 
 class RequestTestCase(TestCase):
@@ -231,6 +235,71 @@ class RequestTestCase(TestCase):
                 active_branch.get(),
                 msg='A branch was activated despite netbox_branching not being installed',
             )
+
+    def test_processor_activates_branch_from_header_on_fake_request(self):
+        """
+        REST API scripts run in a worker against a NetBoxFakeRequest, which has no `headers`
+        attribute (#675).
+        """
+        branch = Branch.objects.first()
+        request = fake_request(self.user, reverse('dcim-api:site-list'), headers={'x-netbox-branch': branch.schema_id})
+
+        with ActiveBranchContextManager(request):
+            self.assertEqual(active_branch.get(), branch)
+
+    def test_processor_ignores_fake_api_request_without_header(self):
+        """
+        Every REST API script run takes this path, with or without a branch (#675).
+        """
+        request = fake_request(self.user, reverse('dcim-api:site-list'))
+
+        with ActiveBranchContextManager(request):
+            self.assertIsNone(active_branch.get())
+
+    def test_processor_activates_branch_from_query_param_on_fake_request(self):
+        """
+        UI script runs carry the URL's query parameters into a NetBoxFakeRequest, which has no
+        message storage (#675).
+        """
+        branch = Branch.objects.first()
+        request = fake_request(self.user, f'{reverse("home")}?{QUERY_PARAM}={branch.schema_id}')
+
+        with ActiveBranchContextManager(request):
+            self.assertEqual(active_branch.get(), branch)
+
+    def test_processor_refuses_unready_branch_from_query_param_on_fake_request(self):
+        """
+        UI script runs carry the URL's query parameters into a NetBoxFakeRequest, which has no
+        message storage (#675).
+        """
+        branch = Branch.objects.first()
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.SYNCING)
+        request = fake_request(self.user, f'{reverse("home")}?{QUERY_PARAM}={branch.schema_id}')
+
+        with ActiveBranchContextManager(request):
+            self.assertIsNone(active_branch.get())
+
+    def test_processor_deactivates_branch_from_query_param_on_fake_request(self):
+        """
+        UI script runs carry the URL's query parameters into a NetBoxFakeRequest, which has no
+        message storage (#675).
+        """
+        request = fake_request(self.user, f'{reverse("home")}?{QUERY_PARAM}=')
+
+        with ActiveBranchContextManager(request):
+            self.assertIsNone(active_branch.get())
+
+    def test_background_api_request_activates_branch_from_query_param(self):
+        """
+        apply_request_processors() only warns when a processor fails, so the background write lands
+        in main (#675).
+        """
+        branch = Branch.objects.first()
+        url = f'{reverse("dcim-api:site-list")}?{QUERY_PARAM}={branch.schema_id}&background=true'
+        django_request = AsyncAPIJob._build_request(fake_request(self.user, url), {}, 'http')
+
+        with apply_request_processors(DRFRequest(django_request)):
+            self.assertEqual(active_branch.get(), branch)
 
     def test_processor_does_not_propagate_model_import_failure(self):
         """

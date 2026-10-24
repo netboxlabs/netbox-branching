@@ -1,3 +1,4 @@
+from django.http import HttpHeaders
 from django.urls import reverse_lazy
 
 try:
@@ -10,6 +11,7 @@ except ImportError:
 __all__ = (
     'BRANCH_ACTIONS',
     'BRANCH_HEADER',
+    'BRANCH_HEADER_META',
     'COOKIE_NAME',
     'EXEMPT_MODELS',
     'EXEMPT_PATHS',
@@ -25,6 +27,7 @@ COOKIE_NAME = 'active_branch'
 
 # HTTP header for API requests
 BRANCH_HEADER = 'X-NetBox-Branch'
+BRANCH_HEADER_META = HttpHeaders.to_wsgi_name(BRANCH_HEADER)
 
 # Branch actions
 BRANCH_ACTIONS = (

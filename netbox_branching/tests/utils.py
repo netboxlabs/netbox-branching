@@ -5,14 +5,16 @@ from typing import ClassVar
 from django.core.management import call_command
 from django.core.management.sql import emit_post_migrate_signal
 from django.db import DatabaseError, connections
-from django.test import TransactionTestCase
+from django.test import RequestFactory, TransactionTestCase
 
 from netbox.plugins import get_plugin_config
 from netbox_branching.models import Branch
 from netbox_branching.provisioning import quote_ident
+from utilities.request import copy_safe_request
 
 __all__ = (
     'FastTeardownTransactionTestCase',
+    'fake_request',
     'fetchall',
     'fetchone',
     'provision_branch',
@@ -38,6 +40,16 @@ def provision_branch(*, user, name='Test Branch', **kwargs):
     branch.provision(user=user)
     branch.refresh_from_db()
     return branch
+
+
+def fake_request(user, path, headers=None):
+    """
+    Return the NetBoxFakeRequest a background job (script, webhook) receives for a POST to
+    `path`. A query string in `path` populates request.GET.
+    """
+    request = RequestFactory().post(path, headers=headers)
+    request.user = user
+    return copy_safe_request(request)
 
 
 def fetchall(cursor):
