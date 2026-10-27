@@ -1094,6 +1094,36 @@ class SquashMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
         self.assertTrue(Cable.objects.filter(id=cable_id).exists())
         self.assertEqual(CablePath.objects.count(), 2, 'Cable paths not restored after revert')
 
+    def test_merge_reverted_json_key_keeps_main_sibling(self):
+        """A JSON field changed and restored in a branch does not overwrite keys changed in main since. Refs: #688"""
+        with event_tracking(self._make_request()):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            device = Device.objects.create(
+                name='Device 1',
+                device_type=self.device_type,
+                role=self.device_role,
+                site=site,
+                local_context_data={'a': '1', 'b': '1'},
+            )
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            for value in ('2', '1'):
+                device = Device.objects.get(pk=device.pk)
+                device.snapshot()
+                device.local_context_data = {'a': value, 'b': '1'}
+                device.save()
+
+        with event_tracking(self._make_request()):
+            device = Device.objects.get(pk=device.pk)
+            device.snapshot()
+            device.local_context_data = {'a': '1', 'b': '2'}
+            device.save()
+
+        branch.merge(user=self.user, commit=True)
+
+        self.assertEqual(Device.objects.get(pk=device.pk).local_context_data, {'a': '1', 'b': '2'})
+
     def _make_request(self):
         """Build a per-test request for event_tracking()."""
         request = RequestFactory().get(reverse('home'))
