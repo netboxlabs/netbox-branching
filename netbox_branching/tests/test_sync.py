@@ -1403,13 +1403,7 @@ class SyncTestCase(CableTestMixin, FastTeardownTransactionTestCase):
         branch.sync(user=self.user, commit=True)
 
         with activate_branch(branch):
-            self._assert_terminations(
-                cable, a=[(ports.a2, 1, [1]), (ports.a1, 2, [1])], b=[(ports.b1, 1, [1]), (ports.b2, 2, [1])]
-            )
-            self._assert_endpoint(ports.a2, cable=cable, end='A', connector=1, positions=[1], peers=[ports.b1])
-            self._assert_endpoint(ports.a1, cable=cable, end='A', connector=2, positions=[1], peers=[ports.b2])
-            self._assert_endpoint(ports.b1, cable=cable, end='B', connector=1, positions=[1], peers=[ports.a2])
-            self._assert_endpoint(ports.b2, cable=cable, end='B', connector=2, positions=[1], peers=[ports.a1])
+            self._assert_trunk(cable, [ports.a2, ports.a1], [ports.b1, ports.b2])
             self.assertEqual(CablePath.objects.count(), 4)
 
     # -------------------------------------------------------------------------

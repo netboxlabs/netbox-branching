@@ -1508,17 +1508,6 @@ class BaseMergeTests(CableTestMixin):
         self._assert_connected(cable, ports.a1, ports.b1)
         self.assertEqual(CablePath.objects.count(), 2)
 
-    def _assert_trunk(self, cable, a, b):
-        """Assert a 2C1P trunk cable connects a[i] to b[i] over connector i+1, with complete paths."""
-        self._assert_terminations(
-            cable,
-            a=[(a[0], 1, [1]), (a[1], 2, [1])],
-            b=[(b[0], 1, [1]), (b[1], 2, [1])],
-        )
-        for connector, (near, far) in enumerate(zip(a, b), start=1):
-            self._assert_endpoint(near, cable=cable, end='A', connector=connector, positions=[1], peers=[far])
-            self._assert_endpoint(far, cable=cable, end='B', connector=connector, positions=[1], peers=[near])
-
     def test_merge_cable_reorder_terminations(self):
         """
         Merge a branch which swaps the A-end terminations of a 2C1P trunk cable.
