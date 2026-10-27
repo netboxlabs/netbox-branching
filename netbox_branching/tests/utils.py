@@ -1,4 +1,5 @@
 import logging
+import uuid
 from collections import namedtuple
 from typing import ClassVar
 
@@ -42,13 +43,15 @@ def provision_branch(*, user, name='Test Branch', **kwargs):
     return branch
 
 
-def fake_request(user, path, headers=None):
+def fake_request(user, path, headers=None, cookies=None):
     """
     Return the NetBoxFakeRequest a background job (script, webhook) receives for a POST to
     `path`. A query string in `path` populates request.GET.
     """
     request = RequestFactory().post(path, headers=headers)
+    request.id = uuid.uuid4()  # Assigned by CoreMiddleware; change logging requires it
     request.user = user
+    request.COOKIES.update(cookies or {})
     return copy_safe_request(request)
 
 

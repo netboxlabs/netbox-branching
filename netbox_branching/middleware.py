@@ -56,14 +56,17 @@ class BranchMiddleware:
             return HttpResponseBadRequest(_('Selected branch is not ready.'))
         request.active_branch = branch
 
+        # A cookie present with no branch active is stale (e.g. the branch was archived or merged since
+        # it was set). Drop it from the request too: a background job queued from this request copies
+        # its cookies, and would fail on a branch the user had already fallen back to main from (#702).
+        stale_cookie = not branch and request.COOKIES.pop(COOKIE_NAME, None) is not None
+
         response = self.get_response(request)
 
         # Set/clear the branch cookie (for non-API requests)
         if not is_api_request(request):
-            # Check if a branch is being activated/deactivated, or if a stale
-            # cookie exists (cookie present but branch not active — e.g. branch
-            # was archived or merged since the cookie was set).
-            branch_change = QUERY_PARAM in request.GET or (COOKIE_NAME in request.COOKIES and not branch)
+            # Check if a branch is being activated/deactivated, or if a stale cookie existed
+            branch_change = QUERY_PARAM in request.GET or stale_cookie
 
             # Redirect to dashboard if branch activation/deactivation results in 404
             if branch_change and response.status_code == 404:

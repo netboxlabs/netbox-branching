@@ -1,17 +1,26 @@
+import uuid
 import warnings
 from unittest.mock import patch
 
+from django.http import HttpResponse
 from django.test import RequestFactory, override_settings
 from django.urls import reverse
+from rest_framework.relations import PrimaryKeyRelatedField
 from rest_framework.request import Request as DRFRequest
 
+from core.choices import JobStatusChoices
+from core.models import Job
+from dcim.models import Region, Site
+from extras.jobs import ScriptJob
+from extras.scripts import Script
 from netbox.jobs import AsyncAPIJob
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
 from netbox_branching.contextvars import active_branch
+from netbox_branching.middleware import BranchMiddleware
 from netbox_branching.models import Branch
-from netbox_branching.utilities import ActiveBranchContextManager
-from utilities.request import apply_request_processors
+from netbox_branching.utilities import ActiveBranchContextManager, BranchUnavailable
+from utilities.request import apply_request_processors, copy_safe_request
 from utilities.testing import TestCase
 
 from .utils import fake_request
@@ -270,7 +279,8 @@ class RequestTestCase(TestCase):
     def test_processor_refuses_unready_branch_from_query_param_on_fake_request(self):
         """
         UI script runs carry the URL's query parameters into a NetBoxFakeRequest, which has no
-        message storage (#675).
+        message storage (#675). A browser is told and falls back to main; a job has no user to
+        fall back for, so it must fail instead (#702).
         """
         branch = Branch.objects.first()
         Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.SYNCING)
@@ -278,6 +288,8 @@ class RequestTestCase(TestCase):
 
         with ActiveBranchContextManager(request):
             self.assertIsNone(active_branch.get())
+            with self.assertRaisesMessage(BranchUnavailable, 'is not ready for use'):
+                Site.objects.exists()
 
     def test_processor_deactivates_branch_from_query_param_on_fake_request(self):
         """
@@ -318,3 +330,210 @@ class RequestTestCase(TestCase):
             ActiveBranchContextManager(request),
         ):
             self.assertIsNone(active_branch.get())
+
+    def assertBranchRefused(self, request, message):
+        """
+        Assert that a request replayed by a background job fails its first branchable query with
+        `message`, leaves models which do not support branching alone, and refuses nothing once
+        the request processor has exited.
+        """
+        with ActiveBranchContextManager(request):
+            self.assertIsNone(active_branch.get(), msg='An unusable branch was installed as active')
+            with self.assertRaisesMessage(BranchUnavailable, message):
+                Site.objects.exists()
+            Job.objects.exists()
+        Site.objects.exists()
+
+    def test_processor_refuses_deleted_branch_on_fake_request(self):
+        """
+        A job queued for a branch which has since been deleted must fail rather than run in main.
+        Nothing refuses a replayed request as BranchMiddleware does an HTTP one, and
+        apply_request_processors() swallows anything the processor raises, so the refusal surfaces
+        on the first branchable query instead (#702).
+        """
+        request = fake_request(self.user, reverse('dcim-api:site-list'), headers={'x-netbox-branch': 'nonexist'})
+
+        self.assertBranchRefused(request, 'Branch nonexist does not exist')
+
+    def test_processor_refuses_unready_branch_on_fake_request(self):
+        """
+        A job which starts while another worker is syncing or merging its branch (#702).
+        """
+        branch = Branch.objects.first()
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.SYNCING)
+        request = fake_request(self.user, reverse('dcim-api:site-list'), headers={'x-netbox-branch': branch.schema_id})
+
+        self.assertBranchRefused(request, 'is not ready for use (status: syncing)')
+
+    def test_processor_refuses_deleted_branch_from_query_param_on_fake_request(self):
+        """
+        A background bulk write enqueued with `?_branch=` names the branch in its query string (#702).
+        """
+        request = fake_request(self.user, f'{reverse("dcim-api:site-list")}?{QUERY_PARAM}=nonexist')
+
+        self.assertBranchRefused(request, 'Branch nonexist does not exist')
+
+    def test_processor_refuses_deleted_branch_from_cookie_on_fake_request(self):
+        """
+        A UI bulk operation deferred to a background job carries the branch cookie. A browser's
+        stale cookie falls back to main and is cleared by BranchMiddleware; the job must fail (#702).
+        """
+        request = fake_request(self.user, reverse('home'), cookies={COOKIE_NAME: 'nonexist'})
+
+        self.assertBranchRefused(request, 'Branch nonexist does not exist')
+
+    def test_processor_refuses_unready_branch_from_cookie_on_fake_request(self):
+        branch = Branch.objects.first()
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.SYNCING)
+        request = fake_request(self.user, reverse('home'), cookies={COOKIE_NAME: branch.schema_id})
+
+        self.assertBranchRefused(request, 'is not ready for use (status: syncing)')
+
+    def test_stale_cookie_still_falls_back_to_main_for_http_request(self):
+        """
+        The strict refusal is for replayed requests only: an HTTP request with a stale cookie
+        reaches BranchMiddleware, which falls back to main and clears the cookie (#702).
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.COOKIES[COOKIE_NAME] = 'nonexist'
+
+        with ActiveBranchContextManager(request):
+            self.assertIsNone(active_branch.get())
+            Site.objects.exists()
+
+    def test_background_api_request_refuses_deleted_branch(self):
+        """
+        The refusal must not be reported as a failed request processor either: that is the only
+        notice apply_request_processors() gives, and the job would then run in main (#702).
+        """
+        url = reverse('dcim-api:site-list')
+        django_request = AsyncAPIJob._build_request(
+            fake_request(self.user, url, headers={'x-netbox-branch': 'nonexist'}), {}, 'http'
+        )
+
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            with apply_request_processors(DRFRequest(django_request)):
+                self.assertIsNone(active_branch.get())
+                with self.assertRaisesMessage(BranchUnavailable, 'Branch nonexist does not exist'):
+                    Site.objects.exists()
+
+        reported = [str(w.message) for w in caught if 'ActiveBranchContextManager' in str(w.message)]
+        self.assertEqual(reported, [], msg='The refusal was reported as a failed request processor')
+
+    def run_background_site_create(self, branch, payload):
+        """
+        Queue a background bulk create of a site for `branch`, delete the branch before a worker
+        picks the job up, then run the job. Enqueued exactly as NetBoxModelViewSet does, and run
+        synchronously in place of a worker.
+        """
+        self.add_permissions('dcim.add_site')
+        request_copy = fake_request(
+            self.user, reverse('dcim-api:site-list'), headers={'x-netbox-branch': branch.schema_id}
+        )
+        request_copy.user = None
+        request_copy.COOKIES = {}
+        branch.delete()
+
+        job = AsyncAPIJob.enqueue(
+            name='Bulk create sites',
+            user=self.user,
+            immediate=True,
+            viewset_class='dcim.api.views.SiteViewSet',
+            action='create',
+            payload=payload,
+            user_pk=self.user.pk,
+            action_kwargs={},
+            request=request_copy,
+            scheme='http',
+        )
+        job.refresh_from_db()
+        return job
+
+    def test_background_api_job_fails_when_branch_deleted(self):
+        """
+        The scenario from #702: a background bulk write is queued for a branch, the branch is
+        deleted before a worker picks the job up, and the job must fail with nothing written to main.
+        """
+        branch = Branch.objects.first()
+        job = self.run_background_site_create(branch, {'name': 'Site 702', 'slug': 'site-702'})
+
+        self.assertEqual(job.status, JobStatusChoices.STATUS_ERRORED)
+        self.assertIn(f'Branch {branch.schema_id} does not exist', job.error)
+        self.assertFalse(Site.objects.filter(name='Site 702').exists(), msg='The job wrote to main')
+
+    def test_refusal_is_not_reported_as_missing_related_object(self):
+        """
+        DRF resolves a related field by catching ObjectDoesNotExist, so a refusal raised as one is
+        reported as an invalid related object instead of the missing branch (#702).
+        """
+        region = Region.objects.create(name='Region 702', slug='region-702')
+        field = PrimaryKeyRelatedField(queryset=Region.objects.all())
+        request = fake_request(self.user, reverse('dcim-api:site-list'), headers={'x-netbox-branch': 'nonexist'})
+
+        with (
+            ActiveBranchContextManager(request),
+            self.assertRaisesMessage(BranchUnavailable, 'Branch nonexist does not exist'),
+        ):
+            field.to_internal_value(region.pk)
+
+    def test_script_job_fails_when_branch_deleted(self):
+        """
+        The script reproduction from #702, run through ScriptJob with the request processors
+        applied as ScriptJob.run() applies them.
+        """
+
+        class CreateSite(Script):
+            def run(self, data, commit):
+                Site.objects.create(name='Site 702', slug='site-702')
+
+        branch = Branch.objects.first()
+        request = fake_request(
+            self.user, reverse('extras-api:script-list'), headers={'x-netbox-branch': branch.schema_id}
+        )
+        branch.delete()
+        runner = ScriptJob(Job.objects.create(name='Run Script', job_id=uuid.uuid4()))
+
+        with (
+            apply_request_processors(request),
+            self.assertRaisesMessage(BranchUnavailable, f'Branch {branch.schema_id} does not exist'),
+        ):
+            runner.run_script(CreateSite(), request, {}, commit=True)
+        self.assertFalse(Site.objects.filter(name='Site 702').exists(), msg='The script wrote to main')
+
+    def test_middleware_drops_stale_cookie_from_request(self):
+        """
+        A job queued from a request which fell back to main over a stale cookie copies the
+        request's cookies. The stale cookie must not reach it, or the job fails on a branch the
+        user had already left (#702).
+        """
+        copied = {}
+
+        def get_response(request):
+            copied['request'] = copy_safe_request(request)
+            return HttpResponse()
+
+        request = RequestFactory().post(reverse('home'))
+        request.user = self.user
+        request.COOKIES[COOKIE_NAME] = 'nonexist'
+        response = BranchMiddleware(get_response)(request)
+
+        self.assertNotIn(COOKIE_NAME, copied['request'].COOKIES, msg='A stale cookie was copied for a job')
+        self.assertEqual(response.cookies[COOKIE_NAME].value, '', msg='The stale cookie was not cleared')
+        with ActiveBranchContextManager(copied['request']):
+            Site.objects.exists()
+
+    def test_middleware_keeps_valid_cookie_on_request(self):
+        branch = Branch.objects.first()
+        copied = {}
+
+        def get_response(request):
+            copied['request'] = copy_safe_request(request)
+            return HttpResponse()
+
+        request = RequestFactory().post(reverse('home'))
+        request.user = self.user
+        request.COOKIES[COOKIE_NAME] = branch.schema_id
+        BranchMiddleware(get_response)(request)
+
+        self.assertEqual(copied['request'].COOKIES.get(COOKIE_NAME), branch.schema_id)

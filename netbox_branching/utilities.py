@@ -11,6 +11,7 @@ from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
 from django.db import connections
 from django.db.models import ForeignKey, ManyToManyField
+from django.http import HttpRequest
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.translation import gettext as _
@@ -28,7 +29,7 @@ from .constants import (
     INCLUDE_MODELS,
     QUERY_PARAM,
 )
-from .contextvars import active_branch
+from .contextvars import active_branch, branch_refusal
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ __all__ = (
     'ActiveBranchContextManager',
     'BranchActionIndicator',
     'BranchNotReady',
+    'BranchUnavailable',
     'ChangeSummary',
     'DynamicSchemaDict',
     'ListHandler',
@@ -68,6 +70,7 @@ __all__ = (
     'is_api_request',
     'is_job_abandoned',
     'record_applied_change',
+    'refuse_branch',
     'register_branching_resolver',
     'register_objectchange_field_migrator',
     'resolve_changes_summary',
@@ -164,6 +167,20 @@ def deactivate_branch():
         yield
     finally:
         active_branch.reset(token)
+
+
+@contextmanager
+def refuse_branch(reason):
+    """
+    A context manager under which every branchable query raises BranchUnavailable(reason) instead
+    of being routed. Used in place of activate_branch() when a request names a branch which cannot
+    be activated and nothing else will refuse the request, such as a background job replaying it.
+    """
+    token = branch_refusal.set(str(reason))
+    try:
+        yield
+    finally:
+        branch_refusal.reset(token)
 
 
 def get_branchable_object_types():
@@ -542,35 +559,60 @@ class BranchNotReady(Exception):
     Raised by get_active_branch() when the request names a branch which exists but is not ready for
     use. Returning the branch would let queries run against a schema which may be mid-sync, mid-merge
     or gone entirely, so the request has to be refused: BranchMiddleware translates this into an HTTP
-    400. Callers which cannot refuse the request (such as request processors) must treat it as "no
-    branch" rather than activating one.
+    400. A caller which cannot refuse the request itself must not activate a branch; it can defer the
+    refusal to the router with refuse_branch().
     """
 
 
-def get_active_branch(request):
+class BranchUnavailable(Exception):
+    """
+    Raised by BranchAwareRouter for a branchable query made under refuse_branch(). Deliberately not
+    an ObjectDoesNotExist, which DRF and others catch as "related object not found" (#702).
+    """
+
+
+def _get_branch(schema_id):
+    """
+    Return the Branch with the given schema ID, naming it in the DoesNotExist raised otherwise.
+    """
+    from .models import Branch
+
+    try:
+        return Branch.objects.get(schema_id=schema_id)
+    except Branch.DoesNotExist:
+        raise Branch.DoesNotExist(f'Branch {schema_id} does not exist') from None
+
+
+def _not_ready(branch):
+    return BranchNotReady(f'Branch {branch} is not ready for use (status: {branch.status})')
+
+
+def get_active_branch(request, strict=False):
     """
     Return the active Branch, or None if no branch is active.
 
     Raises BranchNotReady if the request names a branch which exists but is not usable, and
     Branch.DoesNotExist if it names one which does not exist at all. Always returns a Branch or
     None otherwise; never a response object, as callers install the return value as the active
-    branch. Callers which cannot refuse the request must treat both exceptions as "no branch".
+    branch.
+
+    An unready branch named by the query parameter, or a stale branch cookie, falls back to main
+    instead: the user is told, and the middleware clears the cookie. With `strict`, these raise
+    too, for a request a background job replays with no user to fall back to main for (#702).
     """
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
-    from .models import Branch
-
     # A background job receives a NetBoxFakeRequest, which has no headers attribute (#675).
     if is_api_request(request) and BRANCH_HEADER_META in request.META:
-        branch = Branch.objects.get(schema_id=request.META[BRANCH_HEADER_META])
+        branch = _get_branch(request.META[BRANCH_HEADER_META])
         if not branch.ready:
-            raise BranchNotReady(f'Branch {branch} is not ready for use (status: {branch.status})')
+            raise _not_ready(branch)
         return branch
 
     # Branch activated/deactivated by URL query parameter
     # Requests from background jobs have no message storage (#675).
     if QUERY_PARAM in request.GET:
         if schema_id := request.GET.get(QUERY_PARAM):
-            branch = Branch.objects.get(schema_id=schema_id)
+            branch = _get_branch(schema_id)
             if branch.ready:
                 if schema_id != request.COOKIES.get(COOKIE_NAME) and not getattr(
                     request, '_branch_activation_notified', False
@@ -578,6 +620,8 @@ def get_active_branch(request):
                     messages.success(request, _('Activated branch {branch}').format(branch=branch), fail_silently=True)
                     request._branch_activation_notified = True
                 return branch
+            if strict:
+                raise _not_ready(branch)
             if not getattr(request, '_branch_activation_notified', False):
                 messages.error(
                     request,
@@ -597,11 +641,15 @@ def get_active_branch(request):
     # Branch set by cookie
     if schema_id := request.COOKIES.get(COOKIE_NAME):
         try:
-            branch = Branch.objects.get(schema_id=schema_id)
-            if branch.ready:
-                return branch
+            branch = _get_branch(schema_id)
         except ObjectDoesNotExist:
-            pass
+            if strict:
+                raise
+            return None
+        if branch.ready:
+            return branch
+        if strict:
+            raise _not_ready(branch)
     return None
 
 
@@ -656,19 +704,20 @@ def ActiveBranchContextManager(request):
     if not apps.is_installed('netbox_branching'):
         return nullcontext()
 
-    # This runs ahead of BranchMiddleware (plugin middleware is appended after NetBox's
-    # CoreMiddleware, which applies the request processors), so it is reached even for requests
-    # the middleware is about to refuse with a 400 — whether the branch named is unready
-    # (BranchNotReady) or absent entirely (ObjectDoesNotExist). Leave the branch inactive and let
-    # the middleware refuse the request.
+    # Only a live HttpRequest goes on to BranchMiddleware, which refuses a request naming an unusable
+    # branch with a 400; this processor runs first (CoreMiddleware applies it), so it just leaves the
+    # branch inactive. Raising instead would have apply_request_processors() report the expected
+    # refusal as a failed processor on every such request.
     #
-    # Caught explicitly rather than left to apply_request_processors(), whose blanket
-    # `except Exception` would also stop the branch being activated but would report this
-    # expected refusal as a failed request processor on every such request.
+    # A background job replays its request (a NetBoxFakeRequest, or the DRF Request AsyncAPIJob
+    # rebuilds) through the request processors alone, so nothing refuses it and anything raised here
+    # is swallowed. The refusal is deferred to the router instead: the first branchable query fails
+    # the job rather than running in main (#702).
+    replayed = not isinstance(request, HttpRequest)
     try:
-        branch = get_active_branch(request)
-    except (BranchNotReady, ObjectDoesNotExist):
-        return nullcontext()
+        branch = get_active_branch(request, strict=replayed)
+    except (BranchNotReady, ObjectDoesNotExist) as e:
+        return refuse_branch(e) if replayed else nullcontext()
 
     if branch:
         return activate_branch(branch)
