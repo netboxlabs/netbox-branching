@@ -19,6 +19,7 @@ from django.test import RequestFactory
 from django.urls import reverse
 
 from core.models import ObjectChange as CoreObjectChange
+from dcim.choices import CableProfileChoices
 from dcim.models import (
     Cable,
     CablePath,
@@ -39,14 +40,14 @@ from extras.models import Tag
 from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.models import Branch, ChangeDiff
-from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
+from netbox_branching.tests.utils import CableTestMixin, FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import activate_branch
 from utilities.exceptions import AbortTransaction
 
 User = get_user_model()
 
 
-class SyncTestCase(FastTeardownTransactionTestCase):
+class SyncTestCase(CableTestMixin, FastTeardownTransactionTestCase):
     """
     Test cases for Branch sync functionality.
 
@@ -1302,68 +1303,114 @@ class SyncTestCase(FastTeardownTransactionTestCase):
     # Cable path scenarios
     # -------------------------------------------------------------------------
 
-    def test_sync_cable_path_recalculation(self):
+    def test_sync_cable_create(self):
         """
-        Test that cable paths are populated in the branch after syncing a cable
-        that was created in main.
+        Sync a cable created in main into the branch.
 
-        Sync applies changes iteratively, so the Cable CREATE → CableTermination
-        CREATEs → Cable UPDATE sequence from main is replayed in the branch,
-        allowing trace_paths to fire and create the CablePath records.
-        Refs: #150
+        Sync applies changes iteratively, so the Cable CREATE → CableTermination CREATEs →
+        Cable UPDATE sequence from main is replayed in the branch, allowing trace_paths to fire
+        and create the CablePath records. Refs: #150
         """
-        # Create devices and interfaces in main before branch provisioning
-        with event_tracking(self.request):
-            site = Site.objects.create(name='Cable Site', slug='cable-site')
-            device_a = Device.objects.create(
-                name='Device A',
-                site=site,
-                device_type=self.device_type,
-                role=self.device_role,
-            )
-            device_b = Device.objects.create(
-                name='Device B',
-                site=site,
-                device_type=self.device_type,
-                role=self.device_role,
-            )
-            interface_a = Interface.objects.create(device=device_a, name='eth0', type='1000base-t')
-            interface_b = Interface.objects.create(device=device_b, name='eth0', type='1000base-t')
-        interface_a_id = interface_a.id
-        interface_b_id = interface_b.id
-
-        # Create branch (no cable yet)
+        ports = self._create_interfaces()
         branch = self._create_and_provision_branch()
         initial_last_sync = branch.last_sync
 
-        # Verify no cable paths in branch before sync
+        cable = self._connect([ports.a1], [ports.b1])
         with activate_branch(branch):
             self.assertEqual(CablePath.objects.count(), 0)
 
-        # In main: create a cable connecting the two interfaces
-        with event_tracking(self.request):
-            cable = Cable(
-                a_terminations=[Interface.objects.get(id=interface_a_id)],
-                b_terminations=[Interface.objects.get(id=interface_b_id)],
-            )
-            cable.save()
-            cable_id = cable.id
-
-        # Verify cable paths exist in main (sanity check)
-        self.assertEqual(CablePath.objects.count(), 2)
-
-        # Sync: applies cable creation (and path recalculation) to branch
         branch.sync(user=self.user, commit=True)
 
-        # After sync: cable and cable paths should exist in branch
         with activate_branch(branch):
-            self.assertTrue(Cable.objects.filter(id=cable_id).exists())
-            self.assertEqual(
-                CablePath.objects.count(), 2, 'Cable paths not populated in branch after sync (#150 regression)'
-            )
+            self._assert_connected(cable, ports.a1, ports.b1)
+            self.assertEqual(CablePath.objects.count(), 2)
 
         branch.refresh_from_db()
         self.assertGreater(branch.last_sync, initial_last_sync)
+
+    def test_sync_cable_delete(self):
+        """Sync the deletion of a cable from main into the branch."""
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1], [ports.b1])
+        branch = self._create_and_provision_branch()
+
+        self._delete_cable(cable)
+
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertFalse(Cable.objects.filter(id=cable.id).exists())
+            self._assert_terminations(cable)
+            self._assert_endpoint(ports.a1)
+            self._assert_endpoint(ports.b1)
+            self.assertEqual(CablePath.objects.count(), 0)
+
+    def test_sync_cable_move_both_ends(self):
+        """Sync the move of both ends of a cable to other interfaces from main into the branch."""
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1], [ports.b1])
+        branch = self._create_and_provision_branch()
+
+        self._edit_cable(cable, a_terminations=[ports.a2], b_terminations=[ports.b2])
+
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self._assert_connected(cable, ports.a2, ports.b2)
+            self._assert_endpoint(ports.a1)
+            self._assert_endpoint(ports.b1)
+            self.assertEqual(CablePath.objects.count(), 2)
+
+    def test_sync_cable_clear_end(self):
+        """Sync the detachment of one end of a cable from main into the branch."""
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1], [ports.b1])
+        branch = self._create_and_provision_branch()
+
+        self._edit_cable(cable, b_terminations=[])
+
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self._assert_terminations(cable, a=[(ports.a1, None, None)])
+            self._assert_endpoint(ports.a1, cable=cable, end='A', peers=[])
+            self._assert_endpoint(ports.b1)
+            self.assertEqual(CablePath.objects.count(), 1)
+
+    def test_sync_cable_set_profile(self):
+        """Sync the assignment of a profile to an existing cable from main into the branch."""
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1], [ports.b1])
+        branch = self._create_and_provision_branch()
+
+        self._edit_cable(cable, profile=CableProfileChoices.SINGLE_1C1P)
+
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self.assertEqual(Cable.objects.get(id=cable.id).profile, CableProfileChoices.SINGLE_1C1P)
+            self._assert_connected(cable, ports.a1, ports.b1, connector=1, positions=[1])
+            self.assertEqual(CablePath.objects.count(), 2)
+
+    def test_sync_cable_reorder_terminations(self):
+        """Sync the swap of a 2C1P trunk cable's A-end terminations from main into the branch."""
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1, ports.a2], [ports.b1, ports.b2], profile=CableProfileChoices.TRUNK_2C1P)
+        branch = self._create_and_provision_branch()
+
+        self._edit_cable(cable, a_terminations=[ports.a2, ports.a1])
+
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            self._assert_terminations(
+                cable, a=[(ports.a2, 1, [1]), (ports.a1, 2, [1])], b=[(ports.b1, 1, [1]), (ports.b2, 2, [1])]
+            )
+            self._assert_endpoint(ports.a2, cable=cable, end='A', connector=1, positions=[1], peers=[ports.b1])
+            self._assert_endpoint(ports.a1, cable=cable, end='A', connector=2, positions=[1], peers=[ports.b2])
+            self._assert_endpoint(ports.b1, cable=cable, end='B', connector=1, positions=[1], peers=[ports.a2])
+            self._assert_endpoint(ports.b2, cable=cable, end='B', connector=2, positions=[1], peers=[ports.a1])
+            self.assertEqual(CablePath.objects.count(), 4)
 
     # -------------------------------------------------------------------------
     # Front/rear port mapping scenario
