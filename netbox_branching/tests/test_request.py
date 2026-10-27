@@ -9,7 +9,7 @@ from rest_framework.relations import PrimaryKeyRelatedField
 from rest_framework.request import Request as DRFRequest
 
 from core.choices import JobStatusChoices
-from core.models import Job
+from core.models import Job, ObjectChange
 from dcim.models import Region, Site
 from extras.jobs import ScriptJob
 from extras.scripts import Script
@@ -334,13 +334,16 @@ class RequestTestCase(TestCase):
     def assertBranchRefused(self, request, message):
         """
         Assert that a request replayed by a background job fails its first branchable query with
-        `message`, leaves models which do not support branching alone, and refuses nothing once
-        the request processor has exited.
+        `message` (changelog reads included), leaves models which do not support branching alone,
+        and refuses nothing once the request processor has exited.
         """
         with ActiveBranchContextManager(request):
             self.assertIsNone(active_branch.get(), msg='An unusable branch was installed as active')
             with self.assertRaisesMessage(BranchUnavailable, message):
                 Site.objects.exists()
+            # Changelog reads follow the active branch, so must not fall back to main either
+            with self.assertRaisesMessage(BranchUnavailable, message):
+                ObjectChange.objects.exists()
             Job.objects.exists()
         Site.objects.exists()
 
