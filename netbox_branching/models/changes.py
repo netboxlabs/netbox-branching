@@ -17,6 +17,7 @@ from netbox_branching.utilities import (
     diff_for_merge,
     full_clean_with_file_check,
     resolve_objectchange_field_migration,
+    strip_schema_local_references,
     update_object,
 )
 from utilities.querysets import RestrictedQuerySet
@@ -116,10 +117,12 @@ class ObjectChange(ObjectChange_):
 
         # Creating a new object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
+            # Rows of schema-local models are rebuilt in the destination, so the source's IDs are meaningless there
+            data = strip_schema_local_references(model, self.postchange_data)
             if hasattr(model, 'deserialize_object'):
-                instance = model.deserialize_object(self.postchange_data, pk=self.changed_object_id)
+                instance = model.deserialize_object(data, pk=self.changed_object_id)
             else:
-                instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
+                instance = deserialize_object(model, data, pk=self.changed_object_id)
             full_clean_with_file_check(instance.object, logger)
 
             # For MPTT models, clear the tree fields and bypass the raw save path so
