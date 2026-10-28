@@ -2,7 +2,6 @@
 Tests for Branch merge functionality with ObjectChange collapsing using squash merge strategy.
 """
 
-import unittest
 import uuid
 
 from django.contrib.auth import get_user_model
@@ -1052,8 +1051,3 @@ class SquashMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
             Site.objects.filter(id=site_id).exists(),
             msg='UPDATE+DELETE must collapse to a single DELETE; main row remains',
         )
-
-    @unittest.expectedFailure
-    def test_merge_cable_create_with_edited_endpoint(self):
-        """The collapsed CREATE replays the branch-local _path ID into main. Refs: #684"""
-        super().test_merge_cable_create_with_edited_endpoint()

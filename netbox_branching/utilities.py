@@ -71,6 +71,7 @@ __all__ = (
     'register_branching_resolver',
     'register_objectchange_field_migrator',
     'resolve_changes_summary',
+    'strip_schema_local_references',
     'supports_branching',
     'track_branch_connection',
     'update_object',
@@ -290,6 +291,25 @@ def supports_branching(model):
         *get_plugin_config('netbox_branching', 'exempt_models', []),
     ]
     return label not in exempt_models and wildcard_label not in exempt_models
+
+
+def strip_schema_local_references(model, data):
+    """
+    Return a copy of serialized object data without FKs to branched but non-change-logged models (e.g. CablePath),
+    whose row IDs are local to the schema that recorded them. (#684)
+    """
+    from netbox.models.features import ChangeLoggingMixin
+
+    data = dict(data)
+    for field in model._meta.concrete_fields:
+        related_model = field.related_model if field.many_to_one else None
+        if (
+            related_model is not None
+            and not issubclass(related_model, ChangeLoggingMixin)
+            and supports_branching(related_model)
+        ):
+            data.pop(field.name, None)
+    return data
 
 
 def get_tables_to_replicate():
