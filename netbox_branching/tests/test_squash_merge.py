@@ -1057,23 +1057,3 @@ class SquashMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
     def test_merge_cable_create_with_edited_endpoint(self):
         """The collapsed CREATE replays the branch-local _path ID into main. Refs: #684"""
         super().test_merge_cable_create_with_edited_endpoint()
-
-    @unittest.expectedFailure
-    def test_merge_cable_set_profile(self):
-        """The collapsed interface UPDATE sets the connector without restoring the cable. Refs: #688"""
-        super().test_merge_cable_set_profile()
-
-    @unittest.expectedFailure
-    def test_revert_cable_set_profile(self):
-        """Cannot be exercised until the merge succeeds. Refs: #688"""
-        super().test_revert_cable_set_profile()
-
-    @unittest.expectedFailure
-    def test_merge_cable_reorder_terminations(self):
-        """Reordering recreates the terminations, so the collapsed UPDATEs fail as for a profile change. Refs: #688"""
-        super().test_merge_cable_reorder_terminations()
-
-    @unittest.expectedFailure
-    def test_revert_cable_reorder_terminations(self):
-        """Cannot be exercised until the merge succeeds. Refs: #688"""
-        super().test_revert_cable_reorder_terminations()

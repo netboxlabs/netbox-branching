@@ -1395,27 +1395,23 @@ class BaseMergeTests(CableTestMixin):
         self.assertEqual(CablePath.objects.count(), 2)
 
     def test_merge_cable_move_a_end(self):
-        """Merge a branch which moves the A end of an existing cable to another interface."""
         self._merge_cable_move(move_a=True, move_b=False)
 
     def test_revert_cable_move_a_end(self):
-        """Revert a merged branch which moved the A end of an existing cable."""
         self._revert_cable_move(move_a=True, move_b=False)
 
     def test_merge_cable_move_b_end(self):
-        """Merge a branch which moves the B end of an existing cable to another interface. Refs: #469"""
+        """Refs: #469"""
         self._merge_cable_move(move_a=False, move_b=True)
 
     def test_revert_cable_move_b_end(self):
-        """Revert a merged branch which moved the B end of an existing cable. Refs: #469"""
+        """Refs: #469"""
         self._revert_cable_move(move_a=False, move_b=True)
 
     def test_merge_cable_move_both_ends(self):
-        """Merge a branch which moves both ends of an existing cable to other interfaces."""
         self._merge_cable_move(move_a=True, move_b=True)
 
     def test_revert_cable_move_both_ends(self):
-        """Revert a merged branch which moved both ends of an existing cable."""
         self._revert_cable_move(move_a=True, move_b=True)
 
     def _merge_cable_clear(self, end):
@@ -1457,19 +1453,15 @@ class BaseMergeTests(CableTestMixin):
         self.assertEqual(CablePath.objects.count(), 2)
 
     def test_merge_cable_clear_a_end(self):
-        """Merge a branch which detaches the A end of an existing cable."""
         self._merge_cable_clear('A')
 
     def test_revert_cable_clear_a_end(self):
-        """Revert a merged branch which detached the A end of an existing cable."""
         self._revert_cable_clear('A')
 
     def test_merge_cable_clear_b_end(self):
-        """Merge a branch which detaches the B end of an existing cable."""
         self._merge_cable_clear('B')
 
     def test_revert_cable_clear_b_end(self):
-        """Revert a merged branch which detached the B end of an existing cable."""
         self._revert_cable_clear('B')
 
     def test_merge_cable_set_profile(self):
