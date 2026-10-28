@@ -117,7 +117,8 @@ class ObjectChange(ObjectChange_):
 
         # Creating a new object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
-            # Rows of schema-local models are rebuilt in the destination, so the source's IDs are meaningless there
+            # Rows of schema-local models are rebuilt in the destination, so the source's IDs are meaningless there.
+            # UPDATE and restore replay *_clean data, which drops private fields such as _path; only CREATE needs this.
             data = strip_schema_local_references(model, self.postchange_data)
             if hasattr(model, 'deserialize_object'):
                 instance = model.deserialize_object(data, pk=self.changed_object_id)
