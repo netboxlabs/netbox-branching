@@ -300,6 +300,82 @@ class BaseMergeTests:
         site = Site.objects.get(id=site_id)
         self.assertEqual(site.custom_field_data['jsoncf'], original)
 
+    def test_merge_and_revert_round_tripped_field(self):
+        """
+        A field the branch changed and changed back is still written on merge and on revert, overwriting
+        what main set in the meantime: both strategies replay what the branch did, not only its net effect.
+        Squash does this by remembering the fields each collapsed UPDATE touched. Refs: #688
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1', description='original')
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(request):
+            for description in ('branch', 'original'):
+                site = Site.objects.get(pk=site.pk)
+                site.snapshot()
+                site.description = description
+                site.save()
+
+        with event_tracking(request):
+            site = Site.objects.get(pk=site.pk)
+            site.snapshot()
+            site.description = 'main before merge'
+            site.save()
+
+        branch.merge(user=self.user, commit=True)
+        self.assertEqual(Site.objects.get(pk=site.pk).description, 'original')
+
+        with event_tracking(request):
+            site = Site.objects.get(pk=site.pk)
+            site.snapshot()
+            site.description = 'main after merge'
+            site.save()
+
+        branch.refresh_from_db()
+        branch.revert(user=self.user, commit=True)
+        self.assertEqual(Site.objects.get(pk=site.pk).description, 'original')
+
+    def test_merge_round_tripped_json_key_keeps_main_sibling(self):
+        """
+        A JSON field the branch changed and changed back is merged key by key, so a sibling key that
+        main changed in the meantime survives. Refs: #688
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            device = Device.objects.create(
+                name='Device 1',
+                device_type=self.device_type,
+                role=self.device_role,
+                site=site,
+                local_context_data={'a': '1', 'b': '1'},
+            )
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(request):
+            for value in ('2', '1'):
+                device = Device.objects.get(pk=device.pk)
+                device.snapshot()
+                device.local_context_data = {'a': value, 'b': '1'}
+                device.save()
+
+        with event_tracking(request):
+            device = Device.objects.get(pk=device.pk)
+            device.snapshot()
+            device.local_context_data = {'a': '1', 'b': '2'}
+            device.save()
+
+        branch.merge(user=self.user, commit=True)
+        self.assertEqual(Device.objects.get(pk=device.pk).local_context_data, {'a': '1', 'b': '2'})
+
     def test_merge_removes_deleted_local_context_key(self):
         """
         Regression test for #592 covering local_context_data (the "or local context" half of

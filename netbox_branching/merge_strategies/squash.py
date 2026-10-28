@@ -43,6 +43,7 @@ class CollapsedChange:
         self.postchange_data = {}
         self.last_change = None  # The most recent ObjectChange (for metadata)
         self.synthetic = False  # True for UPDATEs injected by cycle breaking
+        self.touched_fields = set()  # Fields altered by any individual UPDATE, even if net unchanged
 
         # Dependencies for ordering
         self.depends_on = set()  # Set of keys this change depends on
@@ -85,6 +86,8 @@ class CollapsedChange:
 
     def _add_change_update(self, change, logger):
         """Handle UPDATE action."""
+        pre, post = change.prechange_data or {}, change.postchange_data or {}
+        self.touched_fields.update(k for k in pre.keys() | post.keys() if pre.get(k) != post.get(k))
         if self.final_action is None:
             self.final_action = ActionType.UPDATE
             self._set_initial_data(change)
@@ -137,6 +140,8 @@ class CollapsedChange:
         )
         # Use last_change for migrate() to have the correct metadata
         dummy_change.pk = self.last_change.pk
+        if self.final_action == ActionType.UPDATE:
+            dummy_change.replay_fields = self.touched_fields
         return dummy_change
 
 
