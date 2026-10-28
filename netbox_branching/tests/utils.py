@@ -1,18 +1,25 @@
 import logging
+import uuid
 from collections import namedtuple
 from typing import ClassVar
 
+from django.contrib.contenttypes.models import ContentType
 from django.core.management import call_command
 from django.core.management.sql import emit_post_migrate_signal
 from django.db import DatabaseError, connections
 from django.test import RequestFactory, TransactionTestCase
+from django.urls import reverse
 
+from dcim.models import Cable, CablePath, CableTermination, Device, Interface, Site
+from dcim.utils import object_to_path_node
+from netbox.context_managers import event_tracking
 from netbox.plugins import get_plugin_config
 from netbox_branching.models import Branch
 from netbox_branching.provisioning import quote_ident
 from utilities.request import copy_safe_request
 
 __all__ = (
+    'CableTestMixin',
     'FastTeardownTransactionTestCase',
     'fake_request',
     'fetchall',
@@ -21,6 +28,9 @@ __all__ = (
 )
 
 logger = logging.getLogger('netbox_branching.tests')
+
+# Two interfaces on device A and two on device B, as created by CableTestMixin._create_interfaces()
+Interfaces = namedtuple('Interfaces', ['a1', 'a2', 'b1', 'b2'])
 
 
 def provision_branch(*, user, name='Test Branch', **kwargs):
@@ -233,3 +243,124 @@ class FastTeardownTransactionTestCase(TransactionTestCase):
             )
             return False
         return True
+
+
+class CableTestMixin:
+    """
+    Helpers for tests which replay cable changes and assert the resulting topology.
+
+    The test case must define `user`, `device_type` and `device_role`. Every helper
+    operates on the active schema, so wrap calls in activate_branch() to target a branch.
+    """
+
+    def _make_request(self):
+        """Build a per-test request for event_tracking()."""
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+        return request
+
+    def _create_interfaces(self):
+        """Create two devices with two interfaces each, returned as Interfaces(a1, a2, b1, b2)."""
+        site = Site.objects.create(name='Cable Site', slug='cable-site')
+        interfaces = []
+        for device_name in ('Device A', 'Device B'):
+            device = Device.objects.create(
+                name=device_name, site=site, device_type=self.device_type, role=self.device_role
+            )
+            interfaces.extend(
+                Interface.objects.create(device=device, name=name, type='1000base-t') for name in ('eth0', 'eth1')
+            )
+        return Interfaces(*interfaces)
+
+    def _connect(self, a_terminations, b_terminations, **attrs):
+        """Create a change-logged Cable between the given interfaces and return it."""
+        with event_tracking(self._make_request()):
+            cable = Cable(
+                a_terminations=self._fetch(a_terminations), b_terminations=self._fetch(b_terminations), **attrs
+            )
+            cable.save()
+        return cable
+
+    def _edit_cable(self, cable, a_terminations=None, b_terminations=None, **attrs):
+        """Apply a change-logged edit to an existing Cable. Terminations are only replaced when given."""
+        with event_tracking(self._make_request()):
+            cable = Cable.objects.get(id=cable.id)
+            cable.snapshot()
+            if a_terminations is not None:
+                cable.a_terminations = self._fetch(a_terminations)
+            if b_terminations is not None:
+                cable.b_terminations = self._fetch(b_terminations)
+            for name, value in attrs.items():
+                setattr(cable, name, value)
+            cable.save()
+
+    def _delete_cable(self, cable):
+        """Delete an existing Cable under change logging."""
+        with event_tracking(self._make_request()):
+            Cable.objects.get(id=cable.id).delete()
+
+    @staticmethod
+    def _fetch(interfaces):
+        """Reload interfaces from the active schema so the Cable never holds instances from another one."""
+        return [Interface.objects.get(id=interface.id) for interface in interfaces]
+
+    def _assert_terminations(self, cable, a=(), b=()):
+        """
+        Assert the exact CableTermination rows of a cable. `a` and `b` list each end's
+        expected (interface, connector, positions) in connector order.
+        """
+        interface_ct = ContentType.objects.get_for_model(Interface)
+        for end, expected in (('A', a), ('B', b)):
+            rows = CableTermination.objects.filter(cable_id=cable.id, cable_end=end).order_by('connector', 'pk')
+            self.assertEqual(
+                [(ct.termination_type_id, ct.termination_id, ct.connector, ct.positions) for ct in rows],
+                [(interface_ct.id, interface.id, connector, positions) for interface, connector, positions in expected],
+                f'Unexpected {end}-end terminations for cable {cable.id}',
+            )
+
+    def _assert_endpoint(self, interface, cable=None, end=None, connector=None, positions=None, peers=None):
+        """
+        Assert an interface's persisted cable reference and the route of its CablePath.
+
+        `peers` is the list of interfaces a complete path ends at, an empty list for an
+        endpoint left on a half-terminated cable (incomplete path), or None (the default)
+        for an endpoint which should have no path at all.
+        """
+        interface = Interface.objects.get(id=interface.id)
+        self.assertEqual(interface.cable_id, cable.id if cable else None)
+        self.assertEqual(interface.cable_end, end)
+        self.assertEqual(interface.cable_connector, connector)
+        self.assertEqual(interface.cable_positions, positions)
+        if peers is None:
+            self.assertIsNone(interface._path_id, f'{interface} should have no cable path')
+            return
+        self.assertIsNotNone(interface._path_id, f'{interface} has no cable path')
+        path = CablePath.objects.get(id=interface._path_id)
+        # A half-terminated cable is traced to an empty far-end step
+        route = [
+            [object_to_path_node(interface)],
+            [object_to_path_node(cable)],
+            [object_to_path_node(p) for p in peers],
+        ]
+        self.assertEqual(path.path, route)
+        self.assertEqual(path.is_complete, bool(peers))
+        self.assertTrue(path.is_active)
+        self.assertFalse(path.is_split)
+
+    def _assert_connected(self, cable, a, b, connector=None, positions=None):
+        """Assert that `cable` runs from interface `a` to interface `b` with complete paths both ways."""
+        self._assert_terminations(cable, a=[(a, connector, positions)], b=[(b, connector, positions)])
+        self._assert_endpoint(a, cable=cable, end='A', connector=connector, positions=positions, peers=[b])
+        self._assert_endpoint(b, cable=cable, end='B', connector=connector, positions=positions, peers=[a])
+
+    def _assert_trunk(self, cable, a, b):
+        """Assert a 2C1P trunk cable connects a[i] to b[i] over connector i+1, with complete paths."""
+        self._assert_terminations(
+            cable,
+            a=[(a[0], 1, [1]), (a[1], 2, [1])],
+            b=[(b[0], 1, [1]), (b[1], 2, [1])],
+        )
+        for connector, (near, far) in enumerate(zip(a, b), start=1):
+            self._assert_endpoint(near, cable=cable, end='A', connector=connector, positions=[1], peers=[far])
+            self._assert_endpoint(far, cable=cable, end='B', connector=connector, positions=[1], peers=[near])

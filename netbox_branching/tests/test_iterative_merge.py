@@ -12,7 +12,7 @@ from django.db import connections
 from django.test import RequestFactory, SimpleTestCase
 from django.urls import reverse
 
-from dcim.choices import DeviceFaceChoices
+from dcim.choices import CableProfileChoices, DeviceFaceChoices
 from dcim.models import (
     Cable,
     CablePath,
@@ -37,14 +37,14 @@ from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.error_report import build_error_report, get_entry_message, get_merge_recommendations
 from netbox_branching.models import Branch, ChangeDiff
-from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
+from netbox_branching.tests.utils import CableTestMixin, FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import DELETED, _deep_merge_dict, _strip_deleted, activate_branch, diff_for_merge
 from utilities.exceptions import AbortTransaction
 
 User = get_user_model()
 
 
-class BaseMergeTests:
+class BaseMergeTests(CableTestMixin):
     """
     Mixin with common merge tests for all merge strategies.
 
@@ -1329,112 +1329,287 @@ class BaseMergeTests:
         self.assertEqual(device2.virtual_chassis_id, vc_id)
         self.assertEqual(vc.master_id, device1_id)
 
-    def test_merge_cable_path_recalculation(self):
-        """
-        Test that cable paths are recalculated after merging a branch containing a new cable.
-        Refs: #150
-        """
-        site = Site.objects.create(name='Test Site', slug='test-site')
-        device_a = Device.objects.create(
-            name='Device A',
-            site=site,
-            device_type=self.device_type,
-            role=self.device_role,
-        )
-        device_b = Device.objects.create(
-            name='Device B',
-            site=site,
-            device_type=self.device_type,
-            role=self.device_role,
-        )
-        interface_a = Interface.objects.create(device=device_a, name='eth0', type='1000base-t')
-        interface_b = Interface.objects.create(device=device_b, name='eth0', type='1000base-t')
-        interface_a_id = interface_a.id
-        interface_b_id = interface_b.id
+    # -------------------------------------------------------------------------
+    # Cable replay scenarios. Refs: #150, #469, #687
+    # -------------------------------------------------------------------------
 
+    def test_merge_cable_create(self):
+        """Merge a branch which connects two existing interfaces with a new cable. Refs: #150"""
+        ports = self._create_interfaces()
         branch = self._create_and_provision_branch()
 
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-
-        # In branch: connect the two interfaces with a cable
-        with activate_branch(branch), event_tracking(request):
-            cable = Cable(
-                a_terminations=[Interface.objects.get(id=interface_a_id)],
-                b_terminations=[Interface.objects.get(id=interface_b_id)],
-            )
-            cable.save()
-            cable_id = cable.id
+        with activate_branch(branch):
+            cable = self._connect([ports.a1], [ports.b1])
+        self.assertEqual(CablePath.objects.count(), 0)
 
         branch.merge(user=self.user, commit=True)
 
-        self.assertTrue(Cable.objects.filter(id=cable_id).exists())
+        self._assert_connected(cable, ports.a1, ports.b1)
+        self.assertEqual(CablePath.objects.count(), 2)
 
-        # Verify cable paths were recalculated — not left empty after merge (#150 regression)
-        # A successful cable connection creates two CablePath records (one per endpoint)
-        self.assertEqual(CablePath.objects.count(), 2, 'Cable paths not populated after merge')
-
-    def _assert_cable_path(self, interface_id, peer_id):
-        """Assert that the given Interface has a complete CablePath ending at its peer."""
-        path = Interface.objects.get(id=interface_id).path
-        self.assertIsNotNone(path, f'Interface {interface_id} has no cable path')
-        self.assertTrue(path.is_complete, f'Cable path from interface {interface_id} is incomplete')
-        self.assertEqual([obj.pk for obj in path.destinations], [peer_id])
-
-    def test_merge_and_revert_cable_retermination(self):
-        """
-        Test that cable paths are retraced when merging, then reverting, a branch which moves one
-        end of an existing cable to another interface. Refs: #469
-        """
-        site = Site.objects.create(name='Test Site', slug='test-site')
-        device_a = Device.objects.create(
-            name='Device A',
-            site=site,
-            device_type=self.device_type,
-            role=self.device_role,
-        )
-        device_b = Device.objects.create(
-            name='Device B',
-            site=site,
-            device_type=self.device_type,
-            role=self.device_role,
-        )
-        interface_a = Interface.objects.create(device=device_a, name='eth0', type='1000base-t')
-        interface_b = Interface.objects.create(device=device_b, name='eth0', type='1000base-t')
-        interface_c = Interface.objects.create(device=device_b, name='eth1', type='1000base-t')
-
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-
-        with event_tracking(request):
-            cable = Cable(a_terminations=[interface_a], b_terminations=[interface_b])
-            cable.save()
-        cable_id = cable.id
-        self._assert_cable_path(interface_a.id, interface_b.id)
-
+    def test_revert_cable_create(self):
+        """Revert a merged branch which connected two existing interfaces with a new cable."""
+        ports = self._create_interfaces()
         branch = self._create_and_provision_branch()
 
-        # In branch: move the cable's B end from interface B to interface C
-        request.id = uuid.uuid4()
-        with activate_branch(branch), event_tracking(request):
-            cable = Cable.objects.get(id=cable_id)
-            cable.snapshot()
-            cable.b_terminations = [Interface.objects.get(id=interface_c.id)]
-            cable.save()
-
+        with activate_branch(branch):
+            cable = self._connect([ports.a1], [ports.b1])
         branch.merge(user=self.user, commit=True)
-
-        self._assert_cable_path(interface_a.id, interface_c.id)
-        self._assert_cable_path(interface_c.id, interface_a.id)
-        self.assertIsNone(Interface.objects.get(id=interface_b.id).path)
 
         branch.revert(user=self.user, commit=True)
 
-        self._assert_cable_path(interface_a.id, interface_b.id)
-        self._assert_cable_path(interface_b.id, interface_a.id)
-        self.assertIsNone(Interface.objects.get(id=interface_c.id).path)
+        self.assertFalse(Cable.objects.filter(id=cable.id).exists())
+        self._assert_terminations(cable)
+        self._assert_endpoint(ports.a1)
+        self._assert_endpoint(ports.b1)
+        self.assertEqual(CablePath.objects.count(), 0)
+
+    def test_merge_cable_create_with_edited_endpoint(self):
+        """
+        Merge a branch which creates an interface, cables it, then edits it again.
+
+        Cabling back-fills the new interface's _path with a branch-local CablePath ID, which the
+        later edit captures in its change record; the merge must not replay that ID into main.
+        Refs: #684
+        """
+        ports = self._create_interfaces()
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            with event_tracking(self._make_request()):
+                a3 = Interface.objects.create(
+                    device=Device.objects.get(id=ports.a1.device_id), name='eth2', type='1000base-t'
+                )
+            cable = self._connect([a3], [ports.b1])
+            with event_tracking(self._make_request()):
+                a3 = Interface.objects.get(id=a3.id)
+                a3.snapshot()
+                a3.description = 'Edited after cabling'
+                a3.save()
+        self.assertFalse(Interface.objects.filter(id=a3.id).exists())
+
+        branch.merge(user=self.user, commit=True)
+
+        self.assertEqual(Interface.objects.get(id=a3.id).description, 'Edited after cabling')
+        self._assert_connected(cable, a3, ports.b1)
+        self.assertEqual(CablePath.objects.count(), 2)
+
+    def test_merge_cable_delete(self):
+        """Merge a branch which deletes an existing cable."""
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1], [ports.b1])
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._delete_cable(cable)
+
+        branch.merge(user=self.user, commit=True)
+
+        self.assertFalse(Cable.objects.filter(id=cable.id).exists())
+        self._assert_terminations(cable)
+        self._assert_endpoint(ports.a1)
+        self._assert_endpoint(ports.b1)
+        self.assertEqual(CablePath.objects.count(), 0)
+
+    def test_revert_cable_delete(self):
+        """
+        Revert a merged branch which deleted an existing cable.
+
+        Restoring the Cable re-saves it with no terminations assigned in memory, so its save()
+        traces nothing; the paths are recreated by update_dependent_objects() once the
+        CableTerminations have been restored as well. Refs: #469
+        """
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1], [ports.b1])
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._delete_cable(cable)
+        branch.merge(user=self.user, commit=True)
+
+        branch.revert(user=self.user, commit=True)
+
+        self._assert_connected(cable, ports.a1, ports.b1)
+        self.assertEqual(CablePath.objects.count(), 2)
+
+    def _merge_cable_move(self, move_a, move_b):
+        """Merge a branch which moves the A and/or B end of an existing cable to another interface."""
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1], [ports.b1])
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit_cable(
+                cable, a_terminations=[ports.a2] if move_a else None, b_terminations=[ports.b2] if move_b else None
+            )
+
+        branch.merge(user=self.user, commit=True)
+
+        new_a, new_b = (ports.a2 if move_a else ports.a1), (ports.b2 if move_b else ports.b1)
+        self._assert_connected(cable, new_a, new_b)
+        for old in {ports.a1, ports.b1} - {new_a, new_b}:
+            self._assert_endpoint(old)
+        self.assertEqual(CablePath.objects.count(), 2)
+
+    def _revert_cable_move(self, move_a, move_b):
+        """Revert a merged branch which moved the A and/or B end of an existing cable."""
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1], [ports.b1])
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit_cable(
+                cable, a_terminations=[ports.a2] if move_a else None, b_terminations=[ports.b2] if move_b else None
+            )
+        branch.merge(user=self.user, commit=True)
+
+        branch.revert(user=self.user, commit=True)
+
+        self._assert_connected(cable, ports.a1, ports.b1)
+        self._assert_endpoint(ports.a2)
+        self._assert_endpoint(ports.b2)
+        self.assertEqual(CablePath.objects.count(), 2)
+
+    def test_merge_cable_move_a_end(self):
+        self._merge_cable_move(move_a=True, move_b=False)
+
+    def test_revert_cable_move_a_end(self):
+        self._revert_cable_move(move_a=True, move_b=False)
+
+    def test_merge_cable_move_b_end(self):
+        """Refs: #469"""
+        self._merge_cable_move(move_a=False, move_b=True)
+
+    def test_revert_cable_move_b_end(self):
+        """Refs: #469"""
+        self._revert_cable_move(move_a=False, move_b=True)
+
+    def test_merge_cable_move_both_ends(self):
+        self._merge_cable_move(move_a=True, move_b=True)
+
+    def test_revert_cable_move_both_ends(self):
+        self._revert_cable_move(move_a=True, move_b=True)
+
+    def _merge_cable_clear(self, end):
+        """Merge a branch which detaches one end of an existing cable, leaving it half-terminated."""
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1], [ports.b1])
+        branch = self._create_and_provision_branch()
+
+        cleared, kept, kept_end = (ports.a1, ports.b1, 'B') if end == 'A' else (ports.b1, ports.a1, 'A')
+
+        def assert_half_terminated():
+            self._assert_terminations(cable, **{kept_end.lower(): [(kept, None, None)]})
+            self._assert_endpoint(kept, cable=cable, end=kept_end, peers=[])
+            self._assert_endpoint(cleared)
+            self.assertEqual(CablePath.objects.count(), 1)
+
+        with activate_branch(branch):
+            self._edit_cable(cable, **{f'{end.lower()}_terminations': []})
+            # NetBox traced this itself, so the merge below must reproduce it exactly
+            assert_half_terminated()
+
+        branch.merge(user=self.user, commit=True)
+
+        assert_half_terminated()
+
+    def _revert_cable_clear(self, end):
+        """Revert a merged branch which detached one end of an existing cable."""
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1], [ports.b1])
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit_cable(cable, **{f'{end.lower()}_terminations': []})
+        branch.merge(user=self.user, commit=True)
+
+        branch.revert(user=self.user, commit=True)
+
+        self._assert_connected(cable, ports.a1, ports.b1)
+        self.assertEqual(CablePath.objects.count(), 2)
+
+    def test_merge_cable_clear_a_end(self):
+        self._merge_cable_clear('A')
+
+    def test_revert_cable_clear_a_end(self):
+        self._revert_cable_clear('A')
+
+    def test_merge_cable_clear_b_end(self):
+        self._merge_cable_clear('B')
+
+    def test_revert_cable_clear_b_end(self):
+        self._revert_cable_clear('B')
+
+    def test_merge_cable_set_profile(self):
+        """
+        Merge a branch which assigns a profile to an existing unprofiled cable.
+
+        Changing the profile recreates both CableTerminations, so each interface's cable fields are
+        cleared and then restored with a connector and positions within the branch. Refs: #688
+        """
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1], [ports.b1])
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit_cable(cable, profile=CableProfileChoices.SINGLE_1C1P)
+
+        branch.merge(user=self.user, commit=True)
+
+        self.assertEqual(Cable.objects.get(id=cable.id).profile, CableProfileChoices.SINGLE_1C1P)
+        self._assert_connected(cable, ports.a1, ports.b1, connector=1, positions=[1])
+        self.assertEqual(CablePath.objects.count(), 2)
+
+    def test_revert_cable_set_profile(self):
+        """Revert a merged branch which assigned a profile to an existing unprofiled cable. Refs: #688"""
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1], [ports.b1])
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit_cable(cable, profile=CableProfileChoices.SINGLE_1C1P)
+        branch.merge(user=self.user, commit=True)
+
+        branch.revert(user=self.user, commit=True)
+
+        self.assertEqual(Cable.objects.get(id=cable.id).profile, '')
+        self._assert_connected(cable, ports.a1, ports.b1)
+        self.assertEqual(CablePath.objects.count(), 2)
+
+    def test_merge_cable_reorder_terminations(self):
+        """
+        Merge a branch which swaps the A-end terminations of a 2C1P trunk cable.
+
+        A termination's connector follows its position in the end's list, so the swap rewires the
+        cable without changing the set of interfaces it connects.
+        """
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1, ports.a2], [ports.b1, ports.b2], profile=CableProfileChoices.TRUNK_2C1P)
+        self._assert_trunk(cable, [ports.a1, ports.a2], [ports.b1, ports.b2])
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit_cable(cable, a_terminations=[ports.a2, ports.a1])
+
+        branch.merge(user=self.user, commit=True)
+
+        self._assert_trunk(cable, [ports.a2, ports.a1], [ports.b1, ports.b2])
+        self.assertEqual(CablePath.objects.count(), 4)
+
+    def test_revert_cable_reorder_terminations(self):
+        """Revert a merged branch which swapped the A-end terminations of a 2C1P trunk cable."""
+        ports = self._create_interfaces()
+        cable = self._connect([ports.a1, ports.a2], [ports.b1, ports.b2], profile=CableProfileChoices.TRUNK_2C1P)
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit_cable(cable, a_terminations=[ports.a2, ports.a1])
+        branch.merge(user=self.user, commit=True)
+
+        branch.revert(user=self.user, commit=True)
+
+        self._assert_trunk(cable, [ports.a1, ports.a2], [ports.b1, ports.b2])
+        self.assertEqual(CablePath.objects.count(), 4)
 
     def _create_ports(self, device):
         """Helper to create a front/rear port pair on a device, with no mapping between them."""
@@ -1845,6 +2020,16 @@ class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
     """Test cases for Branch merge using iterative merge strategy."""
 
     MERGE_STRATEGY = BranchMergeStrategyChoices.ITERATIVE
+
+    @unittest.expectedFailure
+    def test_revert_cable_create(self):
+        """The Cable UPDATE recorded on creation has no prechange_data, so its undo nulls every field. Refs: #694"""
+        super().test_revert_cable_create()
+
+    @unittest.expectedFailure
+    def test_revert_cable_delete(self):
+        """Reverse-chronological undo restores each interface's cable FK before the cable itself. Refs: #693"""
+        super().test_revert_cable_delete()
 
 
 class DiffForMergeTests(SimpleTestCase):
