@@ -32,12 +32,15 @@
         {% blocktrans %}Only dry runs are permitted.{% endblocktrans %}
       </div>
     {% endif %}
-    {% if conflicts_table.rows %}
+    {% if conflicts_count %}
       <div class="alert alert-danger">
         <i class="mdi mdi-alert-circle"></i>
-        {% blocktrans with count=conflicts_table.rows|length %}
-          The following {{ count }} conflicts were found. Applying these changes will overwrite data that has
-          been modified since the branch was created. Please confirm that each of these changes is desired.
+        {% blocktrans count count=conflicts_count %}
+          {{ count }} conflict was found. Applying these changes will overwrite data that has been modified
+          since the branch was created. Please review it and acknowledge it below before proceeding.
+        {% plural %}
+          {{ count }} conflicts were found. Applying these changes will overwrite data that has been modified
+          since the branch was created. Please review them and acknowledge them below before proceeding.
         {% endblocktrans %}
       </div>
     {% else %}
@@ -57,12 +60,25 @@
           enctype="multipart/form-data"
           class="object-edit--with-sticky-actions">
       {% csrf_token %}
-      {% if conflicts_table.rows %}
+      {% if conflicts_count %}
         <div class="card">
           <div class="htmx-container table-responsive" id="object_list">
             {% include 'htmx/table.html' with table=conflicts_table %}
           </div>
         </div>
+        {% if conflicts_hidden %}
+          {% url 'plugins:netbox_branching:branch_diff' pk=branch.pk as diff_url %}
+          <div class="alert alert-warning mt-3">
+            <i class="mdi mdi-alert"></i>
+            {% blocktrans count count=conflicts_hidden %}
+              Not all conflicts are shown. There is {{ count }} more conflict not listed above.
+              <a href="{{ diff_url }}?has_conflicts=True">View all conflicts</a>.
+            {% plural %}
+              Not all conflicts are shown. There are {{ count }} more conflicts not listed above.
+              <a href="{{ diff_url }}?has_conflicts=True">View all conflicts</a>.
+            {% endblocktrans %}
+          </div>
+        {% endif %}
       {% endif %}
       <div class="row">
         <div class="col col-md-6 offset-md-3">{% render_form form %}</div>

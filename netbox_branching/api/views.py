@@ -15,6 +15,7 @@ from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired
 from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
 from netbox_branching import filtersets
 from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.constants import CONFLICTS_PREVIEW_LIMIT
 from netbox_branching.jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
 from netbox_branching.utilities import get_branchable_object_types
@@ -40,12 +41,14 @@ class BranchViewSet(ModelViewSet):
         if serializer.validated_data.get('acknowledge_conflicts', False):
             return None
         conflicts = ChangeDiff.objects.filter(branch=branch, conflicts__isnull=False).select_related('object_type')
-        if not conflicts.exists():
+        if not (conflict_count := conflicts.count()):
             return None
+        # List a bounded sample; the full set is available from the paginated changes endpoint
         return Response(
             {
                 'detail': 'All conflicts must be acknowledged before this action can proceed.',
-                'conflicts': serializers.ConflictSummarySerializer(conflicts, many=True).data,
+                'conflict_count': conflict_count,
+                'conflicts': serializers.ConflictSummarySerializer(conflicts[:CONFLICTS_PREVIEW_LIMIT], many=True).data,
             },
             status=status.HTTP_409_CONFLICT,
         )

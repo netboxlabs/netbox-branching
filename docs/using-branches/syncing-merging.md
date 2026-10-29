@@ -116,7 +116,7 @@ In the event an object has been modified in both your branch _and_ in main in a 
 
 ![Screenshot: Branch conflicts](../media/screenshots/branch-conflicts.png)
 
-The good news is that you will be able to proceed with synchronizing or merging your branch even if conflicts exist, however you will need to acknowledge each such conflict to ensure that overwriting the relevant data in your branch with the data from main is acceptable. Do this by selecting each conflict before continuing with the merge.
+The good news is that you will be able to proceed with synchronizing or merging your branch even if conflicts exist, however you will need to acknowledge each such conflict to ensure that overwriting the relevant data in your branch with the data from main is acceptable. Do this by checking **Acknowledge conflicts** before continuing. The form lists the 25 most recently updated conflicts; the branch's **Diff** tab lists all of them.
 
 Alternatively, if the conflicting changes are problematic, you can go back and make the necessary changes in main to avoid overwriting data within your branch.
 

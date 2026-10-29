@@ -12,6 +12,7 @@ __all__ = (
     'BRANCH_ACTIONS',
     'BRANCH_HEADER',
     'BRANCH_HEADER_META',
+    'CONFLICTS_PREVIEW_LIMIT',
     'COOKIE_NAME',
     'EXEMPT_MODELS',
     'EXEMPT_PATHS',
@@ -21,6 +22,9 @@ __all__ = (
     'SKIP_INDEXES',
 )
 
+
+# Maximum number of conflicts listed on the sync/merge pages and in API 409 responses
+CONFLICTS_PREVIEW_LIMIT = 25
 
 # HTTP cookie
 COOKIE_NAME = 'active_branch'

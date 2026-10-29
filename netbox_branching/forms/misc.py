@@ -1,4 +1,7 @@
+import hashlib
+
 from django import forms
+from django.db.models import Count, Max
 from django.utils.translation import gettext_lazy as _
 
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
@@ -14,6 +17,19 @@ __all__ = (
     'MigrateBranchForm',
     'RecoverBranchForm',
 )
+
+
+def get_conflicts_token(branch):
+    """
+    Return a fingerprint of the branch's conflicting ChangeDiffs, or an empty string if there are none.
+    """
+    stats = ChangeDiff.objects.filter(branch=branch, conflicts__isnull=False).aggregate(
+        count=Count('pk'), max_pk=Max('pk'), last_updated=Max('last_updated')
+    )
+    if not stats['count']:
+        return ''
+    fingerprint = f'{stats["count"]}:{stats["max_pk"]}:{stats["last_updated"].isoformat()}'
+    return hashlib.sha256(fingerprint.encode()).hexdigest()[:32]
 
 
 class DescriptiveRadioSelect(forms.RadioSelect):
@@ -34,9 +50,12 @@ class DescriptiveRadioSelect(forms.RadioSelect):
 class BaseBranchActionForm(forms.Form):
     """Base form for branch actions (sync, merge, revert)."""
 
-    pk = forms.ModelMultipleChoiceField(
-        queryset=ChangeDiff.objects.all(), required=False, widget=forms.MultipleHiddenInput()
+    acknowledge_conflicts = forms.BooleanField(
+        required=False,
+        label=_('Acknowledge conflicts'),
+        help_text=_('Confirm that the conflicting changes listed above may overwrite data in the target.'),
     )
+    conflicts_token = forms.CharField(required=False, widget=forms.HiddenInput())
     commit = forms.BooleanField(
         required=False,
         label=_('Commit changes'),
@@ -50,14 +69,30 @@ class BaseBranchActionForm(forms.Form):
         if not allow_commit:
             self.fields['commit'].disabled = True
 
+        # The token identifies the set of conflicts shown to the user, so acknowledging them doesn't
+        # require submitting every conflicting ChangeDiff
+        self.current_conflicts_token = get_conflicts_token(branch)
+        if self.current_conflicts_token:
+            self.fields['conflicts_token'].initial = self.current_conflicts_token
+        else:
+            del self.fields['acknowledge_conflicts']
+            del self.fields['conflicts_token']
+
     def clean(self):
         super().clean()
 
-        # Verify that any ChangeDiffs which have conflicts have been acknowledged
-        conflicted_diffs = ChangeDiff.objects.filter(branch=self.branch, conflicts__isnull=False)
-        selected_diffs = self.cleaned_data.get('pk', [])
-        if conflicted_diffs and not set(conflicted_diffs).issubset(selected_diffs):
-            raise forms.ValidationError(_('All conflicts must be acknowledged in order to merge the branch.'))
+        if not self.current_conflicts_token:
+            return self.cleaned_data
+
+        if self.cleaned_data.get('conflicts_token') != self.current_conflicts_token:
+            # Re-render with the current token so the user can acknowledge the updated conflicts
+            self.data = self.data.copy()
+            self.data['conflicts_token'] = self.current_conflicts_token
+            raise forms.ValidationError(
+                _('The conflicts for this branch have changed. Please review them again before proceeding.')
+            )
+        if not self.cleaned_data.get('acknowledge_conflicts'):
+            raise forms.ValidationError(_('All conflicts must be acknowledged in order to proceed.'))
 
         return self.cleaned_data
 
