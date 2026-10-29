@@ -43,6 +43,7 @@ class CollapsedChange:
         self.postchange_data = {}
         self.last_change = None  # The most recent ObjectChange (for metadata)
         self.synthetic = False  # True for UPDATEs injected by cycle breaking
+        self.touched_fields = set()  # Fields altered by any individual UPDATE, even if net unchanged
 
         # Dependencies for ordering
         self.depends_on = set()  # Set of keys this change depends on
@@ -85,6 +86,8 @@ class CollapsedChange:
 
     def _add_change_update(self, change, logger):
         """Handle UPDATE action."""
+        pre, post = change.prechange_data or {}, change.postchange_data or {}
+        self.touched_fields.update(k for k in pre.keys() | post.keys() if pre.get(k) != post.get(k))
         if self.final_action is None:
             self.final_action = ActionType.UPDATE
             self._set_initial_data(change)
@@ -137,6 +140,8 @@ class CollapsedChange:
         )
         # Use last_change for migrate() to have the correct metadata
         dummy_change.pk = self.last_change.pk
+        if self.final_action == ActionType.UPDATE:
+            dummy_change.replay_fields = self.touched_fields
         return dummy_change
 
 
@@ -204,6 +209,7 @@ class SquashMergeStrategy(MergeStrategy):
 
         # Apply collapsed changes in order
         logger.info(f'Applying {len(ordered_changes)} collapsed changes...')
+        applied_pks_by_model = {}
         for i, collapsed in enumerate(ordered_changes, 1):
             model_class = collapsed.model_class
             models.add(model_class)
@@ -237,6 +243,13 @@ class SquashMergeStrategy(MergeStrategy):
                     )
                     raise
 
+            # An update counts too: re-terminating a Cable leaves its paths stale until it is retraced
+            if collapsed.final_action in (ActionType.CREATE, ActionType.UPDATE):
+                applied_pks_by_model.setdefault(model_class, []).append(collapsed.key[1])
+
+        # Run outside event_tracking(): this reconciles derived state, and is not itself a change
+        self._update_dependent_objects(applied_pks_by_model, logger)
+
         # Perform cleanup tasks
         self._clean(models)
 
@@ -257,6 +270,7 @@ class SquashMergeStrategy(MergeStrategy):
 
         # Undo collapsed changes in dependency order
         logger.info(f'Undoing {len(ordered_changes)} collapsed changes in dependency order...')
+        restored_pks_by_model = {}
         for i, collapsed in enumerate(ordered_changes, 1):
             model_class = collapsed.model_class
             models.add(model_class)
@@ -275,6 +289,13 @@ class SquashMergeStrategy(MergeStrategy):
                 # Create a dummy ObjectChange from the collapsed change and undo it
                 dummy_change = collapsed.generate_object_change()
                 dummy_change.undo(branch, using=DEFAULT_DB_ALIAS, logger=logger)
+
+            # Undoing a delete restores the object as an applied create does; undoing an update can re-terminate
+            if collapsed.final_action in (ActionType.DELETE, ActionType.UPDATE):
+                restored_pks_by_model.setdefault(model_class, []).append(collapsed.key[1])
+
+        # Run outside event_tracking(): this reconciles derived state, and is not itself a change
+        self._update_dependent_objects(restored_pks_by_model, logger)
 
         # Perform cleanup tasks
         self._clean(models)

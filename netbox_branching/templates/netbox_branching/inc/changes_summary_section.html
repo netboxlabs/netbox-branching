@@ -1,0 +1,27 @@
+{% load helpers %}
+{% if items %}
+  <div class="list-group-item">
+    <a class="d-flex justify-content-between align-items-center text-decoration-none text-body"
+       data-bs-toggle="collapse"
+       href="#{{ prefix }}-{{ kind }}"
+       role="button"
+       aria-expanded="{{ expanded|yesno:'true,false' }}"
+       aria-controls="{{ prefix }}-{{ kind }}">
+      <span>{{ label }}</span>
+      <span class="badge bg-{{ color }} rounded-pill text-white">{{ total }}</span>
+    </a>
+    <div class="collapse{% if expanded %} show{% endif %}"
+         id="{{ prefix }}-{{ kind }}">
+      <table class="table table-hover table-borderless mb-0">
+        <tbody>
+          {% for ct, count in items.items %}
+            <tr>
+              <td>{{ ct.model_class|meta:"verbose_name_plural"|bettertitle }}</td>
+              <td class="text-end">{{ count }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+{% endif %}

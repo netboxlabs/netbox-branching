@@ -1,0 +1,18 @@
+{% load i18n %}
+<div>
+  {% if value %}
+    <span class="text-red"><i class="mdi mdi-alert"></i></span>
+    <a href="{% url 'plugins:netbox_branching:branch_diff' pk=object.pk %}?has_conflicts=True"
+       class="text-red">
+      {% blocktrans count count=value %}{{ count }} conflict found{% plural %}{{ count }} conflicts found{% endblocktrans %}
+    </a>
+  {% else %}
+    <span class="text-green">
+      <i class="mdi mdi-check-bold"></i>
+      {% trans "No field-level conflicts found" %}
+    </span>
+    <div class="small text-muted">
+      {% trans "Note: Database constraint violations (e.g. duplicate names or slugs) can only be detected during merge." %}
+    </div>
+  {% endif %}
+</div>

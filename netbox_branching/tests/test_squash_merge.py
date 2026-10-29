@@ -1051,10 +1051,3 @@ class SquashMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
             Site.objects.filter(id=site_id).exists(),
             msg='UPDATE+DELETE must collapse to a single DELETE; main row remains',
         )
-
-    def _make_request(self):
-        """Build a per-test request for event_tracking()."""
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-        return request

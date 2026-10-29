@@ -21,7 +21,7 @@ from netbox.utils import register_request_processor
 
 from .constants import (
     _FILE_NOT_FOUND_EXCEPTIONS,
-    BRANCH_HEADER,
+    BRANCH_HEADER_META,
     COOKIE_NAME,
     EXEMPT_MODELS,
     EXEMPT_PATHS,
@@ -72,6 +72,7 @@ __all__ = (
     'register_branching_resolver',
     'register_objectchange_field_migrator',
     'resolve_changes_summary',
+    'strip_schema_local_references',
     'supports_branching',
     'track_branch_connection',
     'update_object',
@@ -291,6 +292,25 @@ def supports_branching(model):
         *get_plugin_config('netbox_branching', 'exempt_models', []),
     ]
     return label not in exempt_models and wildcard_label not in exempt_models
+
+
+def strip_schema_local_references(model, data):
+    """
+    Return a copy of serialized object data without FKs to branched but non-change-logged models (e.g. CablePath),
+    whose row IDs are local to the schema that recorded them. (#684)
+    """
+    from netbox.models.features import ChangeLoggingMixin
+
+    data = dict(data)
+    for field in model._meta.concrete_fields:
+        related_model = field.related_model if field.many_to_one else None
+        if (
+            related_model is not None
+            and not issubclass(related_model, ChangeLoggingMixin)
+            and supports_branching(related_model)
+        ):
+            data.pop(field.name, None)
+    return data
 
 
 def get_tables_to_replicate():
@@ -589,10 +609,11 @@ def get_active_branch(request):
     branch. Callers which cannot refuse the request must treat both exceptions as "no branch".
     """
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
-    if is_api_request(request) and BRANCH_HEADER in request.headers:
+    # A background job receives a NetBoxFakeRequest, which has no headers attribute (#675).
+    if is_api_request(request) and BRANCH_HEADER_META in request.META:
         user = _get_request_user(request)
         try:
-            branch = get_branches_for_user(user).get(schema_id=request.headers.get(BRANCH_HEADER))
+            branch = get_branches_for_user(user).get(schema_id=request.META[BRANCH_HEADER_META])
         except ObjectDoesNotExist:
             if not user.is_authenticated:
                 return None  # Leave the view to report the missing or rejected credentials
@@ -602,6 +623,7 @@ def get_active_branch(request):
         return branch
 
     # Branch activated/deactivated by URL query parameter
+    # Requests from background jobs have no message storage (#675).
     if QUERY_PARAM in request.GET:
         if schema_id := request.GET.get(QUERY_PARAM):
             branch = get_branches_for_user(_get_request_user(request)).get(schema_id=schema_id)
@@ -609,7 +631,7 @@ def get_active_branch(request):
                 if schema_id != request.COOKIES.get(COOKIE_NAME) and not getattr(
                     request, '_branch_activation_notified', False
                 ):
-                    messages.success(request, _('Activated branch {branch}').format(branch=branch))
+                    messages.success(request, _('Activated branch {branch}').format(branch=branch), fail_silently=True)
                     request._branch_activation_notified = True
                 return branch
             if not getattr(request, '_branch_activation_notified', False):
@@ -618,11 +640,12 @@ def get_active_branch(request):
                     _('Branch {branch} is not ready for use (status: {status})').format(
                         branch=branch, status=branch.status
                     ),
+                    fail_silently=True,
                 )
                 request._branch_activation_notified = True
             return None
         if not getattr(request, '_branch_activation_notified', False):
-            messages.success(request, _('Deactivated branch'))
+            messages.success(request, _('Deactivated branch'), fail_silently=True)
             request._branch_activation_notified = True
         request.COOKIES.pop(COOKIE_NAME, None)  # Delete cookie if set
         return None

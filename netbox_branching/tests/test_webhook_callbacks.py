@@ -9,10 +9,14 @@ and may apply branch-only changes back to main.
 
 from unittest import mock
 
-from django.test import TestCase
+from django.urls import reverse
 
+from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.models import Branch
 from netbox_branching.webhook_callbacks import set_active_branch
+from utilities.testing import TestCase
+
+from .utils import fake_request
 
 
 class SetActiveBranchTestCase(TestCase):
@@ -49,3 +53,17 @@ class SetActiveBranchTestCase(TestCase):
                 },
             },
         )
+
+    def test_returns_branch_attrs_for_fake_api_request_with_header(self):
+        """
+        Webhooks for REST API changes render in a worker from a NetBoxFakeRequest, which has no
+        `headers` attribute (#675).
+        """
+        branch = Branch(name='Webhook Branch')
+        branch.status = BranchStatusChoices.READY  # Fake provisioning
+        branch.save(provision=False)
+        request = fake_request(self.user, reverse('dcim-api:site-list'), headers={'x-netbox-branch': branch.schema_id})
+
+        result = set_active_branch(object_type=None, event_type=None, data=None, request=request)
+
+        self.assertEqual(result['active_branch']['schema_id'], branch.schema_id)

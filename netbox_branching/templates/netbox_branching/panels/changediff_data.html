@@ -1,0 +1,18 @@
+{% extends "ui/panels/_base.html" %}
+{% load helpers %}
+{% load i18n %}
+{% block panel_content %}
+  <div class="card-body p-0">
+    {% if data %}
+      {% spaceless %}
+        <pre class="change-data m-0">
+          {% for k, v in data.items %}
+            <span {% if k in altered %} class="{{ style }}{% if conflicts and k in conflicts %} conflict{% endif %}"{% endif %}>{{ k }}: {{ v|json }}</span>
+          {% endfor %}
+        </pre>
+      {% endspaceless %}
+    {% else %}
+      <span class="text-muted p-2 d-block">{% trans "None" %}</span>
+    {% endif %}
+  </div>
+{% endblock panel_content %}

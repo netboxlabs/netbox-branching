@@ -69,8 +69,13 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 │   │   ├── branch_buttons.py
 │   │   └── branch_filters.py
 │   ├── templates/netbox_branching/
+│   │   ├── attrs/             — Templates for custom ObjectAttribute renderers.
 │   │   ├── buttons/
-│   │   └── inc/
+│   │   ├── inc/
+│   │   └── panels/            — Templates for the declarative-layout panels in ui/.
+│   ├── ui/
+│   │   ├── attrs.py           — ObjectAttribute subclasses used by the Branch panel.
+│   │   └── panels.py          — Panel subclasses for the branch, change diff and merge report layouts.
 │   └── tests/
 │       ├── utils.py                    — Shared test utilities.
 │       ├── test_api.py
@@ -260,7 +265,8 @@ GitHub Actions workflows in `.github/workflows/`:
 
 - **`test.yml`** — Runs on every PR. Two jobs, the second gated on the first:
   - *Lint*: Python 3.12, runs the full `pre-commit` stack (which includes `mkdocs build`).
-  - *Test*: Matrix of Python 3.12, 3.13, 3.14 against NetBox `main` only (a pinned release would break on features gated on unreleased NetBox changes). Spins up PostgreSQL + Redis services, installs the plugin editable, loads `testing/configuration.py` via `NETBOX_CONFIGURATION` + `PYTHONPATH` (no symlink), and runs `python netbox/manage.py test netbox_branching.tests --keepdb`. It can be pointed at another ref with a `test-against:<ref>` PR label or a `workflow_dispatch` input. One leg additionally collects coverage. The suite is not run with `--parallel`.
+  - *Test*: Matrix of Python 3.12, 3.13, 3.14 against NetBox `main` only (a pinned release would break on features gated on unreleased NetBox changes), each split into three shards that run on separate runners (`merge-squash`, `merge-iterative`, and `rest`; the module lists live in `TEST_SHARDS` in the workflow, and `rest` runs every module the other two don't claim). Each shard spins up PostgreSQL + Redis services, installs the plugin editable, loads `testing/configuration.py` via `NETBOX_CONFIGURATION` + `PYTHONPATH` (no symlink), and runs `python netbox/manage.py test <shard modules> --keepdb`. It can be pointed at another ref with a `test-against:<ref>` PR label or a `workflow_dispatch` input. The Python 3.14 shards collect coverage, which the `coverage` job combines into one report. The suite is not run with `--parallel`: provisioning serialises on PostgreSQL DDL, so in-runner workers barely help.
+  - *Coverage report*: combines the per-shard coverage data files and prints the report.
 - **`release.yaml`** — Driven by pushing a `v*` tag, not by publishing a GitHub release, so pre-releases follow the same automated path as final releases. Builds sdist + wheel with `python -m build`, runs `twine check`, verifies the tag against the version declared in `pyproject.toml`, `AppConfig.version` and the wheel metadata (`scripts/verify_release_tag.py`), verifies the wheel's contents (`scripts/verify_wheel_contents.py`), rebuilds a wheel from the sdist, and smoke-tests a clean `--no-deps` install whose installed tree is held to the same content checks as the wheel. Only then does it publish to PyPI using OIDC trusted publishing and attach the artifacts to the GitHub release, drafting an empty one (marked as a pre-release when PEP 440 says the version is one) if the tag doesn't already have a release. Release notes are never generated — they are written by hand. Also runs — build and verification only, no publish — on pull requests that touch packaging inputs, which catches a version bump applied to only one of the two declaration sites. A `workflow_dispatch` from a `v*` tag publishes to Test PyPI instead, as an opt-in rehearsal.
 - **`claude-review.yml`** — Claude Code automation hook; triggers on issue/PR comments mentioning `@claude`.
 
@@ -289,8 +295,9 @@ The scaffold targets *private* plugins, so a few surfaces are deliberately diver
 | `.yamllint` | The scaffold ships the `yamllint` hook but renders no config, so this one is adapted from the scaffold's own root config. |
 | `.github/workflows/test.yml` matrix | Tests NetBox `main` only. The scaffold adds `netbox_test_min_ref` / `netbox_test_max_ref` legs, which break as soon as a feature depends on unreleased NetBox changes. Coverage runs on the `main` leg. |
 
-The scaffold's `ui/` and `graphql/` stub packages are intentionally absent — this plugin has
-neither surface. A `copier update` will offer to add them; decline.
+The scaffold's `graphql/` stub package is intentionally absent — this plugin has no GraphQL
+surface. A `copier update` will offer to add it; decline. The `ui/` package is maintained by hand
+(see below), so reject the scaffold's stub for it too.
 
 ## Common Tasks
 
@@ -350,6 +357,9 @@ To rehearse a publish without touching production PyPI, run the workflow manuall
 - **Plugin code stays in the plugin package.** Don't monkey-patch NetBox.
 - **Use NetBox's mixins and base classes** (`PrimaryModel`, `BaseModel`, `NetBoxModelSerializer`, `NetBoxModelFilterSet`) rather than re-implementing behaviour.
 - **All UI views use `@register_model_view`** from `utilities.views`. All views live in `views.py`.
+- **Detail views use declarative layouts.** `BranchView`, `ChangeDiffView` and `BranchJobReportView` declare a
+  `layout` built from `netbox.ui` panels plus the plugin's own `Panel` subclasses in `ui/panels.py`; the
+  per-model templates only override blocks the layout cannot express (alerts, extra control buttons, title).
 - **FK filters** must declare an explicit `<field>_id = ModelMultipleChoiceFilter(field_name='<field>', ...)` in the filterset; do not rely on `Meta.fields` to auto-generate `_id` variants.
 - **Signal receivers** for Django ORM events (`post_save`, `pre_delete`, etc.) live in `signal_receivers.py` and are imported in `AppConfig.ready()`.
 - **Branch operation signals** (pre/post lifecycle events) are defined in `signals.py` and documented for third-party use.

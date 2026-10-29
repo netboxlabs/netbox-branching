@@ -17,6 +17,7 @@ from netbox_branching.utilities import (
     diff_for_merge,
     full_clean_with_file_check,
     resolve_objectchange_field_migration,
+    strip_schema_local_references,
     update_object,
 )
 from utilities.querysets import RestrictedQuerySet
@@ -63,6 +64,9 @@ class ObjectChange(ObjectChange_):
     Proxy model for NetBox's ObjectChange.
     """
 
+    # Set by the squash strategy, see get_merge_data()
+    replay_fields = ()
+
     class Meta:
         proxy = True
 
@@ -87,10 +91,18 @@ class ObjectChange(ObjectChange_):
         whereas merging needs to drop removed nested JSON keys entirely. ``diff_for_merge``
         tracks those removals with the ``DELETED`` sentinel so ``update_object`` can apply
         them rather than leave stale ``None`` values behind. (#588, #592)
+
+        Fields in ``replay_fields`` are written from the target snapshot even when net unchanged, since a side effect
+        replayed earlier may have reset them; dicts are left to the nested diff to preserve sibling keys. (#688)
         """
+        source, target = self.prechange_data_clean, self.postchange_data_clean
         if reverse:
-            return diff_for_merge(self.postchange_data_clean, self.prechange_data_clean)
-        return diff_for_merge(self.prechange_data_clean, self.postchange_data_clean)
+            source, target = target, source
+        data = diff_for_merge(source, target)
+        for field in self.replay_fields:
+            if field not in data and field in target and not isinstance(target[field], dict):
+                data[field] = target[field]
+        return data
 
     def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None, skip_missing=False):
         """
@@ -105,10 +117,13 @@ class ObjectChange(ObjectChange_):
 
         # Creating a new object
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
+            # Rows of schema-local models are rebuilt in the destination, so the source's IDs are meaningless there.
+            # UPDATE and restore replay *_clean data, which drops private fields such as _path; only CREATE needs this.
+            data = strip_schema_local_references(model, self.postchange_data)
             if hasattr(model, 'deserialize_object'):
-                instance = model.deserialize_object(self.postchange_data, pk=self.changed_object_id)
+                instance = model.deserialize_object(data, pk=self.changed_object_id)
             else:
-                instance = deserialize_object(model, self.postchange_data, pk=self.changed_object_id)
+                instance = deserialize_object(model, data, pk=self.changed_object_id)
             full_clean_with_file_check(instance.object, logger)
 
             # For MPTT models, clear the tree fields and bypass the raw save path so

@@ -101,6 +101,9 @@ class BranchUpgradeTestCase(FastTeardownTransactionTestCase):
         """Create the schema and replay the gzipped SQL fixture into it."""
         with gzip.open(FIXTURE_PATH, 'rt', encoding='utf-8') as f:
             sql = f.read().replace(PLACEHOLDER, schema_name)
+        if connection.pg_version < 170000:
+            # pg_dump 17 emits transaction_timeout, which servers before PostgreSQL 17 reject
+            sql = sql.replace('SET transaction_timeout = 0;\n', '')
         with connection.cursor() as cursor:
             cursor.execute(f'CREATE SCHEMA "{schema_name}"')
             cursor.execute(sql)

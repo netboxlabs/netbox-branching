@@ -1,0 +1,27 @@
+{% extends "ui/panels/_base.html" %}
+{% load helpers %}
+{% load i18n %}
+{% block panel_content %}
+  <div class="list-group list-group-flush">
+    {% for entry in report_entries %}
+      <div class="list-group-item">
+        {% if entry.object_str or entry.model %}
+          <p class="mb-1 fw-semibold">
+            {% if entry.model %}
+              {% badge entry.model|title "secondary" %}
+            {% endif %}
+            {{ entry.object_str }}
+          </p>
+        {% endif %}
+        <ol class="mb-0">
+          {% for rec in entry.recommendations %}
+            <li value="{{ forloop.counter }}">{{ rec }}</li>
+            {% if not forloop.last %}
+              <li class="list-unstyled text-muted small fst-italic py-1">&mdash; {% trans "or" %} &mdash;</li>
+            {% endif %}
+          {% endfor %}
+        </ol>
+      </div>
+    {% endfor %}
+  </div>
+{% endblock panel_content %}
