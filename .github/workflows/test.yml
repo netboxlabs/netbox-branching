@@ -13,10 +13,13 @@
 #   editable so its tests package resolves from the source tree.
 #
 # NetBox ref override:
-#   A PR labelled `test-against:<ref>` swaps main for that ref;
-#   workflow_dispatch takes an explicit ref. Both let a PR be validated
-#   against an unreleased NetBox branch. All three sources are resolved and
-#   validated in one step, so the checkout consumes only its output.
+#   A PR labelled `test-against:<ref>` swaps main for that ref, so a PR can be
+#   validated against an unreleased NetBox branch. The matrix ref and the
+#   label are resolved and validated in one step, so the checkout consumes
+#   only its output. There is deliberately no workflow_dispatch ref input:
+#   it would run a caller-chosen NetBox ref in the default branch's context,
+#   where it can write to the Actions cache that later runs restore (CodeQL
+#   actions/cache-poisoning).
 #
 # Sharding:
 #   Each Python version runs the suite as several shards, one runner each, so
@@ -34,13 +37,6 @@
 name: Test
 
 "on":
-  workflow_dispatch:
-    inputs:
-      netbox_ref:
-        description: 'NetBox ref to checkout (branch, tag, or commit)'
-        required: false
-        default: 'main'
-        type: string
   pull_request:
   push:
     branches: [main]
@@ -151,16 +147,14 @@ jobs:
 
       - name: Resolve NetBox ref
         id: netbox-ref
-        # A `test-against:<ref>` PR label, or the workflow_dispatch input,
-        # overrides main.
+        # A `test-against:<ref>` PR label overrides main.
         env:
           MATRIX_REF: ${{ matrix.netbox-ref }}
-          INPUT_REF: ${{ inputs.netbox_ref }}
           LABELS: ${{ toJson(github.event.pull_request.labels.*.name) }}
         run: |
-          REF="${INPUT_REF:-$MATRIX_REF}"
-          if [[ -z "$INPUT_REF" && "$MATRIX_REF" == "main" ]]; then
-            # LABELS is `null` for push / workflow_dispatch events.
+          REF="$MATRIX_REF"
+          if [[ "$MATRIX_REF" == "main" ]]; then
+            # LABELS is `null` for push events.
             OVERRIDE=$(jq -r 'if type == "array" then .[] else empty end
               | select(startswith("test-against:")) | split(":")[1]' \
               <<<"$LABELS" | head -n1)
