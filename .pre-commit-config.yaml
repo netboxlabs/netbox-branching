@@ -69,10 +69,10 @@ repos:
 
   - repo: local
     hooks:
-      - id: mkdocs-build
+      - id: zensical-build
         name: "Build documentation"
-        description: "Build the documentation with mkdocs"
+        description: "Build the documentation with Zensical"
         files: '^(docs/|mkdocs\.yml$)'
-        entry: .hooks/mkdocs-build.sh
+        entry: zensical build --strict
         language: system
         pass_filenames: false
