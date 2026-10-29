@@ -403,6 +403,7 @@ class BaseBranchActionView(generic.ObjectView):
             'action_permitted': action_permitted,
             'conflicts_table': conflicts_table,
             'conflicts_count': conflicts_count,
+            'conflicts_hidden': conflicts_count - len(conflicts_table.rows),
             'changes_summary': self.get_action_summary(branch),
         }
 

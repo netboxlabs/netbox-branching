@@ -166,7 +166,7 @@ The plugin also exposes the following read-only endpoints:
 
 ## Syncing & Merging with Conflicts
 
-If conflicting changes exist on a branch (i.e. the same object has been modified in both main and the branch since the last sync), the `sync/` and `merge/` endpoints will return HTTP `409 Conflict` rather than enqueuing a job. The response body includes a `detail` message, the total `conflict_count`, and a `conflicts` list describing up to 50 of the most recently updated conflicting changes. To retrieve every conflict, query `/api/plugins/branching/changes/?branch_id=<id>&has_conflicts=True`, which is paginated:
+If conflicting changes exist on a branch (i.e. the same object has been modified in both main and the branch since the last sync), the `sync/` and `merge/` endpoints will return HTTP `409 Conflict` rather than enqueuing a job. The response body includes a `detail` message, the total `conflict_count`, and a `conflicts` list describing up to 25 of the most recently updated conflicting changes. To retrieve every conflict, query `/api/plugins/branching/changes/?branch_id=<id>&has_conflicts=True`, which is paginated:
 
 ```json title="Response (409 Conflict)"
 {

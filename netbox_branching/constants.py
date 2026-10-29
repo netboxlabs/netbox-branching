@@ -24,7 +24,7 @@ __all__ = (
 
 
 # Maximum number of conflicts listed on the sync/merge pages and in API 409 responses
-CONFLICTS_PREVIEW_LIMIT = 50
+CONFLICTS_PREVIEW_LIMIT = 25
 
 # HTTP cookie
 COOKIE_NAME = 'active_branch'

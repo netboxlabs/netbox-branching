@@ -314,8 +314,10 @@ class BranchActionConflictsTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.context['conflicts_count'], 3)
         self.assertEqual(len(response.context['conflicts_table'].rows), 2)
+        self.assertEqual(response.context['conflicts_hidden'], 1)
         content = response.content.decode()
         self.assertIn('3 conflicts were found', content)
+        self.assertIn('There is 1 more conflict not listed above', content)
         self.assertIn(
             reverse('plugins:netbox_branching:branch_diff', kwargs={'pk': self.branch.pk}) + '?has_conflicts=True',
             content,
