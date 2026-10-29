@@ -14,7 +14,7 @@
 - Django's built-in test runner (`django.test.TestCase`-based, run via `manage.py test`)
 - ruff for lint + format, plus djlint, codespell, yamllint and django-upgrade, all driven by
   pre-commit (`.pre-commit-config.yaml`; tool config lives in `pyproject.toml`)
-- mkdocs + mkdocs-material for user-facing docs
+- Zensical for user-facing docs (reads `mkdocs.yml`; NetBox core made the same move in 4.6)
 
 Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 
@@ -92,7 +92,7 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 │       ├── test_squash_merge.py
 │       ├── test_sync.py
 │       └── test_views.py
-├── docs/                      — mkdocs site.
+├── docs/                      — Zensical docs site.
 │   ├── models/                — Per-model documentation.
 │   ├── using-branches/        — User guides.
 │   └── development/           — Maintainer guides (releasing).
@@ -112,7 +112,7 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 ├── AGENTS.md                  — This file.
 ├── CLAUDE.md                  — Shim that pulls in this file.
 ├── COMPATIBILITY.md           — Plugin → NetBox version matrix.
-├── mkdocs.yml
+├── mkdocs.yml                 — Docs config (read by Zensical).
 └── pyproject.toml             — Plugin metadata, dependencies, and all tool config.
 ```
 
@@ -207,8 +207,8 @@ There is no Justfile/Makefile in this repo; commands are raw. Run the `manage.py
 | `python netbox/manage.py makemigrations netbox_branching` | Generate Django migrations after model changes |
 | `python netbox/manage.py migrate` | Apply migrations |
 | `python netbox/manage.py runserver` | Start NetBox locally with the plugin loaded |
-| `mkdocs serve` | Preview the user docs |
-| `mkdocs build` | Build static docs site |
+| `zensical serve` | Preview the user docs |
+| `zensical build --strict` | Build static docs site |
 | `python -m build` | Build sdist + wheel (matches the release workflow) |
 
 ## Development
@@ -264,7 +264,7 @@ After model changes, generate a migration with `python netbox/manage.py makemigr
 GitHub Actions workflows in `.github/workflows/`:
 
 - **`test.yml`** — Runs on every PR. Two jobs, the second gated on the first:
-  - *Lint*: Python 3.12, runs the full `pre-commit` stack (which includes `mkdocs build`).
+  - *Lint*: Python 3.12, runs the full `pre-commit` stack (which includes `zensical build`).
   - *Test*: Matrix of Python 3.12, 3.13, 3.14 against NetBox `main` only (a pinned release would break on features gated on unreleased NetBox changes), each split into three shards that run on separate runners (`merge-squash`, `merge-iterative`, and `rest`; the module lists live in `TEST_SHARDS` in the workflow, and `rest` runs every module the other two don't claim). Each shard spins up PostgreSQL + Redis services, installs the plugin editable, loads `testing/configuration.py` via `NETBOX_CONFIGURATION` + `PYTHONPATH` (no symlink), and runs `python netbox/manage.py test <shard modules> --keepdb`. It can be pointed at another ref with a `test-against:<ref>` PR label or a `workflow_dispatch` input. The Python 3.14 shards collect coverage, which the `coverage` job combines into one report. The suite is not run with `--parallel`: provisioning serialises on PostgreSQL DDL, so in-runner workers barely help.
   - *Coverage report*: combines the per-shard coverage data files and prints the report.
 - **`release.yaml`** — Driven by pushing a `v*` tag, not by publishing a GitHub release, so pre-releases follow the same automated path as final releases. Builds sdist + wheel with `python -m build`, runs `twine check`, verifies the tag against the version declared in `pyproject.toml`, `AppConfig.version` and the wheel metadata (`scripts/verify_release_tag.py`), verifies the wheel's contents (`scripts/verify_wheel_contents.py`), rebuilds a wheel from the sdist, and smoke-tests a clean `--no-deps` install whose installed tree is held to the same content checks as the wheel. Only then does it publish to PyPI using OIDC trusted publishing and attach the artifacts to the GitHub release, drafting an empty one (marked as a pre-release when PEP 440 says the version is one) if the tag doesn't already have a release. Release notes are never generated — they are written by hand. Also runs — build and verification only, no publish — on pull requests that touch packaging inputs, which catches a version bump applied to only one of the two declaration sites. A `workflow_dispatch` from a `v*` tag publishes to Test PyPI instead, as an opt-in rehearsal.
@@ -385,7 +385,7 @@ To rehearse a publish without touching production PyPI, run the workflow manuall
 
 - Plugin README: [`README.md`](./README.md)
 - Compatibility matrix: [`COMPATIBILITY.md`](./COMPATIBILITY.md)
-- User docs (mkdocs): [`docs/`](./docs/)
+- User docs (Zensical): [`docs/`](./docs/)
 - Plugin development guide: [`docs/plugin-development.md`](./docs/plugin-development.md)
 - NetBox plugin docs: <https://netboxlabs.com/docs/netbox/plugins/>
 - Project scaffold: <https://github.com/netboxlabs/netbox-plugin-scaffold>
