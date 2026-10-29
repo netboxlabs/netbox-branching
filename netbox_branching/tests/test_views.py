@@ -279,6 +279,87 @@ class BranchActionViewTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
 
 
+class BranchActionConflictsTestCase(TestCase):
+    """
+    Cover conflict acknowledgment on the sync/merge confirmation pages (#713).
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        cls.superuser = User.objects.create_user(username='conflictview_super', is_superuser=True)
+        cls.branch = Branch(name='Conflicted Branch', status=BranchStatusChoices.READY)
+        cls.branch.save(provision=False)
+        for i in range(3):
+            site = Site.objects.create(name=f'Conflict View Site {i}', slug=f'conflict-view-site-{i}')
+            ChangeDiff(
+                branch=cls.branch,
+                object_type=ContentType.objects.get_for_model(Site),
+                object_id=site.pk,
+                action=ObjectChangeActionChoices.ACTION_UPDATE,
+                original={'description': ''},
+                modified={'description': 'branch'},
+                current={'description': 'main'},
+            ).save()
+
+    def setUp(self):
+        self.client.force_login(self.superuser)
+        self.url = reverse('plugins:netbox_branching:branch_sync', kwargs={'pk': self.branch.pk})
+
+    def _token(self):
+        return self.client.get(self.url).context['form'].fields['conflicts_token'].initial
+
+    def test_get_limits_conflicts_table(self):
+        with patch('netbox_branching.views.CONFLICTS_PREVIEW_LIMIT', 2):
+            response = self.client.get(self.url)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context['conflicts_count'], 3)
+        self.assertEqual(len(response.context['conflicts_table'].rows), 2)
+        content = response.content.decode()
+        self.assertIn('3 conflicts were found', content)
+        self.assertIn(
+            reverse('plugins:netbox_branching:branch_diff', kwargs={'pk': self.branch.pk}) + '?has_conflicts=True',
+            content,
+        )
+
+    def test_post_without_acknowledgment_is_rejected(self):
+        with patch('netbox_branching.views.SyncBranchJob.enqueue') as mock_enqueue:
+            response = self.client.post(self.url, data={'commit': 'on', 'conflicts_token': self._token()})
+        mock_enqueue.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('All conflicts must be acknowledged', response.content.decode())
+
+    def test_post_with_acknowledgment_enqueues_job(self):
+        with patch('netbox_branching.views.SyncBranchJob.enqueue') as mock_enqueue:
+            response = self.client.post(
+                self.url, data={'commit': 'on', 'acknowledge_conflicts': 'on', 'conflicts_token': self._token()}
+            )
+        mock_enqueue.assert_called_once()
+        self.assertEqual(response.status_code, 302)
+
+    def test_post_with_stale_token_is_rejected(self):
+        token = self._token()
+        site = Site.objects.create(name='Conflict View Site New', slug='conflict-view-site-new')
+        ChangeDiff(
+            branch=self.branch,
+            object_type=ContentType.objects.get_for_model(Site),
+            object_id=site.pk,
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            original={'description': ''},
+            modified={'description': 'branch'},
+            current={'description': 'main'},
+        ).save()
+        with patch('netbox_branching.views.SyncBranchJob.enqueue') as mock_enqueue:
+            response = self.client.post(
+                self.url, data={'commit': 'on', 'acknowledge_conflicts': 'on', 'conflicts_token': token}
+            )
+        mock_enqueue.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('conflicts for this branch have changed', response.content.decode())
+        # The re-rendered form carries the current token so the user can acknowledge the new set
+        self.assertEqual(response.context['form']['conflicts_token'].value(), self._token())
+        self.assertNotEqual(token, self._token())
+
+
 class BranchArchiveViewTestCase(TestCase):
     """Cover BranchArchiveView: GET, POST happy path, wrong-status path."""
 

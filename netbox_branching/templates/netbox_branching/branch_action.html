@@ -32,13 +32,22 @@
         {% blocktrans %}Only dry runs are permitted.{% endblocktrans %}
       </div>
     {% endif %}
-    {% if conflicts_table.rows %}
+    {% if conflicts_count %}
       <div class="alert alert-danger">
         <i class="mdi mdi-alert-circle"></i>
-        {% blocktrans with count=conflicts_table.rows|length %}
-          The following {{ count }} conflicts were found. Applying these changes will overwrite data that has
-          been modified since the branch was created. Please confirm that each of these changes is desired.
+        {% blocktrans count count=conflicts_count %}
+          {{ count }} conflict was found. Applying these changes will overwrite data that has been modified
+          since the branch was created. Please review it and acknowledge it below before proceeding.
+        {% plural %}
+          {{ count }} conflicts were found. Applying these changes will overwrite data that has been modified
+          since the branch was created. Please review them and acknowledge them below before proceeding.
         {% endblocktrans %}
+        {% if conflicts_count > conflicts_table.rows|length %}
+          {% url 'plugins:netbox_branching:branch_diff' pk=branch.pk as diff_url %}
+          {% blocktrans with shown=conflicts_table.rows|length %}
+            The {{ shown }} most recently updated are shown below. <a href="{{ diff_url }}?has_conflicts=True">View all conflicts</a>.
+          {% endblocktrans %}
+        {% endif %}
       </div>
     {% else %}
       <div class="alert alert-success">
@@ -57,7 +66,7 @@
           enctype="multipart/form-data"
           class="object-edit--with-sticky-actions">
       {% csrf_token %}
-      {% if conflicts_table.rows %}
+      {% if conflicts_count %}
         <div class="card">
           <div class="htmx-container table-responsive" id="object_list">
             {% include 'htmx/table.html' with table=conflicts_table %}
