@@ -333,7 +333,9 @@ class BaseBranchActionView(generic.ObjectView):
     def _get_conflicts_table(branch):
         # Render a bounded preview; the full list is available on the paginated Diff tab
         conflicts = ChangeDiff.objects.filter(branch=branch, conflicts__isnull=False)
-        return tables.ChangeDiffTable(list(conflicts[:CONFLICTS_PREVIEW_LIMIT]), orderable=False), conflicts.count()
+        rows = list(conflicts[:CONFLICTS_PREVIEW_LIMIT])
+        count = conflicts.count() if len(rows) == CONFLICTS_PREVIEW_LIMIT else len(rows)
+        return tables.ChangeDiffTable(rows, orderable=False), count
 
     @staticmethod
     def _get_changes_summary(changes_qs):
