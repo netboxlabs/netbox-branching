@@ -742,7 +742,8 @@ class BranchProvisionPipelineTestCase(FastTeardownTransactionTestCase):
         main_table = f'{quote_ident(main_schema)}.dcim_manufacturer'
         with connection.cursor() as cursor:
             cursor.execute(
-                f'ALTER TABLE {main_table} ADD COLUMN _test_upper_name text GENERATED ALWAYS AS (upper(name)) STORED'
+                f'ALTER TABLE {main_table} ADD COLUMN IF NOT EXISTS _test_upper_name text '
+                f'GENERATED ALWAYS AS (upper(name)) STORED'
             )
         self.addCleanup(self._drop_test_generated_column, main_table)
         Manufacturer.objects.create(name='Existing', slug='existing')
