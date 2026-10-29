@@ -298,10 +298,11 @@ def parallel_copy_tables(tables, snapshot_token, schema, main_schema, workers):
 
     Each worker opens its own database connection on its thread, starts a
     REPEATABLE READ transaction, imports the supplied snapshot so every worker
-    sees an identical MVCC view of main, and runs ``INSERT INTO ... SELECT *``
-    for the tables assigned to it. The destination tables must already exist
-    and must be empty (i.e. created by the coordinator with ``CREATE TABLE
-    branch.t ( LIKE main.t )``, without indexes).
+    sees an identical MVCC view of main, and runs ``INSERT INTO ... SELECT``
+    over every non-generated column for the tables assigned to it. The
+    destination tables must already exist and must be empty (i.e. created by the
+    coordinator with ``CREATE TABLE branch.t ( LIKE main.t INCLUDING GENERATED )``,
+    without indexes).
 
     The exporting transaction on the coordinator must remain open while this
     runs — the snapshot is only valid for import while the exporter is alive.
@@ -341,7 +342,19 @@ def parallel_copy_tables(tables, snapshot_token, schema, main_schema, workers):
             # Safe only because triggers are replicated after this phase: a trigger on the
             # branch table would resolve its own targets via this connection's search_path
             # (the main schema) and write there. See Branch._replicate_triggers().
-            cursor.execute(f'INSERT INTO {schema_table} SELECT * FROM {main_table}')
+            # Generated columns reject explicit values, so copy every other column and
+            # let the branch table compute them.
+            cursor.execute(
+                """
+                SELECT quote_ident(attname)
+                FROM pg_attribute
+                WHERE attrelid = %s::regclass AND attnum > 0 AND NOT attisdropped AND attgenerated = ''
+                ORDER BY attnum
+                """,
+                [main_table],
+            )
+            columns = ', '.join(row[0] for row in cursor.fetchall())
+            cursor.execute(f'INSERT INTO {schema_table} ({columns}) SELECT {columns} FROM {main_table}')
 
             # Point the branch table's id default at main's sequence so all branches
             # continue to share a global id namespace (matches the previous behavior).
@@ -472,7 +485,7 @@ def parallel_analyze_tables(tables, schema, workers):
     """
     Run ANALYZE on the freshly-populated branch tables across a worker pool.
 
-    After the Phase 2 bulk ``INSERT INTO branch.t SELECT * FROM main.t`` the branch
+    After the Phase 2 bulk ``INSERT INTO branch.t SELECT ... FROM main.t`` the branch
     tables carry no planner statistics until autovacuum eventually reaches them, so
     the planner falls back to default (essentially empty-table) estimates. The first
     queries against a new branch — sync, change-diff computation, and so on — can then

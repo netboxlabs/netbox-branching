@@ -1287,7 +1287,7 @@ class Branch(JobsMixin, PrimaryModel):
              destination tables. The constraint and index maps for main are
              also captured here for use in Phase 3.
           2. Parallel data copy — export an MVCC snapshot from main and let a worker
-             pool run INSERT INTO branch.t SELECT * FROM main.t across tables.
+             pool run INSERT INTO branch.t SELECT ... FROM main.t across tables.
           3. Parallel constraint + index build — add PK/UNIQUE/EXCLUDE constraints
              (each one builds its backing index implicitly under the original
              name) and then replay every remaining indexdef against the populated
@@ -1403,12 +1403,13 @@ class Branch(JobsMixin, PrimaryModel):
 
                 # Create empty destination tables (no indexes) for the parallel copy.
                 # Indexes are built in Phase 3 after the data is loaded — far cheaper
-                # than maintaining them row-by-row during INSERT.
+                # than maintaining them row-by-row during INSERT. INCLUDING GENERATED
+                # keeps generated columns computed rather than copied as plain columns.
                 for table in tables_to_replicate:
                     logger.debug(f'Creating table {schema}.{table}')
                     cursor.execute(
                         f'CREATE TABLE {quote_ident(schema)}.{quote_ident(table)} '
-                        f'( LIKE {quote_ident(main_schema)}.{quote_ident(table)} )'
+                        f'( LIKE {quote_ident(main_schema)}.{quote_ident(table)} INCLUDING GENERATED )'
                     )
 
                 cursor.execute('COMMIT')

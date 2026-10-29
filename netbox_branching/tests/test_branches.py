@@ -7,6 +7,7 @@ from django.db.models.signals import pre_delete
 from django.test import SimpleTestCase, override_settings
 from django.utils import timezone
 
+from dcim.models import Manufacturer
 from extras.validators import CustomValidator
 from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchStatusChoices
@@ -16,7 +17,7 @@ from netbox_branching.models import Branch
 from netbox_branching.provisioning import quote_ident
 from netbox_branching.signals import post_deprovision
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase, fetchall, fetchone
-from netbox_branching.utilities import BranchActionIndicator, get_tables_to_replicate
+from netbox_branching.utilities import BranchActionIndicator, activate_branch, get_tables_to_replicate
 from utilities.exceptions import AbortRequest
 
 
@@ -731,6 +732,45 @@ class BranchProvisionPipelineTestCase(FastTeardownTransactionTestCase):
             missing,
             msg=f'Branch schema is missing {len(missing)} PK/UNIQUE/EXCLUDE constraints: {sorted(missing)[:5]}',
         )
+
+    def test_provision_preserves_generated_columns(self):
+        """
+        Generated columns must stay generated on the branch (#711): existing rows copy over and
+        rows written inside the branch get computed values rather than NULL or stale copies.
+        """
+        main_schema = get_plugin_config('netbox_branching', 'main_schema')
+        main_table = f'{quote_ident(main_schema)}.dcim_manufacturer'
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'ALTER TABLE {main_table} ADD COLUMN _test_upper_name text GENERATED ALWAYS AS (upper(name)) STORED'
+            )
+        self.addCleanup(self._drop_test_generated_column, main_table)
+        Manufacturer.objects.create(name='Existing', slug='existing')
+
+        branch = self._track(Branch(name='GeneratedColumns'))
+        branch.save(provision=False)
+        branch.provision(user=None)
+
+        with activate_branch(branch):
+            Manufacturer.objects.create(name='New', slug='new')
+            existing = Manufacturer.objects.get(slug='existing')
+            existing.name = 'Renamed'
+            existing.save()
+
+        branch_table = f'{quote_ident(branch.schema_name)}.dcim_manufacturer'
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT attgenerated FROM pg_attribute WHERE attrelid = %s::regclass AND attname = '_test_upper_name'",
+                [branch_table],
+            )
+            self.assertEqual(fetchone(cursor)[0], 's')
+            cursor.execute(f'SELECT slug, _test_upper_name FROM {branch_table} ORDER BY slug')
+            self.assertEqual(cursor.fetchall(), [('existing', 'RENAMED'), ('new', 'NEW')])
+
+    @staticmethod
+    def _drop_test_generated_column(main_table):
+        with connection.cursor() as cursor:
+            cursor.execute(f'ALTER TABLE {main_table} DROP COLUMN IF EXISTS _test_upper_name')
 
     def test_cancel_backends_does_not_disturb_caller_connection(self):
         """
