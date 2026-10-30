@@ -1,5 +1,15 @@
 # Change Log
 
+## v1.2.3
+
+### Bug Fixes
+
+* [#675](https://github.com/netboxlabs/netbox-branching/issues/675) - Fix script execution via the REST API failing to resolve the active branch on NetBox v4.7
+* [#684](https://github.com/netboxlabs/netbox-branching/issues/684) - Drop schema-local foreign keys when applying a CREATE during a squash merge
+* [#688](https://github.com/netboxlabs/netbox-branching/issues/688) - Replay fields touched by any collapsed update during a squash merge
+
+---
+
 ## v1.2.2
 
 ### Bug Fixes
