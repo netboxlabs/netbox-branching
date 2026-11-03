@@ -672,10 +672,10 @@ class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
     def get(self, request):
         return redirect(self.get_return_url(request))
 
-    def _get_form(self, data=None, initial=None):
+    def _get_form(self, *args, **kwargs):
         # self.queryset is already restricted to the branches the user may migrate; binding it to the
         # form makes it reject any other PK rather than migrate it.
-        form = forms.BulkMigrateBranchForm(data, initial=initial)
+        form = forms.BulkMigrateBranchForm(*args, **kwargs)
         form.fields['pk'].queryset = self.queryset
         return form
 

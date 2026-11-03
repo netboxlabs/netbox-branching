@@ -583,7 +583,8 @@ def _get_request_user(request):
     """
     Return the user making the request. REST framework authenticates an API token only once the view
     runs, so a token is checked here first, as NetBox's GraphQL view does. A rejected token leaves the
-    user anonymous, and the view reports the failure.
+    user anonymous, and the view reports the failure. request.user is left untouched: REST framework's
+    SessionAuthentication would otherwise treat the request as a session login and enforce CSRF.
     """
     if is_api_request(request) and not request.user.is_authenticated:
         from rest_framework.exceptions import AuthenticationFailed
@@ -592,7 +593,7 @@ def _get_request_user(request):
 
         try:
             if auth := TokenAuthentication().authenticate(request):
-                request.user = auth[0]
+                return auth[0]
         except AuthenticationFailed:
             pass
     return request.user
