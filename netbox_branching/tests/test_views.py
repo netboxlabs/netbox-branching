@@ -360,6 +360,7 @@ class BranchActionConflictsTestCase(TestCase):
         # The re-rendered form carries the current token so the user can acknowledge the new set
         self.assertEqual(response.context['form']['conflicts_token'].value(), self._token())
         self.assertNotEqual(token, self._token())
+        self.assertFalse(response.context['form']['acknowledge_conflicts'].value())
 
 
 class BranchArchiveViewTestCase(TestCase):

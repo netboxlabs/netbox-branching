@@ -85,9 +85,10 @@ class BaseBranchActionForm(forms.Form):
             return self.cleaned_data
 
         if self.cleaned_data.get('conflicts_token') != self.current_conflicts_token:
-            # Re-render with the current token so the user can acknowledge the updated conflicts
+            # Re-render with the current token and require a fresh acknowledgement of the updated conflicts
             self.data = self.data.copy()
             self.data['conflicts_token'] = self.current_conflicts_token
+            self.data.pop('acknowledge_conflicts', None)
             raise forms.ValidationError(
                 _('The conflicts for this branch have changed. Please review them again before proceeding.')
             )
