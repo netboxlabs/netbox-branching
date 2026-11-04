@@ -1,5 +1,6 @@
 import json
 import uuid
+from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
@@ -350,6 +351,19 @@ class BranchConflictAPITestMixin:
 
         self.assertEqual(response.status_code, 409)
         data = json.loads(response.content)
+        self.assertEqual(len(data['conflicts']), 2)
+
+    def test_conflict_response_is_limited(self):
+        branch = self.make_branch()
+        for i in range(3):
+            self.make_conflict(branch, slug_suffix=f'-{i}')
+
+        with patch('netbox_branching.api.views.CONFLICTS_PREVIEW_LIMIT', 2):
+            response = self.client.post(self.get_url(branch.pk), **self.header)
+
+        self.assertEqual(response.status_code, 409)
+        data = json.loads(response.content)
+        self.assertEqual(data['conflict_count'], 3)
         self.assertEqual(len(data['conflicts']), 2)
 
 

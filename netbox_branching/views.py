@@ -20,7 +20,7 @@ from utilities.views import GetReturnURLMixin, ViewTab, register_model_view
 
 from . import filtersets, forms, tables
 from .choices import BranchStatusChoices
-from .constants import QUERY_PARAM
+from .constants import CONFLICTS_PREVIEW_LIMIT, QUERY_PARAM
 from .error_report import get_entry_message, get_merge_recommendations
 from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJob
 from .models import Branch, ChangeDiff
@@ -331,11 +331,11 @@ class BaseBranchActionView(generic.ObjectView):
 
     @staticmethod
     def _get_conflicts_table(branch):
+        # Render a bounded preview; the full list is available on the paginated Diff tab
         conflicts = ChangeDiff.objects.filter(branch=branch, conflicts__isnull=False)
-        conflicts_table = tables.ChangeDiffTable(conflicts)
-        conflicts_table.columns.show('pk')
-
-        return conflicts_table
+        rows = list(conflicts[:CONFLICTS_PREVIEW_LIMIT])
+        count = conflicts.count() if len(rows) == CONFLICTS_PREVIEW_LIMIT else len(rows)
+        return tables.ChangeDiffTable(rows, orderable=False), count
 
     @staticmethod
     def _get_changes_summary(changes_qs):
@@ -346,21 +346,25 @@ class BaseBranchActionView(generic.ObjectView):
           - anything + delete = delete
         Returns dict with 'creates', 'updates', 'deletes' (each {ContentType: count}) and totals.
         """
-        changes = changes_qs.values('action', 'changed_object_type_id', 'changed_object_id')
-
-        object_actions = defaultdict(set)
-        for change in changes:
-            key = (change['changed_object_type_id'], change['changed_object_id'])
-            object_actions[key].add(change['action'])
+        # Collapse changes to one row per object in the database
+        objects = (
+            changes_qs.order_by()
+            .values('changed_object_type_id', 'changed_object_id')
+            .annotate(
+                deleted=Count('pk', filter=Q(action=ObjectChangeActionChoices.ACTION_DELETE)),
+                created=Count('pk', filter=Q(action=ObjectChangeActionChoices.ACTION_CREATE)),
+            )
+            .values_list('changed_object_type_id', 'deleted', 'created')
+        )
 
         creates = defaultdict(int)
         updates = defaultdict(int)
         deletes = defaultdict(int)
 
-        for (ct_id, _obj_id), actions in object_actions.items():
-            if ObjectChangeActionChoices.ACTION_DELETE in actions:
+        for ct_id, deleted, created in objects:
+            if deleted:
                 deletes[ct_id] += 1
-            elif ObjectChangeActionChoices.ACTION_CREATE in actions:
+            elif created:
                 creates[ct_id] += 1
             else:
                 updates[ct_id] += 1
@@ -390,13 +394,16 @@ class BaseBranchActionView(generic.ObjectView):
         raise NotImplementedError(f'{self.__class__} must implement action() method.')
 
     def _build_context(self, branch, form, action_permitted):
+        conflicts_table, conflicts_count = self._get_conflicts_table(branch)
         return {
             'branch': branch,
             'action': _('%s Branch') % self.action.title(),
             'action_name': self.action,
             'form': form,
             'action_permitted': action_permitted,
-            'conflicts_table': self._get_conflicts_table(branch),
+            'conflicts_table': conflicts_table,
+            'conflicts_count': conflicts_count,
+            'conflicts_hidden': conflicts_count - len(conflicts_table.rows),
             'changes_summary': self.get_action_summary(branch),
         }
 

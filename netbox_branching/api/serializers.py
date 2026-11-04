@@ -173,6 +173,7 @@ class ConflictResponseSerializer(serializers.Serializer):
     """
 
     detail = serializers.CharField()
+    conflict_count = serializers.IntegerField()
     conflicts = ConflictSummarySerializer(many=True)
 
 
