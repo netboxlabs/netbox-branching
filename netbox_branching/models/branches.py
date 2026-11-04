@@ -70,6 +70,7 @@ __all__ = (
     'BranchEvent',
 )
 
+RESERVED_BRANCH_NAMES = ('main',)
 
 # pg_catalog.set_config(name, value, is_local=true) is the function-call form
 # of SET LOCAL — value is passed as a query parameter rather than interpolated.
@@ -282,6 +283,16 @@ class Branch(JobsMixin, PrimaryModel):
 
     def clean(self):
         super().clean()
+
+        # Reject names which are reserved
+        if self.name and self.name.strip().lower() in RESERVED_BRANCH_NAMES:
+            raise ValidationError(
+                {
+                    'name': _('"{name}" is a reserved name and cannot be used for a branch.').format(
+                        name=self.name
+                    )
+                }
+            )
 
         # Enforce the maximum number of total branches
         if not self.pk and (max_branches := get_plugin_config('netbox_branching', 'max_branches')):
