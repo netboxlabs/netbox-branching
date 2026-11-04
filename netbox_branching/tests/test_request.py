@@ -18,6 +18,9 @@ from .utils import fake_request
 
 
 class RequestTestCase(TestCase):
+    # Activating a branch requires permission to view it
+    user_permissions = ('netbox_branching.view_branch',)
+
     @classmethod
     def setUpTestData(cls):
         # Create a Branch
@@ -185,6 +188,7 @@ class RequestTestCase(TestCase):
             reverse('dcim-api:site-list'),
             headers={'x-netbox-branch': branch.schema_id},
         )
+        request.user = self.user
 
         with ActiveBranchContextManager(request):
             self.assertIsNone(active_branch.get(), msg='An unusable branch was installed as active')
@@ -200,6 +204,7 @@ class RequestTestCase(TestCase):
             reverse('dcim-api:site-list'),
             headers={'x-netbox-branch': 'nonexist'},
         )
+        request.user = self.user
 
         with warnings.catch_warnings(record=True) as caught:
             warnings.simplefilter('always')
@@ -297,8 +302,10 @@ class RequestTestCase(TestCase):
         branch = Branch.objects.first()
         url = f'{reverse("dcim-api:site-list")}?{QUERY_PARAM}={branch.schema_id}&background=true'
         django_request = AsyncAPIJob._build_request(fake_request(self.user, url), {}, 'http')
+        drf_request = DRFRequest(django_request)
+        drf_request.user = self.user  # As AsyncAPIJob.run() does
 
-        with apply_request_processors(DRFRequest(django_request)):
+        with apply_request_processors(drf_request):
             self.assertEqual(active_branch.get(), branch)
 
     def test_processor_does_not_propagate_model_import_failure(self):
