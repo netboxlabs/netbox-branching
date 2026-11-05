@@ -2149,12 +2149,17 @@ class BaseMergeTests(CableTestMixin):
         site1 = Site.objects.create(name='Site 1', slug='site-1')
         site2 = Site.objects.create(name='Site 2', slug='site-2')
         parent_type = DeviceType.objects.create(
-            manufacturer=self.manufacturer, model='Parent', slug='parent',
-            subdevice_role=SubdeviceRoleChoices.ROLE_PARENT
+            manufacturer=self.manufacturer,
+            model='Parent',
+            slug='parent',
+            subdevice_role=SubdeviceRoleChoices.ROLE_PARENT,
         )
         child_type = DeviceType.objects.create(
-            manufacturer=self.manufacturer, model='Child', slug='child', u_height=0,
-            subdevice_role=SubdeviceRoleChoices.ROLE_CHILD
+            manufacturer=self.manufacturer,
+            model='Child',
+            slug='child',
+            u_height=0,
+            subdevice_role=SubdeviceRoleChoices.ROLE_CHILD,
         )
         parent = Device.objects.create(name='Parent', site=site1, device_type=parent_type, role=self.device_role)
         child = Device.objects.create(name='Child', site=site1, device_type=child_type, role=self.device_role)
