@@ -2,6 +2,7 @@
 Tests for Branch merge functionality with common base class and iterative merge strategy.
 """
 
+import hashlib
 import unittest.mock
 import uuid
 
@@ -11,16 +12,20 @@ from django.core.exceptions import ValidationError
 from django.db import connections
 from django.test import RequestFactory, SimpleTestCase
 from django.urls import reverse
+from django.utils import timezone
 
-from dcim.choices import CableProfileChoices, DeviceFaceChoices
+from core.models import DataFile, DataSource
+from dcim.choices import CableProfileChoices, DeviceFaceChoices, SubdeviceRoleChoices
 from dcim.models import (
     Cable,
     CablePath,
     Device,
+    DeviceBay,
     DeviceRole,
     DeviceType,
     FrontPort,
     Interface,
+    MACAddress,
     Manufacturer,
     ModuleBay,
     ModuleBayTemplate,
@@ -32,7 +37,7 @@ from dcim.models import (
     VirtualChassis,
 )
 from extras.choices import CustomFieldTypeChoices
-from extras.models import CustomField, Tag
+from extras.models import ConfigTemplate, CustomField, Tag
 from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.error_report import build_error_report, get_entry_message, get_merge_recommendations
@@ -40,6 +45,7 @@ from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import CableTestMixin, FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import DELETED, _deep_merge_dict, _strip_deleted, activate_branch, diff_for_merge
 from utilities.exceptions import AbortTransaction
+from wireless.models import WirelessLink
 
 User = get_user_model()
 
@@ -2015,16 +2021,167 @@ class BaseMergeTests(CableTestMixin):
         self.assertEqual(entry['detail'], ctx.exception.message_dict['face'][0])
         self.assertIn('face', str(get_merge_recommendations(entry, merge_strategy=self.MERGE_STRATEGY)[0]))
 
+    #
+    # Updates NetBox makes as a side effect of saving another object (netbox-community/netbox#23617). Each must be
+    # recorded with prechange data: without it, a merge overwrites concurrent edits in main and a revert fails.
+    #
+
+    def _edit_in_main(self, obj, **attrs):
+        """Apply a change-logged edit to an object in main."""
+        with event_tracking(self._make_request()):
+            obj = type(obj).objects.get(pk=obj.pk)
+            obj.snapshot()
+            for name, value in attrs.items():
+                setattr(obj, name, value)
+            obj.save()
+
+    def test_merge_and_revert_wireless_link_create(self):
+        """Merge and revert a branch which links two existing interfaces with a new wireless link."""
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        device = Device.objects.create(name='Device', site=site, device_type=self.device_type, role=self.device_role)
+        interface_a, interface_b = (
+            Interface.objects.create(device=device, name=name, type='ieee802.11ac') for name in ('wlan0', 'wlan1')
+        )
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            link = WirelessLink.objects.create(
+                interface_a=Interface.objects.get(pk=interface_a.pk),
+                interface_b=Interface.objects.get(pk=interface_b.pk),
+                ssid='Link 1',
+            )
+        self._edit_in_main(interface_a, description='Edited in main')
+
+        branch.merge(user=self.user, commit=True)
+
+        interface_a.refresh_from_db()
+        self.assertEqual(interface_a.wireless_link_id, link.pk)
+        self.assertEqual(interface_a.description, 'Edited in main')
+
+        branch.revert(user=self.user, commit=True)
+
+        interface_a.refresh_from_db()
+        self.assertFalse(WirelessLink.objects.filter(pk=link.pk).exists())
+        self.assertIsNone(interface_a.wireless_link_id)
+        self.assertEqual(interface_a.description, 'Edited in main')
+
+    def test_merge_primary_mac_assignment(self):
+        """Merge a branch which creates an interface designating an existing MAC address as its primary."""
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        device = Device.objects.create(name='Device', site=site, device_type=self.device_type, role=self.device_role)
+        mac = MACAddress.objects.create(mac_address='00:11:22:33:44:55')
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            interface = Interface.objects.create(
+                device=device, name='eth0', type='1000base-t', primary_mac_address=MACAddress.objects.get(pk=mac.pk)
+            )
+        self._edit_in_main(mac, description='Edited in main')
+
+        branch.merge(user=self.user, commit=True)
+
+        mac.refresh_from_db()
+        self.assertEqual(mac.assigned_object_id, interface.pk)
+        self.assertEqual(mac.description, 'Edited in main')
+
+    @unittest.expectedFailure
+    def test_revert_primary_mac_assignment(self):
+        """
+        Reverse-chronological undo unassigns the MAC address while the interface which designates it as primary still
+        exists, which MACAddress.clean() rejects.
+        """
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        device = Device.objects.create(name='Device', site=site, device_type=self.device_type, role=self.device_role)
+        mac = MACAddress.objects.create(mac_address='00:11:22:33:44:55')
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            interface = Interface.objects.create(
+                device=device, name='eth0', type='1000base-t', primary_mac_address=MACAddress.objects.get(pk=mac.pk)
+            )
+        branch.merge(user=self.user, commit=True)
+
+        branch.revert(user=self.user, commit=True)
+
+        mac.refresh_from_db()
+        self.assertFalse(Interface.objects.filter(pk=interface.pk).exists())
+        self.assertIsNone(mac.assigned_object_id)
+
+    def test_merge_and_revert_config_template_sync(self):
+        """Merge and revert a branch which syncs a config template from its data file."""
+        source = DataSource.objects.create(name='Data Source', type='local', source_url='file:///tmp/')
+        content = b'original'
+        data_file = DataFile.objects.create(
+            source=source,
+            path='template.j2',
+            last_updated=timezone.now(),
+            size=len(content),
+            hash=hashlib.sha256(content).hexdigest(),
+            data=content,
+        )
+        template = ConfigTemplate(name='Template', data_file=data_file)
+        template.clean()
+        template.save()
+        content = b'updated'
+        DataFile.objects.filter(pk=data_file.pk).update(
+            size=len(content), hash=hashlib.sha256(content).hexdigest(), data=content
+        )
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            ConfigTemplate.objects.get(pk=template.pk).sync(save=True)
+        self._edit_in_main(template, description='Edited in main')
+
+        branch.merge(user=self.user, commit=True)
+
+        template.refresh_from_db()
+        self.assertEqual(template.template_code, 'updated')
+        self.assertEqual(template.description, 'Edited in main')
+
+        branch.revert(user=self.user, commit=True)
+
+        template.refresh_from_db()
+        self.assertEqual(template.name, 'Template')
+        self.assertEqual(template.description, 'Edited in main')
+
+    def test_merge_and_revert_parent_device_move(self):
+        """Merge and revert a branch which moves a parent device, and with it its child device, to another site."""
+        site1 = Site.objects.create(name='Site 1', slug='site-1')
+        site2 = Site.objects.create(name='Site 2', slug='site-2')
+        parent_type = DeviceType.objects.create(
+            manufacturer=self.manufacturer, model='Parent', slug='parent',
+            subdevice_role=SubdeviceRoleChoices.ROLE_PARENT
+        )
+        child_type = DeviceType.objects.create(
+            manufacturer=self.manufacturer, model='Child', slug='child', u_height=0,
+            subdevice_role=SubdeviceRoleChoices.ROLE_CHILD
+        )
+        parent = Device.objects.create(name='Parent', site=site1, device_type=parent_type, role=self.device_role)
+        child = Device.objects.create(name='Child', site=site1, device_type=child_type, role=self.device_role)
+        DeviceBay.objects.create(device=parent, name='Bay 1', installed_device=child)
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit_in_main(parent, site=site2)
+        self._edit_in_main(child, description='Edited in main')
+
+        branch.merge(user=self.user, commit=True)
+
+        child.refresh_from_db()
+        self.assertEqual(child.site, site2)
+        self.assertEqual(child.description, 'Edited in main')
+
+        branch.revert(user=self.user, commit=True)
+
+        child.refresh_from_db()
+        self.assertEqual(child.site, site1)
+        self.assertEqual(child.description, 'Edited in main')
+
 
 class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
     """Test cases for Branch merge using iterative merge strategy."""
 
     MERGE_STRATEGY = BranchMergeStrategyChoices.ITERATIVE
-
-    @unittest.expectedFailure
-    def test_revert_cable_create(self):
-        """The Cable UPDATE recorded on creation has no prechange_data, so its undo nulls every field. Refs: #694"""
-        super().test_revert_cable_create()
 
     @unittest.expectedFailure
     def test_revert_cable_delete(self):
