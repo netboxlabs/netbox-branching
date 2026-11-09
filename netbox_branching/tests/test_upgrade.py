@@ -32,8 +32,10 @@ from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
+from core.models import ObjectType
 from core.signals import handle_changed_object, handle_deleted_object
-from dcim.models import Manufacturer
+from dcim.models import Device, Manufacturer, Site
+from extras.models import Tag
 from netbox.context_managers import event_tracking
 from netbox.signals import post_clean
 from netbox_branching.choices import BranchStatusChoices
@@ -289,6 +291,10 @@ class TagObjectTypesMigrationTestCase(TestCase):
     TABLE = 'extras_tag_object_types'
     MIGRATION = ('extras', '0131_concrete_objecttype')
 
+    def setUp(self):
+        tag = Tag.objects.create(name='Tag 1', slug='tag-1')
+        tag.object_types.set([ObjectType.objects.get_for_model(Site), ObjectType.objects.get_for_model(Device)])
+
     def _create_branch(self, include_0131):
         branch = Branch(name='tag-object-types')
         branch.save(provision=False)
@@ -313,6 +319,11 @@ class TagObjectTypesMigrationTestCase(TestCase):
             )
             return {row[0] for row in cursor.fetchall()}
 
+    def _rows(self, schema):
+        with connection.cursor() as cursor:
+            cursor.execute(f'SELECT * FROM "{schema}".{self.TABLE} ORDER BY id')
+            return cursor.fetchall()
+
     def _index_names(self, schema):
         with connection.cursor() as cursor:
             cursor.execute(
@@ -329,11 +340,7 @@ class TagObjectTypesMigrationTestCase(TestCase):
         self.assertNotIn('contenttype_id', self._columns(schema))
         self.assertEqual(self._index_names(schema), self._index_names('public'))
 
-        with connection.cursor() as cursor:
-            cursor.execute(f'SELECT COUNT(*) FROM "{schema}".{self.TABLE}')
-            branch_count = cursor.fetchone()[0]
-            cursor.execute(f'SELECT COUNT(*) FROM public.{self.TABLE}')
-            self.assertEqual(branch_count, cursor.fetchone()[0])
+        self.assertEqual(self._rows(schema), self._rows('public'))
 
     def test_branch_predating_0131_can_apply_0131(self):
         schema = self._create_branch(include_0131=False)
@@ -364,3 +371,4 @@ class TagObjectTypesMigrationTestCase(TestCase):
 
         self.assertIn('contenttype_id', self._columns(schema))
         self.assertEqual(self._index_names(schema), self._index_names('public'))
+        self.assertEqual(self._rows(schema), self._rows('public'))

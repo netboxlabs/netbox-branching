@@ -24,7 +24,8 @@ def copy_table(apps, schema_editor):
 
             # Abort if the table already exists (somehow)
             cursor.execute(
-                f"SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='{schema_name}' AND tablename='{table}')"
+                "SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname=%s AND tablename=%s)",
+                [schema_name, table]
             )
             if cursor.fetchone()[0]:
                 print('Skipping; table already exists.', end='')
