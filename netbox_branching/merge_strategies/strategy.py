@@ -20,15 +20,45 @@ MODULE_MOVE_DERIVED_FIELDS = (
     'label',
     'parent',
     'position',
-    '_site',
-    '_location',
-    '_rack',
-    'last_updated',
 )
 
 
 def _field_changed(change, field):
     return (change.prechange_data or {}).get(field) != (change.postchange_data or {}).get(field)
+
+
+def _get_move_writes(root, later_changes, module_type, frontport_type, portmapping_type):
+    """
+    Return the changes (ordered, same request) which the move of root wrote as side effects: the unbroken run of
+    first writes to its nested Modules, bays, components and PortMappings directly after root.
+    """
+    old_device = (root.prechange_data or {}).get('device')
+    new_device = (root.postchange_data or {}).get('device')
+    moved_module_ids = {root.changed_object_id}
+    moved_front_port_ids = set()
+    writes, seen = [], set()
+    for change in later_changes:
+        pre, post = change.prechange_data or {}, change.postchange_data or {}
+        key = (change.changed_object_type_id, change.changed_object_id)
+        # The planner writes each object once and, on a cross-device move, always moves it to the new device
+        if key in seen or (pre.get('device'), post.get('device')) != (old_device, new_device):
+            break
+        if change.changed_object_type_id == module_type.pk:
+            # A nested Module keeps its bay and only follows the root to the new device
+            if old_device == new_device or pre.get('module_bay') != post.get('module_bay'):
+                break
+            moved_module_ids.add(change.changed_object_id)
+        elif change.changed_object_type_id == portmapping_type.pk:
+            if post.get('front_port') not in moved_front_port_ids:
+                break
+        elif post.get('module') in moved_module_ids:
+            if change.changed_object_type_id == frontport_type.pk:
+                moved_front_port_ids.add(change.changed_object_id)
+        else:
+            break
+        seen.add(key)
+        writes.append(change)
+    return writes
 
 
 def get_module_move_derived_fields(changes):
@@ -49,30 +79,24 @@ def get_module_move_derived_fields(changes):
     if not request_ids:
         return {}
     changes_by_request = {}
-    for change in updates.filter(request_id__in=request_ids):
+    for change in updates.filter(request_id__in=request_ids).order_by('pk'):
         changes_by_request.setdefault(change.request_id, []).append(change)
 
     frontport_type = ContentType.objects.get_by_natural_key('dcim', 'frontport')
     portmapping_type = ContentType.objects.get_by_natural_key('dcim', 'portmapping')
     derived = {}
     for request_changes in changes_by_request.values():
-        module_changes = [c for c in request_changes if c.changed_object_type_id == module_type.pk]
-        moved_module_ids = {c.changed_object_id for c in module_changes}
-        for change in module_changes:
-            # A nested Module keeps its bay and only follows the root to the new device
-            if not _field_changed(change, 'module_bay'):
-                derived[change.pk] = MODULE_MOVE_DERIVED_FIELDS
-        moved_front_port_ids = set()
-        for change in request_changes:
-            if (change.postchange_data or {}).get('module') in moved_module_ids:
-                derived[change.pk] = MODULE_MOVE_DERIVED_FIELDS
-                if change.changed_object_type_id == frontport_type.pk:
-                    moved_front_port_ids.add(change.changed_object_id)
-        for change in request_changes:
-            if (
-                change.changed_object_type_id == portmapping_type.pk
-                and (change.postchange_data or {}).get('front_port') in moved_front_port_ids
-            ):
+        root_indexes = [
+            i for i, change in enumerate(request_changes)
+            if change.changed_object_type_id == module_type.pk and _field_changed(change, 'module_bay')
+        ]
+        # Each move's side effects follow its root and precede the next move in the request
+        for i, start in enumerate(root_indexes):
+            stop = root_indexes[i + 1] if i + 1 < len(root_indexes) else len(request_changes)
+            writes = _get_move_writes(
+                request_changes[start], request_changes[start + 1:stop], module_type, frontport_type, portmapping_type
+            )
+            for change in writes:
                 derived[change.pk] = MODULE_MOVE_DERIVED_FIELDS
 
     return derived

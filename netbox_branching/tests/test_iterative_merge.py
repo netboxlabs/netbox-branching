@@ -1020,25 +1020,24 @@ class BaseMergeTests(CableTestMixin):
         self.assertFalse(Device.objects.filter(id=device_id).exists())
         self.assertEqual(ModuleBay.objects.filter(device_id=device_id).count(), 0)
 
-    def test_revert_cross_device_module_move(self):
+    def _create_module_move_fixture(self, request):
         """
-        Reverting a merged cross-device module move must return the module, its nested
-        module, bays, components and port mappings to the original device. (#722)
+        Two chassis on separate sites; Chassis A holds a line card (interface, front/rear ports and mapping)
+        with a nested SFP module. Returns (line_card, sfp_module, device_a, device_b). (#722)
         """
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-
         with event_tracking(request):
-            site = Site.objects.create(name='Site 1', slug='site-1')
+            site_a = Site.objects.create(name='Site 1', slug='site-1')
+            site_b = Site.objects.create(name='Site 2', slug='site-2')
             chassis_type = DeviceType.objects.create(manufacturer=self.manufacturer, model='Chassis', slug='chassis')
             ModuleBayTemplate.objects.create(device_type=chassis_type, name='Slot 1', position='1')
             ModuleBayTemplate.objects.create(device_type=chassis_type, name='Slot 2', position='2')
             line_card_type = ModuleType.objects.create(manufacturer=self.manufacturer, model='Line Card')
             InterfaceTemplate.objects.create(module_type=line_card_type, name='Ethernet{module}/1', type='1000base-t')
-            front_template = FrontPortTemplate.objects.create(module_type=line_card_type, name='Front 1', type='lc')
+            front_template = FrontPortTemplate.objects.create(
+                module_type=line_card_type, name='Front {module}', type='lc'
+            )
             rear_template = RearPortTemplate.objects.create(
-                module_type=line_card_type, name='Rear 1', type='lc', positions=1
+                module_type=line_card_type, name='Rear {module}', type='lc', positions=1
             )
             PortTemplateMapping.objects.create(
                 module_type=line_card_type,
@@ -1053,45 +1052,133 @@ class BaseMergeTests(CableTestMixin):
             sfp_type = ModuleType.objects.create(manufacturer=self.manufacturer, model='SFP')
             InterfaceTemplate.objects.create(module_type=sfp_type, name='SFP {module}', type='10gbase-x-sfpp')
             device_a = Device.objects.create(
-                name='Chassis A', device_type=chassis_type, role=self.device_role, site=site
+                name='Chassis A', device_type=chassis_type, role=self.device_role, site=site_a
             )
             device_b = Device.objects.create(
-                name='Chassis B', device_type=chassis_type, role=self.device_role, site=site
+                name='Chassis B', device_type=chassis_type, role=self.device_role, site=site_b
             )
             slot_1_a = device_a.modulebays.get(name='Slot 1')
             line_card = Module.objects.create(device=device_a, module_bay=slot_1_a, module_type=line_card_type)
             sfp_bay = line_card.modulebays.get(name='SFP bay 1/1')
             sfp_module = Module.objects.create(device=device_a, module_bay=sfp_bay, module_type=sfp_type)
+        return line_card, sfp_module, device_a, device_b
 
-        def snapshot():
-            return {
-                'line_card': Module.objects.values_list('device_id', 'module_bay_id').get(pk=line_card.pk),
-                'sfp_module': Module.objects.values_list('device_id', 'module_bay_id').get(pk=sfp_module.pk),
-                'bays': set(ModuleBay.objects.filter(module__isnull=False).values_list('device_id', 'name', 'parent')),
-                'interfaces': set(Interface.objects.values_list('device_id', 'name')),
-                'mappings': set(PortMapping.objects.values_list('device_id', 'front_port_id', 'rear_port_id')),
-            }
+    @staticmethod
+    def _module_move_snapshot(line_card, sfp_module, *devices):
+        return {
+            'line_card': Module.objects.values_list('device_id', 'module_bay_id').get(pk=line_card.pk),
+            'sfp_module': Module.objects.values_list('device_id', 'module_bay_id').get(pk=sfp_module.pk),
+            'bays': set(ModuleBay.objects.filter(module__isnull=False).values_list('device_id', 'name', 'parent')),
+            'interfaces': set(Interface.objects.values_list('device_id', 'name', 'description')),
+            'front_ports': set(FrontPort.objects.values_list('device_id', 'name', 'label')),
+            'rear_ports': set(RearPort.objects.values_list('device_id', 'name', 'label')),
+            'mappings': set(PortMapping.objects.values_list('device_id', 'front_port_id', 'rear_port_id')),
+            'counters': {
+                device.pk: Device.objects.values_list(
+                    'interface_count', 'front_port_count', 'rear_port_count', 'module_bay_count'
+                ).get(pk=device.pk)
+                for device in devices
+            },
+        }
 
-        original = snapshot()
-        self.assertIn((device_a.pk, 'Ethernet1/1'), original['interfaces'])
+    @staticmethod
+    def _move_module(module_pk, device_pk, bay_name):
+        module = Module.objects.get(pk=module_pk)
+        module.snapshot()
+        module.device = Device.objects.get(pk=device_pk)
+        module.module_bay = ModuleBay.objects.get(device_id=device_pk, name=bay_name)
+        module.full_clean()
+        module.save()
+
+    @staticmethod
+    def _edit_interface(device_pk, interface_name, **attrs):
+        interface = Interface.objects.get(device_id=device_pk, name=interface_name)
+        interface.snapshot()
+        for attr, value in attrs.items():
+            setattr(interface, attr, value)
+        interface.full_clean()
+        interface.save()
+
+    def _make_request(self):
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+        return request
+
+    def test_revert_cross_device_module_move(self):
+        """
+        Reverting a merged cross-device module move must return the module, its nested
+        module, bays, components and port mappings to the original device. (#722)
+        """
+        request = self._make_request()
+        line_card, sfp_module, device_a, device_b = self._create_module_move_fixture(request)
+        original = self._module_move_snapshot(line_card, sfp_module, device_a, device_b)
+        self.assertIn((device_a.pk, 'Ethernet1/1', ''), original['interfaces'])
+        self.assertIn((device_a.pk, 'Front 1', ''), original['front_ports'])
 
         branch = self._create_and_provision_branch()
-
-        # In branch: move the line card to Chassis B / Slot 2
         with activate_branch(branch), event_tracking(request):
             request.id = uuid.uuid4()
-            module = Module.objects.get(pk=line_card.pk)
-            module.snapshot()
-            module.device = Device.objects.get(pk=device_b.pk)
-            module.module_bay = ModuleBay.objects.get(device_id=device_b.pk, name='Slot 2')
-            module.full_clean()
-            module.save()
+            self._move_module(line_card.pk, device_b.pk, 'Slot 2')
 
         branch.merge(user=self.user, commit=True)
-        self.assertIn((device_b.pk, 'Ethernet2/1'), snapshot()['interfaces'])
+        moved = self._module_move_snapshot(line_card, sfp_module, device_a, device_b)
+        self.assertIn((device_b.pk, 'Ethernet2/1', ''), moved['interfaces'])
+        self.assertIn((device_b.pk, 'Rear 2', ''), moved['rear_ports'])
 
         branch.revert(user=self.user, commit=True)
-        self.assertEqual(snapshot(), original)
+        self.assertEqual(self._module_move_snapshot(line_card, sfp_module, device_a, device_b), original)
+
+    def test_revert_module_move_with_edit_in_same_request(self):
+        """
+        An edit made to a moved component in the same request as the move (e.g. by a script) must
+        still be undone on revert. (#722)
+        """
+        request = self._make_request()
+        line_card, sfp_module, device_a, device_b = self._create_module_move_fixture(request)
+        original = self._module_move_snapshot(line_card, sfp_module, device_a, device_b)
+
+        branch = self._create_and_provision_branch()
+        with activate_branch(branch), event_tracking(request):
+            request.id = uuid.uuid4()
+            self._move_module(line_card.pk, device_b.pk, 'Slot 2')
+            self._edit_interface(device_b.pk, 'Ethernet2/1', name='uplink', description='Uplink')
+
+        branch.merge(user=self.user, commit=True)
+        self.assertIn(
+            (device_b.pk, 'uplink', 'Uplink'), self._module_move_snapshot(line_card, sfp_module)['interfaces']
+        )
+
+        branch.revert(user=self.user, commit=True)
+        self.assertEqual(self._module_move_snapshot(line_card, sfp_module, device_a, device_b), original)
+
+    def test_revert_module_move_with_later_edit(self):
+        """
+        Edits made to a moved component in a later request than the move must be undone on revert,
+        along with the move itself. (#722)
+        """
+        request = self._make_request()
+        line_card, sfp_module, device_a, device_b = self._create_module_move_fixture(request)
+        original = self._module_move_snapshot(line_card, sfp_module, device_a, device_b)
+
+        branch = self._create_and_provision_branch()
+        with activate_branch(branch), event_tracking(request):
+            request.id = uuid.uuid4()
+            self._move_module(line_card.pk, device_b.pk, 'Slot 2')
+        with activate_branch(branch), event_tracking(request):
+            request.id = uuid.uuid4()
+            self._edit_interface(device_b.pk, 'Ethernet2/1', description='Uplink')
+        with activate_branch(branch), event_tracking(request):
+            request.id = uuid.uuid4()
+            self._edit_interface(device_b.pk, 'Ethernet2/1', name='uplink')
+
+        branch.merge(user=self.user, commit=True)
+        self.assertIn(
+            (device_b.pk, 'uplink', 'Uplink'), self._module_move_snapshot(line_card, sfp_module)['interfaces']
+        )
+
+        branch.revert(user=self.user, commit=True)
+        self.assertEqual(self._module_move_snapshot(line_card, sfp_module, device_a, device_b), original)
 
     def test_merge_revert_restores_deleted_mptt_object(self):
         """
