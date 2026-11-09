@@ -343,9 +343,7 @@ class TagObjectTypesMigrationTestCase(TestCase):
         loader = MigrationLoader(connection)
         migration = loader.get_migration(*self.MIGRATION)
         from_state = loader.project_state(migration.dependencies[-1])
-        operation = next(
-            op for op in migration.operations if op.model_name == 'tag' and op.name == 'object_types'
-        )
+        operation = next(op for op in migration.operations if op.model_name == 'tag' and op.name == 'object_types')
         to_state = from_state.clone()
         operation.state_forwards('extras', to_state)
         with connection.cursor() as cursor:
