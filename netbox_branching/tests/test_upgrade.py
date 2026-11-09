@@ -17,16 +17,18 @@ be reconnected afterwards.
 """
 
 import gzip
+import importlib
 import uuid
 import weakref
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import connection, connections
 from django.db.models.signals import m2m_changed, post_save, pre_delete
-from django.test import RequestFactory
+from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
 from core.signals import handle_changed_object, handle_deleted_object
@@ -275,3 +277,66 @@ class MigrateBranchSignalTestCase(FastTeardownTransactionTestCase):
 
         self.assertEqual(branch.get_unmerged_changes().count(), 0)
         self.assertTrue(_signal_handlers_connected())
+
+
+class TagObjectTypesMigrationTestCase(TestCase):
+    """
+    Regression tests for GitHub issue #705: migration 0006 must copy extras_tag_object_types into
+    open branches even when main has already applied extras.0131 (which renames the column to contenttype_id).
+    """
+
+    TABLE = 'extras_tag_object_types'
+    MIGRATION = ('extras', '0131_concrete_objecttype')
+
+    def _create_branch(self, include_0131):
+        branch = Branch(name='tag-object-types')
+        branch.save(provision=False)
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.READY)
+        schema = branch.schema_name
+        with connection.cursor() as cursor:
+            cursor.execute(f'CREATE SCHEMA "{schema}"')
+            cursor.execute(f'CREATE TABLE "{schema}".django_migrations AS SELECT * FROM public.django_migrations')
+            if not include_0131:
+                cursor.execute(f'DELETE FROM "{schema}".django_migrations WHERE app = %s AND name = %s', self.MIGRATION)
+        return schema
+
+    def _run_migration(self):
+        module = importlib.import_module('netbox_branching.migrations.0006_tag_object_types')
+        module.copy_table(apps, None)
+
+    def _columns(self, schema):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'SELECT column_name FROM information_schema.columns WHERE table_schema = %s AND table_name = %s',
+                [schema, self.TABLE],
+            )
+            return {row[0] for row in cursor.fetchall()}
+
+    def _index_names(self, schema):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'SELECT indexname FROM pg_indexes WHERE schemaname = %s AND tablename = %s', [schema, self.TABLE]
+            )
+            return {row[0] for row in cursor.fetchall()}
+
+    def test_copy_table_for_branch_predating_0131(self):
+        schema = self._create_branch(include_0131=False)
+        self._run_migration()
+
+        # The branch's own migrate step must still be able to apply extras.0131
+        self.assertIn('objecttype_id', self._columns(schema))
+        self.assertNotIn('contenttype_id', self._columns(schema))
+        self.assertEqual(self._index_names(schema), self._index_names('public'))
+
+        with connection.cursor() as cursor:
+            cursor.execute(f'SELECT COUNT(*) FROM "{schema}".{self.TABLE}')
+            branch_count = cursor.fetchone()[0]
+            cursor.execute(f'SELECT COUNT(*) FROM public.{self.TABLE}')
+            self.assertEqual(branch_count, cursor.fetchone()[0])
+
+    def test_copy_table_for_branch_with_0131(self):
+        schema = self._create_branch(include_0131=True)
+        self._run_migration()
+
+        self.assertIn('contenttype_id', self._columns(schema))
+        self.assertEqual(self._index_names(schema), self._index_names('public'))
