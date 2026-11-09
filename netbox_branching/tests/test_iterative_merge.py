@@ -4,14 +4,16 @@ Tests for Branch merge functionality with common base class and iterative merge 
 
 import unittest.mock
 import uuid
+from types import SimpleNamespace
 
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ValidationError
 from django.db import connections
-from django.test import RequestFactory, SimpleTestCase
+from django.test import RequestFactory, SimpleTestCase, TestCase
 from django.urls import reverse
 
+from core.choices import ObjectChangeActionChoices
 from dcim.choices import CableProfileChoices, DeviceFaceChoices
 from dcim.models import (
     Cable,
@@ -36,6 +38,7 @@ from extras.models import CustomField, Tag
 from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.error_report import build_error_report, get_entry_message, get_merge_recommendations
+from netbox_branching.merge_strategies.iterative import IterativeMergeStrategy
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import CableTestMixin, FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import DELETED, _deep_merge_dict, _strip_deleted, activate_branch, diff_for_merge
@@ -1432,6 +1435,24 @@ class BaseMergeTests(CableTestMixin):
         self._assert_connected(cable, ports.a1, ports.b1)
         self.assertEqual(CablePath.objects.count(), 2)
 
+    def test_revert_bulk_cable_delete(self):
+        """Revert a merged branch which deleted two cables in one request. Refs: #693"""
+        ports = self._create_interfaces()
+        cable1 = self._connect([ports.a1], [ports.b1])
+        cable2 = self._connect([ports.a2], [ports.b2])
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            for cable in Cable.objects.filter(id__in=(cable1.id, cable2.id)):
+                cable.delete()
+        branch.merge(user=self.user, commit=True)
+
+        branch.revert(user=self.user, commit=True)
+
+        self._assert_connected(cable1, ports.a1, ports.b1)
+        self._assert_connected(cable2, ports.a2, ports.b2)
+        self.assertEqual(CablePath.objects.count(), 4)
+
     def _merge_cable_move(self, move_a, move_b):
         """Merge a branch which moves the A and/or B end of an existing cable to another interface."""
         ports = self._create_interfaces()
@@ -2025,6 +2046,43 @@ class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
     def test_revert_cable_create(self):
         """The Cable UPDATE recorded on creation has no prechange_data, so its undo nulls every field. Refs: #694"""
         super().test_revert_cable_create()
+
+
+class OrderForRevertTests(TestCase):
+    """Unit tests for IterativeMergeStrategy._order_for_revert(). Refs: #693"""
+
+    def _change(self, model, pk, action, request_id, prechange_data=None):
+        return SimpleNamespace(
+            changed_object_type=ContentType.objects.get_for_model(model),
+            changed_object_id=pk,
+            action=action,
+            request_id=request_id,
+            prechange_data=prechange_data,
+        )
+
+    def test_update_waits_for_every_referenced_delete(self):
+        request_id = uuid.uuid4()
+        update = self._change(
+            Interface, 1, ObjectChangeActionChoices.ACTION_UPDATE, request_id, {'cable': 10, 'device': 5}
+        )
+        other_update = self._change(Interface, 2, ObjectChangeActionChoices.ACTION_UPDATE, request_id, {'cable': 10})
+        delete_cable = self._change(Cable, 10, ObjectChangeActionChoices.ACTION_DELETE, request_id)
+        delete_device = self._change(Device, 5, ObjectChangeActionChoices.ACTION_DELETE, request_id)
+        changes = [update, other_update, delete_cable, delete_device]
+
+        ordered = list(IterativeMergeStrategy._order_for_revert(changes))
+
+        self.assertEqual(ordered, [delete_cable, other_update, delete_device, update])
+
+    def test_interleaved_requests(self):
+        request_a, request_b = uuid.uuid4(), uuid.uuid4()
+        update = self._change(Interface, 1, ObjectChangeActionChoices.ACTION_UPDATE, request_a, {'cable': 10})
+        unrelated = self._change(Interface, 2, ObjectChangeActionChoices.ACTION_UPDATE, request_b, {'cable': 10})
+        delete_cable = self._change(Cable, 10, ObjectChangeActionChoices.ACTION_DELETE, request_a)
+
+        ordered = list(IterativeMergeStrategy._order_for_revert([update, unrelated, delete_cable]))
+
+        self.assertEqual(ordered, [unrelated, delete_cable, update])
 
 
 class DiffForMergeTests(SimpleTestCase):

@@ -2,8 +2,7 @@
 Iterative merge strategy implementation.
 """
 
-from itertools import groupby
-from operator import attrgetter
+from collections import defaultdict
 
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS
@@ -12,7 +11,6 @@ from core.choices import ObjectChangeActionChoices
 from netbox.context_managers import event_tracking
 
 from ..error_report import annotate_validation_error
-from .squash import SquashMergeStrategy
 from .strategy import MergeStrategy
 
 __all__ = ('IterativeMergeStrategy',)
@@ -73,34 +71,38 @@ class IterativeMergeStrategy(MergeStrategy):
         # Perform cleanup tasks
         self._clean(models)
 
-    @staticmethod
-    def _order_for_revert(changes):
+    @classmethod
+    def _order_for_revert(cls, changes):
         """
-        Yield changes newest first, except that within one request an UPDATE whose prechange data references an
-        object the request deleted earlier (e.g. an Interface left by a Cable delete) waits for its restore. (#693)
+        Yield changes newest first, except that an UPDATE whose prechange data references an object its own
+        request deleted (e.g. an Interface left by a Cable delete) waits for that object's restore. (#693)
         """
-        for _, group in groupby(changes, key=attrgetter('request_id')):
-            group = list(group)
-            pending = {_change_key(c) for c in group if c.action == ObjectChangeActionChoices.ACTION_DELETE}
-            waiting = []
+        changes = list(changes)
+        pending = defaultdict(set)
+        for change in changes:
+            if change.action == ObjectChangeActionChoices.ACTION_DELETE:
+                pending[change.request_id].add(_change_key(change))
+        waiting = defaultdict(list)
 
-            for change in group:
-                if change.action == ObjectChangeActionChoices.ACTION_UPDATE and pending:
-                    model_class = change.changed_object_type.model_class()
-                    refs = SquashMergeStrategy._get_fk_references(model_class, change.prechange_data, pending)
-                    if refs:
-                        waiting.append((change, refs))
-                        continue
+        for change in changes:
+            request_pending = pending[change.request_id]
+            if change.action == ObjectChangeActionChoices.ACTION_UPDATE and request_pending:
+                model_class = change.changed_object_type.model_class()
+                refs = cls._get_fk_references(model_class, change.prechange_data, request_pending)
+                if refs:
+                    waiting[change.request_id].append((change, refs))
+                    continue
 
-                yield change
+            yield change
 
-                if change.action == ObjectChangeActionChoices.ACTION_DELETE:
-                    pending.discard(_change_key(change))
-                    released = [c for c, refs in waiting if not refs & pending]
-                    waiting = [(c, refs) for c, refs in waiting if refs & pending]
-                    yield from released
+            if change.action == ObjectChangeActionChoices.ACTION_DELETE:
+                request_pending.discard(_change_key(change))
+                held = waiting[change.request_id]
+                waiting[change.request_id] = [(c, refs) for c, refs in held if refs & request_pending]
+                yield from (c for c, refs in held if not refs & request_pending)
 
-            yield from (c for c, _ in waiting)
+        for held in waiting.values():
+            yield from (c for c, _ in held)
 
 
 def _change_key(change):

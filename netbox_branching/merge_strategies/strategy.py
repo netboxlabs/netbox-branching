@@ -1,7 +1,9 @@
 import logging
 from abc import ABC, abstractmethod
 
-from django.db import DEFAULT_DB_ALIAS
+from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
+from django.db import DEFAULT_DB_ALIAS, models
 from mptt.models import MPTTModel
 
 __all__ = (
@@ -44,6 +46,56 @@ class MergeStrategy(ABC):
             logger: Logger instance for logging
             user: User who initiated the revert
         """
+
+    @staticmethod
+    def _get_fk_references(model_class, data, changed_objects):
+        """
+        Find foreign key references in the given data that point to objects in changed_objects.
+        Returns a set of (model_label, object_id) tuples where model_label is "app.model".
+        Handles both regular ForeignKey fields and GenericForeignKey fields.
+        """
+        if not data:
+            return set()
+
+        references = set()
+
+        # Check regular ForeignKey fields
+        for field in model_class._meta.get_fields():
+            if isinstance(field, models.ForeignKey):
+                fk_value = data.get(field.name)
+
+                if fk_value:
+                    # Get the content type of the related model
+                    related_model = field.related_model
+                    related_ct = ContentType.objects.get_for_model(related_model)
+                    app_label, model = related_ct.natural_key()
+                    model_label = f'{app_label}.{model}'
+                    ref_key = (model_label, fk_value)
+
+                    # Only track if this object is in our changed_objects
+                    if ref_key in changed_objects:
+                        references.add(ref_key)
+
+        # Check GenericForeignKey fields
+        for field in model_class._meta.private_fields:
+            if isinstance(field, GenericForeignKey):
+                # ObjectChange data may store the CT FK as either 'field_name' or 'field_name_id'
+                ct_value = data.get(field.ct_field) or data.get(field.ct_field + '_id')
+                fk_value = data.get(field.fk_field)
+
+                if ct_value and fk_value:
+                    try:
+                        ct = ContentType.objects.get_for_id(ct_value)
+                        app_label, model = ct.natural_key()
+                        model_label = f'{app_label}.{model}'
+                        ref_key = (model_label, fk_value)
+
+                        if ref_key in changed_objects:
+                            references.add(ref_key)
+                    except ContentType.DoesNotExist:
+                        pass
+
+        return references
 
     def _update_dependent_objects(self, pks_by_model, logger):
         """
