@@ -48,9 +48,11 @@ def copy_table(apps, schema_editor):
             )
             for index in get_sql_results(cursor):
                 definition = index.indexdef.split(' USING ', maxsplit=1)[1]
+                unique = index.indexdef.startswith('CREATE UNIQUE ')
                 cursor.execute(
-                    "SELECT indexname FROM pg_indexes WHERE schemaname='public' AND tablename=%s AND indexdef LIKE %s",
-                    [table, f'% {definition}']
+                    "SELECT indexname FROM pg_indexes WHERE schemaname='public' AND tablename=%s "
+                    "AND split_part(indexdef, ' USING ', 2)=%s AND starts_with(indexdef, 'CREATE UNIQUE ')=%s",
+                    [table, definition, unique]
                 )
                 if (result := cursor.fetchone()) and result[0] != index.indexname:
                     cursor.execute(f"ALTER INDEX {schema_name}.{index.indexname} RENAME TO {result[0]}")

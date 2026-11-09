@@ -27,6 +27,7 @@ from unittest.mock import patch
 from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import connection, connections
+from django.db.migrations.loader import MigrationLoader
 from django.db.models.signals import m2m_changed, post_save, pre_delete
 from django.test import RequestFactory, TestCase
 from django.urls import reverse
@@ -333,6 +334,31 @@ class TagObjectTypesMigrationTestCase(TestCase):
             branch_count = cursor.fetchone()[0]
             cursor.execute(f'SELECT COUNT(*) FROM public.{self.TABLE}')
             self.assertEqual(branch_count, cursor.fetchone()[0])
+
+    def test_branch_predating_0131_can_apply_0131(self):
+        schema = self._create_branch(include_0131=False)
+        self._run_migration()
+
+        # Apply extras.0131's AlterField for Tag.object_types against the branch schema
+        loader = MigrationLoader(connection)
+        migration = loader.get_migration(*self.MIGRATION)
+        from_state = loader.project_state(migration.dependencies[-1])
+        operation = next(
+            op for op in migration.operations if op.model_name == 'tag' and op.name == 'object_types'
+        )
+        to_state = from_state.clone()
+        operation.state_forwards('extras', to_state)
+        with connection.cursor() as cursor:
+            cursor.execute(f'SET search_path TO "{schema}", public')
+        try:
+            with connection.schema_editor() as schema_editor:
+                operation.database_forwards('extras', schema_editor, from_state, to_state)
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute('SET search_path TO public')
+
+        self.assertIn('contenttype_id', self._columns(schema))
+        self.assertNotIn('objecttype_id', self._columns(schema))
 
     def test_copy_table_for_branch_with_0131(self):
         schema = self._create_branch(include_0131=True)
