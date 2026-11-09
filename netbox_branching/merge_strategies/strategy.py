@@ -87,14 +87,15 @@ def get_module_move_derived_fields(changes):
     derived = {}
     for request_changes in changes_by_request.values():
         root_indexes = [
-            i for i, change in enumerate(request_changes)
+            i
+            for i, change in enumerate(request_changes)
             if change.changed_object_type_id == module_type.pk and _field_changed(change, 'module_bay')
         ]
         # Each move's side effects follow its root and precede the next move in the request
         for i, start in enumerate(root_indexes):
             stop = root_indexes[i + 1] if i + 1 < len(root_indexes) else len(request_changes)
             writes = _get_move_writes(
-                request_changes[start], request_changes[start + 1:stop], module_type, frontport_type, portmapping_type
+                request_changes[start], request_changes[start + 1 : stop], module_type, frontport_type, portmapping_type
             )
             for change in writes:
                 derived[change.pk] = MODULE_MOVE_DERIVED_FIELDS
