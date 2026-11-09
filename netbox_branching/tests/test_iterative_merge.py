@@ -20,13 +20,19 @@ from dcim.models import (
     DeviceRole,
     DeviceType,
     FrontPort,
+    FrontPortTemplate,
     Interface,
+    InterfaceTemplate,
     Manufacturer,
+    Module,
     ModuleBay,
     ModuleBayTemplate,
+    ModuleType,
     PortMapping,
+    PortTemplateMapping,
     Rack,
     RearPort,
+    RearPortTemplate,
     Region,
     Site,
     VirtualChassis,
@@ -1013,6 +1019,79 @@ class BaseMergeTests(CableTestMixin):
         # Device and its module bays are removed again
         self.assertFalse(Device.objects.filter(id=device_id).exists())
         self.assertEqual(ModuleBay.objects.filter(device_id=device_id).count(), 0)
+
+    def test_revert_cross_device_module_move(self):
+        """
+        Reverting a merged cross-device module move must return the module, its nested
+        module, bays, components and port mappings to the original device. (#722)
+        """
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = self.user
+
+        with event_tracking(request):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            chassis_type = DeviceType.objects.create(manufacturer=self.manufacturer, model='Chassis', slug='chassis')
+            ModuleBayTemplate.objects.create(device_type=chassis_type, name='Slot 1', position='1')
+            ModuleBayTemplate.objects.create(device_type=chassis_type, name='Slot 2', position='2')
+            line_card_type = ModuleType.objects.create(manufacturer=self.manufacturer, model='Line Card')
+            InterfaceTemplate.objects.create(module_type=line_card_type, name='Ethernet{module}/1', type='1000base-t')
+            front_template = FrontPortTemplate.objects.create(module_type=line_card_type, name='Front 1', type='lc')
+            rear_template = RearPortTemplate.objects.create(
+                module_type=line_card_type, name='Rear 1', type='lc', positions=1
+            )
+            PortTemplateMapping.objects.create(
+                module_type=line_card_type,
+                front_port=front_template,
+                front_port_position=1,
+                rear_port=rear_template,
+                rear_port_position=1,
+            )
+            ModuleBayTemplate.objects.create(
+                module_type=line_card_type, name='SFP bay {module}/1', position='{module}/1'
+            )
+            sfp_type = ModuleType.objects.create(manufacturer=self.manufacturer, model='SFP')
+            InterfaceTemplate.objects.create(module_type=sfp_type, name='SFP {module}', type='10gbase-x-sfpp')
+            device_a = Device.objects.create(
+                name='Chassis A', device_type=chassis_type, role=self.device_role, site=site
+            )
+            device_b = Device.objects.create(
+                name='Chassis B', device_type=chassis_type, role=self.device_role, site=site
+            )
+            slot_1_a = device_a.modulebays.get(name='Slot 1')
+            line_card = Module.objects.create(device=device_a, module_bay=slot_1_a, module_type=line_card_type)
+            sfp_bay = line_card.modulebays.get(name='SFP bay 1/1')
+            sfp_module = Module.objects.create(device=device_a, module_bay=sfp_bay, module_type=sfp_type)
+
+        def snapshot():
+            return {
+                'line_card': Module.objects.values_list('device_id', 'module_bay_id').get(pk=line_card.pk),
+                'sfp_module': Module.objects.values_list('device_id', 'module_bay_id').get(pk=sfp_module.pk),
+                'bays': set(ModuleBay.objects.filter(module__isnull=False).values_list('device_id', 'name', 'parent')),
+                'interfaces': set(Interface.objects.values_list('device_id', 'name')),
+                'mappings': set(PortMapping.objects.values_list('device_id', 'front_port_id', 'rear_port_id')),
+            }
+
+        original = snapshot()
+        self.assertIn((device_a.pk, 'Ethernet1/1'), original['interfaces'])
+
+        branch = self._create_and_provision_branch()
+
+        # In branch: move the line card to Chassis B / Slot 2
+        with activate_branch(branch), event_tracking(request):
+            request.id = uuid.uuid4()
+            module = Module.objects.get(pk=line_card.pk)
+            module.snapshot()
+            module.device = Device.objects.get(pk=device_b.pk)
+            module.module_bay = ModuleBay.objects.get(device_id=device_b.pk, name='Slot 2')
+            module.full_clean()
+            module.save()
+
+        branch.merge(user=self.user, commit=True)
+        self.assertIn((device_b.pk, 'Ethernet2/1'), snapshot()['interfaces'])
+
+        branch.revert(user=self.user, commit=True)
+        self.assertEqual(snapshot(), original)
 
     def test_merge_revert_restores_deleted_mptt_object(self):
         """

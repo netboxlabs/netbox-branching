@@ -13,7 +13,7 @@ from netbox.context_managers import event_tracking
 
 from ..error_report import annotate_validation_error
 from ..signals import squash_dependency_graph_built
-from .strategy import MergeStrategy
+from .strategy import MergeStrategy, get_module_move_derived_fields
 
 __all__ = ('SquashMergeStrategy',)
 
@@ -44,6 +44,7 @@ class CollapsedChange:
         self.last_change = None  # The most recent ObjectChange (for metadata)
         self.synthetic = False  # True for UPDATEs injected by cycle breaking
         self.touched_fields = set()  # Fields altered by any individual UPDATE, even if net unchanged
+        self.derived_values = {}  # Field values written by a Module move, see generate_object_change() (#722)
 
         # Dependencies for ordering
         self.depends_on = set()  # Set of keys this change depends on
@@ -57,7 +58,7 @@ class CollapsedChange:
             f'action={self.final_action} changes={self.change_count}>'
         )
 
-    def add_change(self, change, logger):
+    def add_change(self, change, logger, derived_fields=()):
         """
         Incrementally process a single ObjectChange and update the collapsed state.
         This processes changes one-by-one to avoid storing all ObjectChanges in memory.
@@ -66,6 +67,10 @@ class CollapsedChange:
         """
         self.change_count += 1
         self.last_change = change
+        pre, post = change.prechange_data or {}, change.postchange_data or {}
+        for field in derived_fields:
+            if field in post and pre.get(field) != post[field]:
+                self.derived_values[field] = post[field]
 
         # Dispatch to specific handler based on action type
         if change.action == 'create':
@@ -142,6 +147,10 @@ class CollapsedChange:
         dummy_change.pk = self.last_change.pk
         if self.final_action == ActionType.UPDATE:
             dummy_change.replay_fields = self.touched_fields
+            # Leave a moved field to the Module's undo only if no later change overwrote it
+            dummy_change.derived_fields = {
+                field for field, value in self.derived_values.items() if self.postchange_data.get(field) == value
+            }
         return dummy_change
 
 
@@ -155,11 +164,12 @@ class SquashMergeStrategy(MergeStrategy):
     revert_changes_ordering = 'time'
 
     @staticmethod
-    def _collapse_changes(changes, logger):
+    def _collapse_changes(changes, logger, derived_fields=None):
         """
         Collapse a queryset of ObjectChanges into a dict of CollapsedChange objects keyed by
         (model_label, object_id). Returns a tuple of (collapsed_changes, change_count).
         """
+        derived_fields = derived_fields or {}
         collapsed_changes = {}
         change_count = 0
 
@@ -173,7 +183,7 @@ class SquashMergeStrategy(MergeStrategy):
                 collapsed_changes[key] = CollapsedChange(key, model_class)
                 logger.debug(f'New object: {model_class.__name__}:{change.changed_object_id}')
 
-            collapsed_changes[key].add_change(change, logger)
+            collapsed_changes[key].add_change(change, logger, derived_fields.get(change.pk, ()))
 
         return collapsed_changes, change_count
 
@@ -260,7 +270,8 @@ class SquashMergeStrategy(MergeStrategy):
         models = set()
 
         logger.info('Collapsing ObjectChanges by object (incremental)...')
-        collapsed_changes, change_count = SquashMergeStrategy._collapse_changes(changes, logger)
+        derived_fields = get_module_move_derived_fields(changes)
+        collapsed_changes, change_count = SquashMergeStrategy._collapse_changes(changes, logger, derived_fields)
         logger.info(f'  {change_count} changes collapsed into {len(collapsed_changes)} objects')
         SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
 

@@ -66,6 +66,8 @@ class ObjectChange(ObjectChange_):
 
     # Set by the squash strategy, see get_merge_data()
     replay_fields = ()
+    # Set on revert for fields a Module move rewrites itself, see get_merge_data() (#722)
+    derived_fields = ()
 
     class Meta:
         proxy = True
@@ -94,6 +96,9 @@ class ObjectChange(ObjectChange_):
 
         Fields in ``replay_fields`` are written from the target snapshot even when net unchanged, since a side effect
         replayed earlier may have reset them; dicts are left to the nested diff to preserve sibling keys. (#688)
+
+        Fields in ``derived_fields`` are omitted: they were rewritten by a Module move, which replaying
+        the Module's own change recomputes. (#722)
         """
         source, target = self.prechange_data_clean, self.postchange_data_clean
         if reverse:
@@ -102,6 +107,8 @@ class ObjectChange(ObjectChange_):
         for field in self.replay_fields:
             if field not in data and field in target and not isinstance(target[field], dict):
                 data[field] = target[field]
+        for field in self.derived_fields:
+            data.pop(field, None)
         return data
 
     def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None, skip_missing=False):
@@ -194,9 +201,13 @@ class ObjectChange(ObjectChange_):
 
         # Reverting a modification to an object
         elif self.action == ObjectChangeActionChoices.ACTION_UPDATE:
-            instance = model.objects.using(using).get(pk=self.changed_object_id)
             # Reverse direction (post -> pre); keys the branch added are removed. (#592)
-            update_object(instance, self.get_merge_data(reverse=True), using=using)
+            data = self.get_merge_data(reverse=True)
+            if self.derived_fields and not data:
+                logger.debug(f'Change {self.pk} only altered fields derived from a module move; skipping')
+                return
+            instance = model.objects.using(using).get(pk=self.changed_object_id)
+            update_object(instance, data, using=using)
 
         # Restoring a deleted object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:

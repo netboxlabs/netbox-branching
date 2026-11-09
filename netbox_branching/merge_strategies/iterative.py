@@ -9,7 +9,7 @@ from core.choices import ObjectChangeActionChoices
 from netbox.context_managers import event_tracking
 
 from ..error_report import annotate_validation_error
-from .strategy import MergeStrategy
+from .strategy import MergeStrategy, get_module_move_derived_fields
 
 __all__ = ('IterativeMergeStrategy',)
 
@@ -51,9 +51,11 @@ class IterativeMergeStrategy(MergeStrategy):
         """
         models = set()
         restored_pks_by_model = {}
+        derived_fields = get_module_move_derived_fields(changes)
 
         # Undo each change from the Branch
         for change in changes:
+            change.derived_fields = derived_fields.get(change.pk, ())
             model_class = change.changed_object_type.model_class()
             models.add(model_class)
             if change.action != ObjectChangeActionChoices.ACTION_CREATE:

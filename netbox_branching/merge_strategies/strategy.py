@@ -1,13 +1,81 @@
 import logging
 from abc import ABC, abstractmethod
 
+from django.contrib.contenttypes.models import ContentType
 from django.db import DEFAULT_DB_ALIAS
 from mptt.models import MPTTModel
+
+from core.choices import ObjectChangeActionChoices
 
 __all__ = (
     'MergeStrategy',
     'get_merge_strategy',
+    'get_module_move_derived_fields',
 )
+
+# Fields which a Module move (dcim.ModuleMovePlan) rewrites on the objects it relocates
+MODULE_MOVE_DERIVED_FIELDS = (
+    'device',
+    'name',
+    'label',
+    'parent',
+    'position',
+    '_site',
+    '_location',
+    '_rack',
+    'last_updated',
+)
+
+
+def _field_changed(change, field):
+    return (change.prechange_data or {}).get(field) != (change.postchange_data or {}).get(field)
+
+
+def get_module_move_derived_fields(changes):
+    """
+    Map the PK of each UPDATE in changes which a Module move made as a side effect (to a nested Module, ModuleBay,
+    component or PortMapping) to the fields the move rewrote. Undoing those fields on their own fails validation;
+    undoing the Module's own change moves everything back together. (#722)
+    """
+    module_type = ContentType.objects.get_by_natural_key('dcim', 'module')
+    updates = changes.filter(action=ObjectChangeActionChoices.ACTION_UPDATE)
+
+    # A Module whose bay changed is the root of a move; its request also holds the move's side effects
+    request_ids = {
+        change.request_id
+        for change in updates.filter(changed_object_type=module_type)
+        if _field_changed(change, 'module_bay')
+    }
+    if not request_ids:
+        return {}
+    changes_by_request = {}
+    for change in updates.filter(request_id__in=request_ids):
+        changes_by_request.setdefault(change.request_id, []).append(change)
+
+    frontport_type = ContentType.objects.get_by_natural_key('dcim', 'frontport')
+    portmapping_type = ContentType.objects.get_by_natural_key('dcim', 'portmapping')
+    derived = {}
+    for request_changes in changes_by_request.values():
+        module_changes = [c for c in request_changes if c.changed_object_type_id == module_type.pk]
+        moved_module_ids = {c.changed_object_id for c in module_changes}
+        for change in module_changes:
+            # A nested Module keeps its bay and only follows the root to the new device
+            if not _field_changed(change, 'module_bay'):
+                derived[change.pk] = MODULE_MOVE_DERIVED_FIELDS
+        moved_front_port_ids = set()
+        for change in request_changes:
+            if (change.postchange_data or {}).get('module') in moved_module_ids:
+                derived[change.pk] = MODULE_MOVE_DERIVED_FIELDS
+                if change.changed_object_type_id == frontport_type.pk:
+                    moved_front_port_ids.add(change.changed_object_id)
+        for change in request_changes:
+            if (
+                change.changed_object_type_id == portmapping_type.pk
+                and (change.postchange_data or {}).get('front_port') in moved_front_port_ids
+            ):
+                derived[change.pk] = MODULE_MOVE_DERIVED_FIELDS
+
+    return derived
 
 
 class MergeStrategy(ABC):
