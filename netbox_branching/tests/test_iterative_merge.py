@@ -2026,11 +2026,6 @@ class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
         """The Cable UPDATE recorded on creation has no prechange_data, so its undo nulls every field. Refs: #694"""
         super().test_revert_cable_create()
 
-    @unittest.expectedFailure
-    def test_revert_cable_delete(self):
-        """Reverse-chronological undo restores each interface's cable FK before the cable itself. Refs: #693"""
-        super().test_revert_cable_delete()
-
 
 class DiffForMergeTests(SimpleTestCase):
     """
