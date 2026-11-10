@@ -9,11 +9,16 @@ tests.
 from contextlib import contextmanager
 
 from django.contrib.auth.models import Group
-from django.test import TestCase
+from django.db import connection
+from django.test import TestCase, override_settings
 
 from ipam.models import Prefix
 from netbox_branching import utilities
+from netbox_branching.provisioning import quote_ident
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import (
+    activate_branch,
+    get_tables_to_replicate,
     register_branching_resolver,
     supports_branching,
 )
@@ -195,3 +200,56 @@ class ResolverDispatchTestCase(TestCase):
                 }
             ):
                 self.assertFalse(supports_branching(Group))
+
+
+def _group_resolver(model):
+    return True if model is Group else None
+
+
+class ResolverTableReplicationTestCase(TestCase):
+    """``get_tables_to_replicate`` includes the tables of models a resolver makes branchable."""
+
+    def test_resolver_model_table_is_replicated(self):
+        self.assertNotIn(Group._meta.db_table, get_tables_to_replicate())
+        with _isolated_resolvers():
+            register_branching_resolver(_group_resolver)
+            self.assertIn(Group._meta.db_table, get_tables_to_replicate())
+
+    def test_exempt_resolver_model_table_is_not_replicated(self):
+        with _isolated_resolvers():
+            register_branching_resolver(_group_resolver)
+            with override_settings(PLUGINS_CONFIG={'netbox_branching': {'exempt_models': ['auth.group']}}):
+                self.assertNotIn(Group._meta.db_table, get_tables_to_replicate())
+
+
+class ResolverModelBranchTestCase(FastTeardownTransactionTestCase):
+    """A branch provisioned with a resolver registered gets its own copy of the model's table."""
+
+    serialized_rollback = True
+
+    def _drop_schema(self, schema_name):
+        with connection.cursor() as cursor:
+            cursor.execute(f'DROP SCHEMA IF EXISTS {quote_ident(schema_name)} CASCADE')
+
+    def test_changes_in_branch_stay_in_branch(self):
+        Group.objects.create(name='Group A')
+        with _isolated_resolvers():
+            register_branching_resolver(_group_resolver)
+            branch = provision_branch(user=None, name='Resolver Branch')
+            self.addCleanup(self._drop_schema, branch.schema_name)
+
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    'SELECT 1 FROM information_schema.tables WHERE table_schema=%s AND table_name=%s',
+                    [branch.schema_name, Group._meta.db_table],
+                )
+                self.assertIsNotNone(cursor.fetchone())
+
+            with activate_branch(branch):
+                group = Group.objects.get(name='Group A')
+                group.name = 'Group B'
+                group.save()
+                self.assertTrue(Group.objects.filter(name='Group B').exists())
+
+        self.assertTrue(Group.objects.filter(name='Group A').exists())
+        self.assertFalse(Group.objects.filter(name='Group B').exists())

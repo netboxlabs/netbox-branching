@@ -332,6 +332,27 @@ def get_tables_to_replicate():
                 m2m_table = m2m_field._get_m2m_db_table(model._meta)
             tables.add(m2m_table)
 
+    # A model that a plugin's resolver makes branchable without change logging has no branching
+    # feature, but the router sends its queries to the branch, so the branch needs its table too.
+    if _branching_resolvers:
+        from django.apps import apps
+        from django.db import connection
+
+        from netbox.models.features import ChangeLoggingMixin
+
+        existing_tables = set(connection.introspection.table_names())
+        for model in apps.get_models(include_auto_created=True):
+            meta = model._meta
+            if (
+                meta.db_table not in tables
+                and meta.db_table in existing_tables
+                and meta.managed
+                and not meta.proxy
+                and not issubclass(model, ChangeLoggingMixin)
+                and supports_branching(model)
+            ):
+                tables.add(meta.db_table)
+
     return sorted(tables)
 
 
