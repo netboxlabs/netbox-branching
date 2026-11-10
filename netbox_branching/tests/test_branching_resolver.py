@@ -8,13 +8,12 @@ tests.
 
 from contextlib import contextmanager
 
-from django.contrib.auth.models import Group
+from django.contrib.auth.models import Group, Permission
 from django.db import connection
 from django.test import TestCase, override_settings
 
 from ipam.models import Prefix
 from netbox_branching import utilities
-from netbox_branching.provisioning import quote_ident
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import (
     activate_branch,
@@ -206,6 +205,10 @@ def _group_resolver(model):
     return True if model is Group else None
 
 
+GroupPermissions = Group.permissions.through
+GROUP_PERMISSIONS_TABLE = GroupPermissions._meta.db_table
+
+
 class ResolverTableReplicationTestCase(TestCase):
     """``get_tables_to_replicate`` includes the tables of models a resolver makes branchable."""
 
@@ -213,13 +216,17 @@ class ResolverTableReplicationTestCase(TestCase):
         self.assertNotIn(Group._meta.db_table, get_tables_to_replicate())
         with _isolated_resolvers():
             register_branching_resolver(_group_resolver)
-            self.assertIn(Group._meta.db_table, get_tables_to_replicate())
+            tables = get_tables_to_replicate()
+            self.assertIn(Group._meta.db_table, tables)
+            self.assertIn(GROUP_PERMISSIONS_TABLE, tables)
 
     def test_exempt_resolver_model_table_is_not_replicated(self):
         with _isolated_resolvers():
             register_branching_resolver(_group_resolver)
             with override_settings(PLUGINS_CONFIG={'netbox_branching': {'exempt_models': ['auth.group']}}):
-                self.assertNotIn(Group._meta.db_table, get_tables_to_replicate())
+                tables = get_tables_to_replicate()
+                self.assertNotIn(Group._meta.db_table, tables)
+                self.assertNotIn(GROUP_PERMISSIONS_TABLE, tables)
 
 
 class ResolverModelBranchTestCase(FastTeardownTransactionTestCase):
@@ -227,16 +234,12 @@ class ResolverModelBranchTestCase(FastTeardownTransactionTestCase):
 
     serialized_rollback = True
 
-    def _drop_schema(self, schema_name):
-        with connection.cursor() as cursor:
-            cursor.execute(f'DROP SCHEMA IF EXISTS {quote_ident(schema_name)} CASCADE')
-
     def test_changes_in_branch_stay_in_branch(self):
         Group.objects.create(name='Group A')
+        permission = Permission.objects.first()
         with _isolated_resolvers():
             register_branching_resolver(_group_resolver)
             branch = provision_branch(user=None, name='Resolver Branch')
-            self.addCleanup(self._drop_schema, branch.schema_name)
 
             with connection.cursor() as cursor:
                 cursor.execute(
@@ -249,7 +252,14 @@ class ResolverModelBranchTestCase(FastTeardownTransactionTestCase):
                 group = Group.objects.get(name='Group A')
                 group.name = 'Group B'
                 group.save()
+                group.permissions.add(permission)
                 self.assertTrue(Group.objects.filter(name='Group B').exists())
+                # Query the through table directly: NetBox's users.Group also has a permissions relation,
+                # and group.permissions.filter() joins users_group_permissions instead.
+                self.assertTrue(
+                    GroupPermissions.objects.using(group._state.db).filter(group=group, permission=permission).exists()
+                )
 
         self.assertTrue(Group.objects.filter(name='Group A').exists())
         self.assertFalse(Group.objects.filter(name='Group B').exists())
+        self.assertFalse(GroupPermissions.objects.filter(group__name='Group A').exists())

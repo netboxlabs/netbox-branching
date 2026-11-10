@@ -90,7 +90,7 @@ def my_resolver(model) -> bool | None:
 
 | Return value | Meaning |
 |---|---|
-| `True`  | Model is branchable; route queries to the active branch, and give new branches their own copy of its table (still subject to the `exempt_models` filter). |
+| `True`  | Model is branchable; route queries to the active branch, and give new branches their own copy of its table and its M2M through tables (still subject to the `exempt_models` filter). |
 | `False` | Model is not branchable; always route to main. |
 | `None`  | Defer to the next resolver, or to the default `ChangeLoggingMixin` heuristic. |
 

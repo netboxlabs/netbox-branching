@@ -353,6 +353,14 @@ def get_tables_to_replicate():
             ):
                 tables.add(meta.db_table)
 
+                # M2M writes follow the instance's database, so the branch needs the through tables too
+                for m2m_field in meta.local_many_to_many:
+                    if hasattr(m2m_field, 'through'):
+                        m2m_table = m2m_field.through._meta.db_table
+                    else:
+                        m2m_table = m2m_field._get_m2m_db_table(meta)
+                    tables.add(m2m_table)
+
     return sorted(tables)
 
 
