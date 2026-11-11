@@ -9,7 +9,7 @@ from asgiref.local import Local
 from django.apps import apps
 from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
-from django.db import connections
+from django.db import connection, connections
 from django.db.models import ForeignKey, ManyToManyField
 from django.urls import reverse
 from django.utils import timezone
@@ -335,9 +335,6 @@ def get_tables_to_replicate():
     # A model that a plugin's resolver makes branchable without change logging has no branching
     # feature, but the router sends its queries to the branch, so the branch needs its table too.
     if _branching_resolvers:
-        from django.apps import apps
-        from django.db import connection
-
         from netbox.models.features import ChangeLoggingMixin
 
         existing_tables = set(connection.introspection.table_names())
