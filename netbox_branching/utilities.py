@@ -9,7 +9,7 @@ from asgiref.local import Local
 from django.apps import apps
 from django.contrib import messages
 from django.core.exceptions import FieldDoesNotExist, ObjectDoesNotExist
-from django.db import connections
+from django.db import connection, connections
 from django.db.models import ForeignKey, ManyToManyField
 from django.urls import reverse
 from django.utils import timezone
@@ -331,6 +331,32 @@ def get_tables_to_replicate():
             else:
                 m2m_table = m2m_field._get_m2m_db_table(model._meta)
             tables.add(m2m_table)
+
+    # A model that a plugin's resolver makes branchable without change logging has no branching
+    # feature, but the router sends its queries to the branch, so the branch needs its table too.
+    if _branching_resolvers:
+        from netbox.models.features import ChangeLoggingMixin
+
+        existing_tables = set(connection.introspection.table_names())
+        for model in apps.get_models(include_auto_created=True):
+            meta = model._meta
+            if (
+                meta.db_table not in tables
+                and meta.db_table in existing_tables
+                and meta.managed
+                and not meta.proxy
+                and not issubclass(model, ChangeLoggingMixin)
+                and supports_branching(model)
+            ):
+                tables.add(meta.db_table)
+
+                # M2M writes follow the instance's database, so the branch needs the through tables too
+                for m2m_field in meta.local_many_to_many:
+                    if hasattr(m2m_field, 'through'):
+                        m2m_table = m2m_field.through._meta.db_table
+                    else:
+                        m2m_table = m2m_field._get_m2m_db_table(meta)
+                    tables.add(m2m_table)
 
     return sorted(tables)
 
