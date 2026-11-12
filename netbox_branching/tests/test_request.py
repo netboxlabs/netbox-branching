@@ -128,11 +128,11 @@ class RequestTestCase(TestCase):
     # For API requests, the middleware catches ObjectDoesNotExist from
     # get_active_branch() and returns HTTP 400. For UI requests,
     # get_active_branch() handles a missing branch itself, rendering the page in
-    # main with an error message. These tests pin both contracts down so a
-    # refactor that narrows either except clause (or stops catching at all) is
-    # caught early — a non-existent branch ID slipping through would otherwise
-    # produce a 500 somewhere downstream where the failure mode is harder to
-    # interpret.
+    # the branch already active (main if none) with an error message. These
+    # tests pin both contracts down so a refactor that narrows either except
+    # clause (or stops catching at all) is caught early — a non-existent branch
+    # ID slipping through would otherwise produce a 500 somewhere downstream
+    # where the failure mode is harder to interpret.
     # -------------------------------------------------------------------------
 
     @override_settings(LOGIN_REQUIRED=False)

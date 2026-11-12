@@ -92,13 +92,14 @@ class BranchPermissionTestCase(TestCase):
     # Branch activation
     #
 
-    def _assert_branch_unavailable(self, response):
+    def _assert_branch_unavailable(self, response, active_branch=None):
         """
-        A UI request naming a branch it may not use is not refused: the page renders in main, with an
-        error message which doesn't reveal whether the branch exists.
+        A UI request naming a branch it may not use is not refused: the page renders in whichever branch
+        was already active (main if none), with an error message which doesn't reveal whether the branch
+        exists.
         """
         self.assertEqual(response.status_code, 200)
-        self.assertIsNone(response.wsgi_request.active_branch)
+        self.assertEqual(response.wsgi_request.active_branch, active_branch)
         self.assertIn(
             'The requested branch does not exist or you do not have permission to view it.',
             [str(message) for message in get_messages(response.wsgi_request)],
@@ -121,9 +122,13 @@ class BranchPermissionTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.wsgi_request.active_branch, mine)
 
-        # Following a link to someone else's branch leaves the user in main rather than in their own branch
-        self._assert_branch_unavailable(self.client.get(f'{url}?{QUERY_PARAM}={theirs.schema_id}'))
-        self.assertEqual(self.client.cookies[COOKIE_NAME].value, '')
+        # Following a link to someone else's branch, or to one which doesn't exist, leaves the user in their
+        # own branch rather than moving them to main
+        for schema_id in (theirs.schema_id, 'nonexist'):
+            with self.subTest(schema_id=schema_id):
+                response = self.client.get(f'{url}?{QUERY_PARAM}={schema_id}')
+                self._assert_branch_unavailable(response, active_branch=mine)
+                self.assertEqual(self.client.cookies[COOKIE_NAME].value, mine.schema_id)
 
     def test_unpermitted_branch_is_indistinguishable_from_missing(self):
         branch = Branch.objects.get(name='Branch 1')

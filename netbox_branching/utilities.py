@@ -630,10 +630,10 @@ def get_active_branch(request):
 
     Raises BranchNotReady if the API branch header names a branch which exists but is not usable, and
     Branch.DoesNotExist if an API request names a branch which does not exist or which the user may
-    not view. A UI request naming such a branch gets an error message and None instead. Always
-    returns a Branch or None otherwise; never a response object, as callers install the return value
-    as the active branch. Callers which cannot refuse the request must treat both exceptions as "no
-    branch".
+    not view. A UI request naming such a branch gets an error message instead, and remains in the
+    branch selected by its cookie (if any). Always returns a Branch or None otherwise; never a
+    response object, as callers install the return value as the active branch. Callers which cannot
+    refuse the request must treat both exceptions as "no branch".
     """
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
     # A background job receives a NetBoxFakeRequest, which has no headers attribute (#675).
@@ -662,7 +662,9 @@ def get_active_branch(request):
                         fail_silently=True,
                     )
                     request._branch_activation_notified = True
-                return None
+                # Leave the user in whichever branch they were already working in. Moving them to main
+                # would make it easy to apply their next change there by mistake.
+                return _get_cookie_branch(request)
             if branch is None:
                 return None  # Leave the view to report the missing or rejected credentials
             if branch.ready:
@@ -689,6 +691,14 @@ def get_active_branch(request):
         return None
 
     # Branch set by cookie
+    return _get_cookie_branch(request)
+
+
+def _get_cookie_branch(request):
+    """
+    Return the Branch selected by the request's cookie, or None if no cookie is set or it names a
+    branch which is not available to the user.
+    """
     if schema_id := request.COOKIES.get(COOKIE_NAME):
         try:
             if (branch := _get_permitted_branch(request, schema_id)) and branch.ready:
