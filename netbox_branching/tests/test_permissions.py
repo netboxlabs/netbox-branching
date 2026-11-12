@@ -137,6 +137,28 @@ class BranchPermissionTestCase(TestCase):
         self._assert_branch_unavailable(self.client.get(f'{url}?{QUERY_PARAM}={branch.schema_id}'))
         self._assert_branch_unavailable(self.client.get(f'{url}?{QUERY_PARAM}=nonexist'))
 
+    def test_cookie_survives_expired_session(self):
+        # An anonymous user can see no branch, but their cookie must be kept: the session may simply have expired,
+        # and the branch should be active again once the user logs back in
+        mine = Branch.objects.get(name='Branch 1')
+        Branch.objects.filter(pk=mine.pk).update(owner=self.user)
+        self._constrain_to_owned_branches()
+        url = reverse('home')
+
+        for query in ('', f'?{QUERY_PARAM}=nonexist'):
+            with self.subTest(query=query):
+                # Logging out discards every cookie, so restore the branch cookie as a browser would keep it
+                self.client.logout()
+                self.client.cookies.load({COOKIE_NAME: mine.schema_id})
+
+                response = self.client.get(f'{url}{query}')
+                self.assertIsNone(response.wsgi_request.active_branch)
+                self.assertEqual(self.client.cookies[COOKIE_NAME].value, mine.schema_id)
+
+                self.client.force_login(self.user)
+                response = self.client.get(url)
+                self.assertEqual(response.wsgi_request.active_branch, mine)
+
     def test_cookie_for_unpermitted_branch_is_ignored(self):
         branch = Branch.objects.get(name='Branch 2')
         request = RequestFactory().get('/')
