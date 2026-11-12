@@ -1,6 +1,7 @@
 import warnings
 from unittest.mock import patch
 
+from django.contrib.messages import get_messages
 from django.test import RequestFactory, override_settings
 from django.urls import reverse
 from rest_framework.request import Request as DRFRequest
@@ -124,17 +125,30 @@ class RequestTestCase(TestCase):
     # -------------------------------------------------------------------------
     # Paranoid paths
     #
-    # The middleware catches ObjectDoesNotExist from get_active_branch() and
-    # returns HTTP 400. These tests pin that contract down so a refactor that
-    # narrows the except clause (or stops catching at all) is caught early —
-    # a non-existent branch ID slipping through would otherwise produce a 500
-    # somewhere downstream where the failure mode is harder to interpret.
+    # For API requests, the middleware catches ObjectDoesNotExist from
+    # get_active_branch() and returns HTTP 400. For UI requests,
+    # get_active_branch() handles a missing branch itself, rendering the page in
+    # main with an error message. These tests pin both contracts down so a
+    # refactor that narrows either except clause (or stops catching at all) is
+    # caught early — a non-existent branch ID slipping through would otherwise
+    # produce a 500 somewhere downstream where the failure mode is harder to
+    # interpret.
     # -------------------------------------------------------------------------
 
     @override_settings(LOGIN_REQUIRED=False)
-    def test_query_param_with_nonexistent_branch_returns_400(self):
+    def test_query_param_with_nonexistent_branch_is_reported(self):
         url = reverse('home')
         response = self.client.get(f'{url}?{QUERY_PARAM}=nonexist')
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.wsgi_request.active_branch)
+        self.assertIn(
+            'The requested branch does not exist or you do not have permission to view it.',
+            [str(message) for message in get_messages(response.wsgi_request)],
+        )
+
+    @override_settings(LOGIN_REQUIRED=False)
+    def test_api_query_param_with_nonexistent_branch_returns_400(self):
+        response = self.client.get(f'{reverse("api-root")}?{QUERY_PARAM}=nonexist')
         self.assertEqual(response.status_code, 400)
 
     @override_settings(LOGIN_REQUIRED=False)

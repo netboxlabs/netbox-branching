@@ -599,26 +599,38 @@ def _get_request_user(request):
     return request.user
 
 
+def _get_permitted_branch(request, schema_id):
+    """
+    Return the Branch identified by schema_id if the requesting user may view it, raising
+    Branch.DoesNotExist otherwise. An API request with missing or rejected credentials gets None
+    instead, so that the view reports the authentication failure rather than an invalid branch.
+    """
+    user = _get_request_user(request)
+    try:
+        return get_branches_for_user(user).get(schema_id=schema_id)
+    except ObjectDoesNotExist:
+        if is_api_request(request) and not user.is_authenticated:
+            return None
+        raise
+
+
 def get_active_branch(request):
     """
     Return the active Branch, or None if no branch is active. Only branches which the requesting
     user is permitted to view are eligible for activation.
 
-    Raises BranchNotReady if the request names a branch which exists but is not usable, and
-    Branch.DoesNotExist if it names one which does not exist at all. Always returns a Branch or
-    None otherwise; never a response object, as callers install the return value as the active
-    branch. Callers which cannot refuse the request must treat both exceptions as "no branch".
+    Raises BranchNotReady if the API branch header names a branch which exists but is not usable, and
+    Branch.DoesNotExist if an API request names a branch which does not exist or which the user may
+    not view. A UI request naming such a branch gets an error message and None instead. Always
+    returns a Branch or None otherwise; never a response object, as callers install the return value
+    as the active branch. Callers which cannot refuse the request must treat both exceptions as "no
+    branch".
     """
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
     # A background job receives a NetBoxFakeRequest, which has no headers attribute (#675).
     if is_api_request(request) and BRANCH_HEADER_META in request.META:
-        user = _get_request_user(request)
-        try:
-            branch = get_branches_for_user(user).get(schema_id=request.META[BRANCH_HEADER_META])
-        except ObjectDoesNotExist:
-            if not user.is_authenticated:
-                return None  # Leave the view to report the missing or rejected credentials
-            raise
+        if (branch := _get_permitted_branch(request, request.META[BRANCH_HEADER_META])) is None:
+            return None  # Leave the view to report the missing or rejected credentials
         if not branch.ready:
             raise BranchNotReady(f'Branch {branch} is not ready for use (status: {branch.status})')
         return branch
@@ -627,7 +639,23 @@ def get_active_branch(request):
     # Requests from background jobs have no message storage (#675).
     if QUERY_PARAM in request.GET:
         if schema_id := request.GET.get(QUERY_PARAM):
-            branch = get_branches_for_user(_get_request_user(request)).get(schema_id=schema_id)
+            try:
+                branch = _get_permitted_branch(request, schema_id)
+            except ObjectDoesNotExist:
+                if is_api_request(request):
+                    raise
+                # A missing branch and one the user may not view are reported alike, so that the response
+                # doesn't reveal which branches exist.
+                if not getattr(request, '_branch_activation_notified', False):
+                    messages.error(
+                        request,
+                        _('The requested branch does not exist or you do not have permission to view it.'),
+                        fail_silently=True,
+                    )
+                    request._branch_activation_notified = True
+                return None
+            if branch is None:
+                return None  # Leave the view to report the missing or rejected credentials
             if branch.ready:
                 if schema_id != request.COOKIES.get(COOKIE_NAME) and not getattr(
                     request, '_branch_activation_notified', False
@@ -654,8 +682,7 @@ def get_active_branch(request):
     # Branch set by cookie
     if schema_id := request.COOKIES.get(COOKIE_NAME):
         try:
-            branch = get_branches_for_user(_get_request_user(request)).get(schema_id=schema_id)
-            if branch.ready:
+            if (branch := _get_permitted_branch(request, schema_id)) and branch.ready:
                 return branch
         except ObjectDoesNotExist:
             pass

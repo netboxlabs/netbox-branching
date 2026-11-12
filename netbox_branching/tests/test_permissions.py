@@ -1,5 +1,6 @@
 from django.contrib.auth import get_user_model
 from django.contrib.auth.context_processors import PermWrapper
+from django.contrib.messages import get_messages
 from django.test import RequestFactory
 from django.test import TestCase as _TestCase
 from django.urls import reverse
@@ -87,12 +88,23 @@ class BranchPermissionTestCase(TestCase):
     # Branch activation
     #
 
+    def _assert_branch_unavailable(self, response):
+        """
+        A UI request naming a branch it may not use is not refused: the page renders in main, with an
+        error message which doesn't reveal whether the branch exists.
+        """
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.wsgi_request.active_branch)
+        self.assertIn(
+            'The requested branch does not exist or you do not have permission to view it.',
+            [str(message) for message in get_messages(response.wsgi_request)],
+        )
+
     def test_activation_rejected_without_permission(self):
         branch = Branch.objects.get(name='Branch 1')
 
         url = reverse('home')
-        response = self.client.get(f'{url}?{QUERY_PARAM}={branch.schema_id}')
-        self.assertEqual(response.status_code, 400)
+        self._assert_branch_unavailable(self.client.get(f'{url}?{QUERY_PARAM}={branch.schema_id}'))
 
     def test_activation_rejected_for_unpermitted_branch(self):
         mine = Branch.objects.get(name='Branch 1')
@@ -101,8 +113,20 @@ class BranchPermissionTestCase(TestCase):
         theirs = Branch.objects.get(name='Branch 2')
 
         url = reverse('home')
-        self.assertEqual(self.client.get(f'{url}?{QUERY_PARAM}={mine.schema_id}').status_code, 200)
-        self.assertEqual(self.client.get(f'{url}?{QUERY_PARAM}={theirs.schema_id}').status_code, 400)
+        response = self.client.get(f'{url}?{QUERY_PARAM}={mine.schema_id}')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.wsgi_request.active_branch, mine)
+
+        # Following a link to someone else's branch leaves the user in main rather than in their own branch
+        self._assert_branch_unavailable(self.client.get(f'{url}?{QUERY_PARAM}={theirs.schema_id}'))
+        self.assertEqual(self.client.cookies[COOKIE_NAME].value, '')
+
+    def test_unpermitted_branch_is_indistinguishable_from_missing(self):
+        branch = Branch.objects.get(name='Branch 1')
+
+        url = reverse('home')
+        self._assert_branch_unavailable(self.client.get(f'{url}?{QUERY_PARAM}={branch.schema_id}'))
+        self._assert_branch_unavailable(self.client.get(f'{url}?{QUERY_PARAM}=nonexist'))
 
     def test_cookie_for_unpermitted_branch_is_ignored(self):
         branch = Branch.objects.get(name='Branch 2')
@@ -208,17 +232,17 @@ class BranchAPIPermissionTestCase(_TestCase):
         self.assertEqual(self.client.post(url, headers={'accept': 'application/json'}).status_code, 404)
 
     #
-    # Branch activation by header
+    # Branch activation by header or query parameter
     #
     # The middleware resolves the active branch before REST framework has authenticated the request,
     # so the token is checked there to identify the user.
     #
 
-    def _token_header(self):
+    def _token_header(self, enabled=True):
         from users.constants import TOKEN_PREFIX
         from users.models import Token
 
-        token = Token.objects.create(user=self.user)
+        token = Token.objects.create(user=self.user, enabled=enabled)
         return f'Bearer {TOKEN_PREFIX}{token.key}.{token.token}'
 
     def test_token_request_activates_permitted_branch(self):
@@ -239,21 +263,42 @@ class BranchAPIPermissionTestCase(_TestCase):
         # invisible and so report the branch as invalid. The caller must see the authentication error
         # explaining the real problem instead of a 400 blaming the branch identifier. (DRF answers 403
         # rather than 401 because NetBox's TokenAuthentication supplies no WWW-Authenticate header.)
-        from users.constants import TOKEN_PREFIX
-        from users.models import Token
-
-        token = Token.objects.create(user=self.user, enabled=False)
         self.client.logout()
         response = self.client.get(
             reverse('api-root'),
             headers={
                 'accept': 'application/json',
-                'authorization': f'Bearer {TOKEN_PREFIX}{token.key}.{token.token}',
+                'authorization': self._token_header(enabled=False),
                 'x-netbox-branch': self.mine.schema_id,
             },
         )
         self.assertEqual(response.status_code, 403)
         self.assertIn('Token disabled', response.json()['detail'])
+
+    def test_rejected_token_with_query_parameter_reports_the_authentication_failure(self):
+        # The query parameter must report a rejected token the same way the header does
+        self.client.logout()
+        response = self.client.get(
+            f'{reverse("api-root")}?{QUERY_PARAM}={self.mine.schema_id}',
+            headers={
+                'accept': 'application/json',
+                'authorization': self._token_header(enabled=False),
+            },
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertIn('Token disabled', response.json()['detail'])
+
+    def test_query_parameter_rejects_unpermitted_branch(self):
+        # Unlike a UI request, an API request naming a branch it may not use is refused
+        self.client.logout()
+        response = self.client.get(
+            f'{reverse("api-root")}?{QUERY_PARAM}={self.theirs.schema_id}',
+            headers={
+                'accept': 'application/json',
+                'authorization': self._token_header(),
+            },
+        )
+        self.assertEqual(response.status_code, 400)
 
     def test_token_request_rejects_unpermitted_branch(self):
         self.client.logout()
