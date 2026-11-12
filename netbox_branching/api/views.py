@@ -18,7 +18,7 @@ from netbox_branching import filtersets
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
 from netbox_branching.models import Branch, BranchEvent, ChangeDiff
-from netbox_branching.utilities import get_branchable_object_types
+from netbox_branching.utilities import get_branchable_object_types, get_branches_for_user
 
 from . import serializers
 
@@ -201,11 +201,19 @@ class BranchEventViewSet(ListModelMixin, RetrieveModelMixin, BaseViewSet):
     serializer_class = serializers.BranchEventSerializer
     filterset_class = filtersets.BranchEventFilterSet
 
+    def get_queryset(self):
+        # An event belongs to its branch, so hide those of branches the user may not view
+        return super().get_queryset().filter(branch__in=get_branches_for_user(self.request.user))
+
 
 class ChangeDiffViewSet(NetBoxReadOnlyModelViewSet):
     queryset = ChangeDiff.objects.all()
     serializer_class = serializers.ChangeDiffSerializer
     filterset_class = filtersets.ChangeDiffFilterSet
+
+    def get_queryset(self):
+        # A change belongs to its branch, so hide those of branches the user may not view
+        return super().get_queryset().filter(branch__in=get_branches_for_user(self.request.user))
 
 
 class BranchableModelViewSet(ViewSet):

@@ -2,14 +2,16 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.contrib.auth.context_processors import PermWrapper
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.messages import get_messages
 from django.test import RequestFactory
 from django.test import TestCase as _TestCase
 from django.urls import reverse
 
-from netbox_branching.choices import BranchStatusChoices
+from core.choices import ObjectChangeActionChoices
+from netbox_branching.choices import BranchEventTypeChoices, BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
-from netbox_branching.models import Branch
+from netbox_branching.models import Branch, BranchEvent, ChangeDiff
 from netbox_branching.template_content import BranchSelector
 from netbox_branching.utilities import get_active_branch, get_branches_for_user
 from users.models import ObjectPermission
@@ -377,3 +379,88 @@ class BranchAPIPermissionTestCase(_TestCase):
             },
         )
         self.assertEqual(response.status_code, 400)
+
+
+class BranchDataPermissionTestCase(_TestCase):
+    """
+    A branch's changes and events belong to it: a user who may not view a branch must not see them either, even
+    when permitted to view changes and events in general.
+    """
+
+    @classmethod
+    def setUpTestData(cls):
+        from core.models import ObjectType
+        from dcim.models import Site
+
+        cls.user = User.objects.create_user(username='testuser')
+
+        cls.mine = Branch(name='Branch 1', owner=cls.user)
+        cls.mine.status = BranchStatusChoices.READY  # Fake provisioning
+        cls.mine.save(provision=False)
+        cls.theirs = Branch(name='Branch 2')
+        cls.theirs.status = BranchStatusChoices.READY
+        cls.theirs.save(provision=False)
+
+        cls.diffs = {}
+        cls.events = {}
+        for branch in (cls.mine, cls.theirs):
+            site = Site.objects.create(name=f'Site in {branch.name}', slug=f'site-{branch.pk}')
+            cls.diffs[branch] = ChangeDiff.objects.create(
+                branch=branch,
+                object_type=ContentType.objects.get_for_model(Site),
+                object_id=site.pk,
+                action=ObjectChangeActionChoices.ACTION_UPDATE,
+                original={'description': ''},
+                modified={'description': 'Changed'},
+                current={'description': ''},
+            )
+            cls.events[branch] = BranchEvent.objects.create(
+                branch=branch, user=cls.user, type=BranchEventTypeChoices.PROVISIONED
+            )
+
+        branch_perm = ObjectPermission(name='Own branches', actions=['view'], constraints={'owner': '$user'})
+        branch_perm.save()
+        branch_perm.users.add(cls.user)
+        branch_perm.object_types.add(ObjectType.objects.get_for_model(Branch))
+
+        data_perm = ObjectPermission(name='All changes and events', actions=['view'])
+        data_perm.save()
+        data_perm.users.add(cls.user)
+        data_perm.object_types.add(
+            ObjectType.objects.get_for_model(ChangeDiff), ObjectType.objects.get_for_model(BranchEvent)
+        )
+
+    def setUp(self):
+        self.client.force_login(self.user)
+
+    def _get_api_ids(self, viewname):
+        response = self.client.get(
+            reverse(f'plugins-api:netbox_branching-api:{viewname}'), headers={'accept': 'application/json'}
+        )
+        self.assertEqual(response.status_code, 200)
+        return {result['id'] for result in response.json()['results']}
+
+    def test_api_change_list_excludes_unpermitted_branches(self):
+        self.assertEqual(self._get_api_ids('changediff-list'), {self.diffs[self.mine].pk})
+
+    def test_api_change_detail_hides_unpermitted_branch(self):
+        for branch, status_code in ((self.mine, 200), (self.theirs, 404)):
+            url = reverse('plugins-api:netbox_branching-api:changediff-detail', kwargs={'pk': self.diffs[branch].pk})
+            self.assertEqual(self.client.get(url, headers={'accept': 'application/json'}).status_code, status_code)
+
+    def test_api_event_list_excludes_unpermitted_branches(self):
+        self.assertEqual(self._get_api_ids('branchevent-list'), {self.events[self.mine].pk})
+
+    def test_api_event_detail_hides_unpermitted_branch(self):
+        for branch, status_code in ((self.mine, 200), (self.theirs, 404)):
+            url = reverse('plugins-api:netbox_branching-api:branchevent-detail', kwargs={'pk': self.events[branch].pk})
+            self.assertEqual(self.client.get(url, headers={'accept': 'application/json'}).status_code, status_code)
+
+    def test_change_list_view_excludes_unpermitted_branches(self):
+        response = self.client.get(reverse('plugins:netbox_branching:changediff_list'))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([row.record for row in response.context['table'].rows], [self.diffs[self.mine]])
+
+    def test_change_view_hides_unpermitted_branch(self):
+        self.assertEqual(self.client.get(self.diffs[self.mine].get_absolute_url()).status_code, 200)
+        self.assertEqual(self.client.get(self.diffs[self.theirs].get_absolute_url()).status_code, 404)

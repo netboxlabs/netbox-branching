@@ -26,7 +26,7 @@ from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJ
 from .models import Branch, ChangeDiff
 from .object_actions import BulkMigrate
 from .ui import panels
-from .utilities import resolve_changes_summary
+from .utilities import get_branches_for_user, resolve_changes_summary
 
 #
 # Branches
@@ -740,6 +740,10 @@ class ChangeDiffListView(generic.ObjectListView):
     filterset_form = forms.ChangeDiffFilterForm
     table = tables.ChangeDiffTable
 
+    def get_queryset(self, request):
+        # A change belongs to its branch, so hide those of branches the user may not view
+        return super().get_queryset(request).filter(branch__in=get_branches_for_user(request.user))
+
 
 @register_model_view(ChangeDiff)
 class ChangeDiffView(generic.ObjectView):
@@ -782,6 +786,10 @@ class ChangeDiffView(generic.ObjectView):
         ),
         breadcrumbs=[Breadcrumb(label=str)],
     )
+
+    def get_queryset(self, request):
+        # A change belongs to its branch, so hide those of branches the user may not view
+        return super().get_queryset(request).filter(branch__in=get_branches_for_user(request.user))
 
     def get_extra_context(self, request, instance):
         # Safely compute altered field sets only when the required data is present
