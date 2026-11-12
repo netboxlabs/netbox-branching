@@ -6,20 +6,14 @@ from drf_spectacular.utils import extend_schema
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.generics import get_object_or_404
-from rest_framework.mixins import (
-    CreateModelMixin,
-    DestroyModelMixin,
-    ListModelMixin,
-    RetrieveModelMixin,
-    UpdateModelMixin,
-)
+from rest_framework.mixins import ListModelMixin, RetrieveModelMixin
 from rest_framework.response import Response
 from rest_framework.routers import APIRootView
 from rest_framework.viewsets import ViewSet
 
 from core.api.serializers import JobSerializer
 from netbox.api.authentication import IsAuthenticatedOrLoginNotRequired
-from netbox.api.viewsets import BaseViewSet, NetBoxReadOnlyModelViewSet
+from netbox.api.viewsets import BaseViewSet, NetBoxModelViewSet, NetBoxReadOnlyModelViewSet
 from netbox_branching import filtersets
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.jobs import MergeBranchJob, RevertBranchJob, SyncBranchJob
@@ -34,16 +28,10 @@ class RootView(APIRootView):
         return 'Branching'
 
 
-class BranchViewSet(
-    CreateModelMixin,
-    RetrieveModelMixin,
-    UpdateModelMixin,
-    DestroyModelMixin,
-    ListModelMixin,
-    BaseViewSet,
-):
-    # BaseViewSet restricts the queryset to the objects on which the user holds the permission implied
-    # by the HTTP method, so branches scoped by an ObjectPermission constraint are invisible to others.
+class BranchViewSet(NetBoxModelViewSet):
+    # NetBoxModelViewSet restricts the queryset to the objects on which the user holds the permission
+    # implied by the HTTP method, so branches scoped by an ObjectPermission constraint are invisible to
+    # others, and checks that a created or modified branch still satisfies the user's constraints.
     queryset = Branch.objects.all()
     serializer_class = serializers.BranchSerializer
     filterset_class = filtersets.BranchFilterSet

@@ -196,6 +196,51 @@ class BranchAPIPermissionTestCase(_TestCase):
     def setUp(self):
         self.client.force_login(self.user)
 
+    def _grant(self, action, constraints):
+        from core.models import ObjectType
+
+        obj_perm = ObjectPermission(name=f'{action} constrained', actions=[action], constraints=constraints)
+        obj_perm.save()
+        obj_perm.users.add(self.user)
+        obj_perm.object_types.add(ObjectType.objects.get_for_model(Branch))
+
+    def test_create_must_satisfy_constraints(self):
+        # Every branch created through the API satisfies the owner-scoped add permission, as its creator
+        # becomes its owner, so replace that with one limited by name
+        obj_perm = ObjectPermission.objects.get(name='Own branches')
+        obj_perm.actions.remove('add')
+        obj_perm.save()
+        self._grant('add', {'name__startswith': 'Team A'})
+        url = reverse('plugins-api:netbox_branching-api:branch-list')
+
+        response = self.client.post(
+            url, {'name': 'Team A branch'}, content_type='application/json', headers={'accept': 'application/json'}
+        )
+        self.assertEqual(response.status_code, 201)
+
+        response = self.client.post(
+            url, {'name': 'Team B branch'}, content_type='application/json', headers={'accept': 'application/json'}
+        )
+        self.assertEqual(response.status_code, 403)
+        self.assertFalse(Branch.objects.filter(name='Team B branch').exists())
+
+    def test_update_must_satisfy_constraints(self):
+        self._grant('change', {'name__startswith': 'Branch'})
+        url = reverse('plugins-api:netbox_branching-api:branch-detail', kwargs={'pk': self.mine.pk})
+
+        response = self.client.patch(
+            url, {'description': 'Updated'}, content_type='application/json', headers={'accept': 'application/json'}
+        )
+        self.assertEqual(response.status_code, 200)
+
+        # Renaming the branch would take it outside the constraint under which the user may change it
+        response = self.client.patch(
+            url, {'name': 'Renamed'}, content_type='application/json', headers={'accept': 'application/json'}
+        )
+        self.assertEqual(response.status_code, 403)
+        self.mine.refresh_from_db()
+        self.assertEqual(self.mine.name, 'Branch 1')
+
     def test_list_excludes_unpermitted_branches(self):
         url = reverse('plugins-api:netbox_branching-api:branch-list')
         response = self.client.get(url, headers={'accept': 'application/json'})
