@@ -352,6 +352,26 @@ PyPI receives `1.3.0b1`, which `pip install netboxlabs-netbox-branching` skips u
 
 To rehearse a publish without touching production PyPI, run the workflow manually (`workflow_dispatch`) against the tag; that route publishes to Test PyPI and requires a trusted publisher configured there for this project.
 
+## Where to Fix Bugs
+
+Before writing a fix, decide whether it belongs in this plugin, in NetBox, or in both. Read the
+NetBox checkout next to this repo. Don't stop at what the plugin can see.
+
+- **ObjectChange ordering or gaps usually point to NetBox.** Merge, sync and revert replay NetBox's
+  change log. If a bug comes from records that are out of order, missing, duplicated, or carry an
+  empty or stale `prechange_data` / `postchange_data`, find where NetBox writes them (signal
+  handlers, `snapshot()`, `save()` / `delete()` overrides) and fix it there. Don't paper over a bad
+  log in the merge strategies. Handle logs that already exist in the plugin only when they have to
+  keep working, and say so in the PR.
+- **Keep the plugin model-agnostic.** Don't special-case NetBox models (`if model is Cable`,
+  `isinstance(obj, Interface)`, checks on `app_label` / `model_name`, lists of model names). Fix the
+  general class of problem by relying on things any model can have: field types, FK and generic
+  relations, change-log semantics, `ObjectType.features`, DB constraints and triggers. If the plugin
+  doesn't have enough information to do this, add a generic hook or fix the behaviour in NetBox
+  (or both) rather than hard-coding the model here. If a model-specific check really can't be
+  avoided, flag it in the PR as a known compromise and point to the NetBox issue that would remove
+  it.
+
 ## Conventions and Patterns
 
 - **Plugin code stays in the plugin package.** Don't monkey-patch NetBox.
