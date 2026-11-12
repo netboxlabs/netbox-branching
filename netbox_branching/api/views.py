@@ -32,9 +32,27 @@ class BranchViewSet(NetBoxModelViewSet):
     # NetBoxModelViewSet restricts the queryset to the objects on which the user holds the permission
     # implied by the HTTP method, so branches scoped by an ObjectPermission constraint are invisible to
     # others, and checks that a created or modified branch still satisfies the user's constraints.
+    # Its bulk operations are withheld: the API creates, changes and deletes one branch at a time.
     queryset = Branch.objects.all()
     serializer_class = serializers.BranchSerializer
     filterset_class = filtersets.BranchFilterSet
+
+    # The bulk operations NetBoxRouter maps onto the list endpoint
+    BULK_ACTIONS = frozenset({'bulk_update', 'bulk_partial_update', 'bulk_destroy'})
+
+    @classmethod
+    def as_view(cls, actions=None, **initkwargs):
+        # Leave the bulk operations unrouted, so that their methods are answered with a 405 and are absent
+        # from the API schema
+        if actions:
+            actions = {method: action for method, action in actions.items() if action not in cls.BULK_ACTIONS}
+        return super().as_view(actions, **initkwargs)
+
+    def create(self, request, *args, **kwargs):
+        # NetBoxModelViewSet would create each branch in a list (or enqueue a job to do so)
+        if isinstance(request.data, list):
+            return Response({'detail': 'Branches must be created one at a time.'}, status=status.HTTP_400_BAD_REQUEST)
+        return super().create(request, *args, **kwargs)
 
     def _get_branch(self, request, pk, action):
         """
