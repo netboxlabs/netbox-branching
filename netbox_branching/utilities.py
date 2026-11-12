@@ -585,18 +585,27 @@ def _get_request_user(request):
     runs, so a token is checked here first, as NetBox's GraphQL view does. A rejected token leaves the
     user anonymous, and the view reports the failure. request.user is left untouched: REST framework's
     SessionAuthentication would otherwise treat the request as a session login and enforce CSRF.
+
+    The result is cached on the request: the active branch is resolved more than once per request (by
+    the request processor and again by BranchMiddleware), and authenticating a token costs database
+    queries, plus a directory lookup where LDAP group permissions are in use.
     """
-    if is_api_request(request) and not request.user.is_authenticated:
+    if not is_api_request(request) or request.user.is_authenticated:
+        return request.user
+
+    if (user := getattr(request, '_branching_token_user', None)) is None:
         from rest_framework.exceptions import AuthenticationFailed
 
         from netbox.api.authentication import TokenAuthentication
 
+        user = request.user
         try:
             if auth := TokenAuthentication().authenticate(request):
-                return auth[0]
+                user = auth[0]
         except AuthenticationFailed:
             pass
-    return request.user
+        request._branching_token_user = user
+    return user
 
 
 def _get_permitted_branch(request, schema_id):

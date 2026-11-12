@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from django.contrib.auth import get_user_model
 from django.contrib.auth.context_processors import PermWrapper
 from django.contrib.messages import get_messages
@@ -344,6 +346,25 @@ class BranchAPIPermissionTestCase(_TestCase):
             },
         )
         self.assertEqual(response.status_code, 400)
+
+    def test_token_is_authenticated_once_per_request(self):
+        # The active branch is resolved by both the request processor and BranchMiddleware, and each
+        # must not authenticate the token again
+        from django.contrib.auth.models import AnonymousUser
+
+        from netbox.api.authentication import TokenAuthentication
+
+        request = RequestFactory().get(
+            reverse('api-root'),
+            headers={'authorization': self._token_header(), 'x-netbox-branch': self.mine.schema_id},
+        )
+        request.user = AnonymousUser()
+        with patch.object(
+            TokenAuthentication, 'authenticate', autospec=True, side_effect=TokenAuthentication.authenticate
+        ) as authenticate:
+            self.assertEqual(get_active_branch(request), self.mine)
+            self.assertEqual(get_active_branch(request), self.mine)
+        self.assertEqual(authenticate.call_count, 1)
 
     def test_token_request_rejects_unpermitted_branch(self):
         self.client.logout()
