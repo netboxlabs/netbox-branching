@@ -130,6 +130,13 @@ class BranchPermissionTestCase(TestCase):
                 self._assert_branch_unavailable(response, active_branch=mine)
                 self.assertEqual(self.client.cookies[COOKIE_NAME].value, mine.schema_id)
 
+        # The same holds for a branch which the user may view but which is not ready for use
+        Branch.objects.filter(pk=theirs.pk).update(owner=self.user, status=BranchStatusChoices.PROVISIONING)
+        response = self.client.get(f'{url}?{QUERY_PARAM}={theirs.schema_id}')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.wsgi_request.active_branch, mine)
+        self.assertEqual(self.client.cookies[COOKIE_NAME].value, mine.schema_id)
+
     def test_unpermitted_branch_is_indistinguishable_from_missing(self):
         branch = Branch.objects.get(name='Branch 1')
 
@@ -373,6 +380,16 @@ class BranchAPIPermissionTestCase(_TestCase):
                 'accept': 'application/json',
                 'authorization': self._token_header(),
             },
+        )
+        self.assertEqual(response.status_code, 400)
+
+    def test_query_parameter_rejects_unready_branch(self):
+        # An API request naming a branch which is not ready is refused rather than falling back to the cookie
+        Branch.objects.filter(pk=self.theirs.pk).update(owner=self.user, status=BranchStatusChoices.PROVISIONING)
+        self.client.cookies.load({COOKIE_NAME: self.mine.schema_id})
+        response = self.client.get(
+            f'{reverse("api-root")}?{QUERY_PARAM}={self.theirs.schema_id}',
+            headers={'accept': 'application/json'},
         )
         self.assertEqual(response.status_code, 400)
 

@@ -628,12 +628,12 @@ def get_active_branch(request):
     Return the active Branch, or None if no branch is active. Only branches which the requesting
     user is permitted to view are eligible for activation.
 
-    Raises BranchNotReady if the API branch header names a branch which exists but is not usable, and
+    Raises BranchNotReady if an API request names a branch which exists but is not usable, and
     Branch.DoesNotExist if an API request names a branch which does not exist or which the user may
-    not view. A UI request naming such a branch gets an error message instead, and remains in the
-    branch selected by its cookie (if any). Always returns a Branch or None otherwise; never a
-    response object, as callers install the return value as the active branch. Callers which cannot
-    refuse the request must treat both exceptions as "no branch".
+    not view. A UI request naming such a branch, or one which is not ready, gets an error message
+    instead, and remains in the branch selected by its cookie (if any). Always returns a Branch or
+    None otherwise; never a response object, as callers install the return value as the active
+    branch. Callers which cannot refuse the request must treat both exceptions as "no branch".
     """
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
     # A background job receives a NetBoxFakeRequest, which has no headers attribute (#675).
@@ -674,6 +674,8 @@ def get_active_branch(request):
                     messages.success(request, _('Activated branch {branch}').format(branch=branch), fail_silently=True)
                     request._branch_activation_notified = True
                 return branch
+            if is_api_request(request):
+                raise BranchNotReady(f'Branch {branch} is not ready for use (status: {branch.status})')
             if not getattr(request, '_branch_activation_notified', False):
                 messages.error(
                     request,
@@ -683,7 +685,8 @@ def get_active_branch(request):
                     fail_silently=True,
                 )
                 request._branch_activation_notified = True
-            return None
+            # As above, remain in the branch already active rather than moving to main
+            return _get_cookie_branch(request)
         if not getattr(request, '_branch_activation_notified', False):
             messages.success(request, _('Deactivated branch'), fail_silently=True)
             request._branch_activation_notified = True
