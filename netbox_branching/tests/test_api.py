@@ -193,6 +193,41 @@ class BranchArchiveAPITestCase(BaseAPITestCase, TestCase):
         self.assertEqual(branch.status, BranchStatusChoices.MERGED)
 
 
+class BranchBulkAPITestCase(BaseAPITestCase, TestCase):
+    """
+    The API creates, changes and deletes one branch at a time: BranchViewSet withholds the bulk operations
+    NetBoxModelViewSet would otherwise provide on the list endpoint.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.branch = Branch(name='Branch 1', status=BranchStatusChoices.READY)
+        self.branch.save(provision=False)
+        self.url = reverse('plugins-api:netbox_branching-api:branch-list')
+
+    def test_bulk_create_rejected(self):
+        data = json.dumps([{'name': 'Branch 2'}, {'name': 'Branch 3'}])
+        for url in (self.url, f'{self.url}?background=true'):
+            with self.subTest(url=url):
+                response = self.client.post(url, data=data, content_type='application/json', **self.header)
+                self.assertEqual(response.status_code, 400)
+                self.assertEqual(Branch.objects.count(), 1)
+                self.assertFalse(Job.objects.exists())
+
+    def test_bulk_update_and_delete_not_allowed(self):
+        data = json.dumps([{'id': self.branch.pk, 'description': 'Changed'}])
+        for method in ('put', 'patch', 'delete'):
+            with self.subTest(method=method):
+                response = getattr(self.client, method)(
+                    self.url, data=data, content_type='application/json', **self.header
+                )
+                self.assertEqual(response.status_code, 405)
+                self.assertNotIn(method.upper(), response['Allow'])
+
+        self.branch.refresh_from_db()
+        self.assertEqual(self.branch.description, '')
+
+
 class BaseBranchAPITestCase(BaseAPITestCase):
     """
     Base mixin for sync/merge/revert endpoint tests. Subclasses set:

@@ -20,6 +20,9 @@ from .utils import fake_request
 
 
 class SetActiveBranchTestCase(TestCase):
+    # Activating a branch requires permission to view it
+    user_permissions = ('netbox_branching.view_branch',)
+
     def test_returns_none_when_request_is_missing(self):
         """
         Webhooks fired outside an HTTP request (e.g. from a background job

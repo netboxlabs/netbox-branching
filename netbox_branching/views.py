@@ -26,7 +26,7 @@ from .jobs import MergeBranchJob, MigrateBranchJob, RevertBranchJob, SyncBranchJ
 from .models import Branch, ChangeDiff
 from .object_actions import BulkMigrate
 from .ui import panels
-from .utilities import resolve_changes_summary
+from .utilities import get_branches_for_user, resolve_changes_summary
 
 #
 # Branches
@@ -679,9 +679,16 @@ class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
     def get(self, request):
         return redirect(self.get_return_url(request))
 
+    def _get_form(self, *args, **kwargs):
+        # self.queryset is already restricted to the branches the user may migrate; binding it to the
+        # form makes it reject any other PK rather than migrate it.
+        form = forms.BulkMigrateBranchForm(*args, **kwargs)
+        form.fields['pk'].queryset = self.queryset
+        return form
+
     def post(self, request):
         if '_confirm' in request.POST:
-            form = forms.BulkMigrateBranchForm(request.POST)
+            form = self._get_form(request.POST)
             if form.is_valid():
                 branches = [
                     branch
@@ -701,7 +708,7 @@ class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
             return redirect(self.get_return_url(request))
 
         # Show confirmation page — validate PKs through the form, filter to branches that can actually be migrated
-        form = forms.BulkMigrateBranchForm(request.POST)
+        form = self._get_form(request.POST)
         if not form.is_valid():
             return redirect(self.get_return_url(request))
 
@@ -716,7 +723,7 @@ class BranchBulkMigrateView(GetReturnURLMixin, BaseMultiObjectView):
             messages.warning(request, _('No branches with pending migrations were selected.'))
             return redirect(self.get_return_url(request))
 
-        form = forms.BulkMigrateBranchForm(initial={'pk': [b.pk for b in branches]})
+        form = self._get_form(initial={'pk': [b.pk for b in branches]})
 
         return render(
             request,
@@ -739,6 +746,10 @@ class ChangeDiffListView(generic.ObjectListView):
     filterset = filtersets.ChangeDiffFilterSet
     filterset_form = forms.ChangeDiffFilterForm
     table = tables.ChangeDiffTable
+
+    def get_queryset(self, request):
+        # A change belongs to its branch, so hide those of branches the user may not view
+        return super().get_queryset(request).filter(branch__in=get_branches_for_user(request.user))
 
 
 @register_model_view(ChangeDiff)
@@ -782,6 +793,10 @@ class ChangeDiffView(generic.ObjectView):
         ),
         breadcrumbs=[Breadcrumb(label=str)],
     )
+
+    def get_queryset(self, request):
+        # A change belongs to its branch, so hide those of branches the user may not view
+        return super().get_queryset(request).filter(branch__in=get_branches_for_user(request.user))
 
     def get_extra_context(self, request, instance):
         # Safely compute altered field sets only when the required data is present
