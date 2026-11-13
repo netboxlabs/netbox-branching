@@ -2026,8 +2026,8 @@ class BaseMergeTests(CableTestMixin):
     # recorded with prechange data: without it, a merge overwrites concurrent edits in main and a revert fails.
     #
 
-    def _edit_in_main(self, obj, **attrs):
-        """Apply a change-logged edit to an object in main."""
+    def _edit(self, obj, **attrs):
+        """Apply a change-logged edit to an object in the active schema."""
         with event_tracking(self._make_request()):
             obj = type(obj).objects.get(pk=obj.pk)
             obj.snapshot()
@@ -2050,22 +2050,26 @@ class BaseMergeTests(CableTestMixin):
                 interface_b=Interface.objects.get(pk=interface_b.pk),
                 ssid='Link 1',
             )
-        self._edit_in_main(interface_a, description='Edited in main')
+        self._edit(interface_a, description='Edited in main')
+        self._edit(interface_b, description='Edited in main')
 
         branch.merge(user=self.user, commit=True)
 
-        interface_a.refresh_from_db()
-        self.assertEqual(interface_a.wireless_link_id, link.pk)
-        self.assertEqual(interface_a.description, 'Edited in main')
+        for interface in (interface_a, interface_b):
+            interface.refresh_from_db()
+            self.assertEqual(interface.wireless_link_id, link.pk)
+            self.assertEqual(interface.description, 'Edited in main')
 
         branch.revert(user=self.user, commit=True)
 
-        interface_a.refresh_from_db()
+        # Deleting the link nulls wireless_link regardless, so only the descriptions show the undo kept main's edits
         self.assertFalse(WirelessLink.objects.filter(pk=link.pk).exists())
-        self.assertIsNone(interface_a.wireless_link_id)
-        self.assertEqual(interface_a.description, 'Edited in main')
+        for interface in (interface_a, interface_b):
+            interface.refresh_from_db()
+            self.assertIsNone(interface.wireless_link_id)
+            self.assertEqual(interface.description, 'Edited in main')
 
-    def test_merge_primary_mac_assignment(self):
+    def _merge_primary_mac_assignment(self):
         """Merge a branch which creates an interface designating an existing MAC address as its primary."""
         site = Site.objects.create(name='Test Site', slug='test-site')
         device = Device.objects.create(name='Device', site=site, device_type=self.device_type, role=self.device_role)
@@ -2076,36 +2080,35 @@ class BaseMergeTests(CableTestMixin):
             interface = Interface.objects.create(
                 device=device, name='eth0', type='1000base-t', primary_mac_address=MACAddress.objects.get(pk=mac.pk)
             )
-        self._edit_in_main(mac, description='Edited in main')
+        self._edit(mac, description='Edited in main')
 
         branch.merge(user=self.user, commit=True)
 
         mac.refresh_from_db()
-        self.assertEqual(mac.assigned_object_id, interface.pk)
+        interface.refresh_from_db()
+        self.assertEqual(mac.assigned_object, interface)
+        self.assertEqual(interface.primary_mac_address, mac)
         self.assertEqual(mac.description, 'Edited in main')
+
+        return branch, mac, interface
+
+    def test_merge_primary_mac_assignment(self):
+        self._merge_primary_mac_assignment()
 
     @unittest.expectedFailure
     def test_revert_primary_mac_assignment(self):
         """
-        Reverse-chronological undo unassigns the MAC address while the interface which designates it as primary still
-        exists, which MACAddress.clean() rejects.
+        Undo unassigns the MAC address while the interface which designates it as primary still exists, which
+        MACAddress.clean() rejects.
         """
-        site = Site.objects.create(name='Test Site', slug='test-site')
-        device = Device.objects.create(name='Device', site=site, device_type=self.device_type, role=self.device_role)
-        mac = MACAddress.objects.create(mac_address='00:11:22:33:44:55')
-        branch = self._create_and_provision_branch()
-
-        with activate_branch(branch), event_tracking(self._make_request()):
-            interface = Interface.objects.create(
-                device=device, name='eth0', type='1000base-t', primary_mac_address=MACAddress.objects.get(pk=mac.pk)
-            )
-        branch.merge(user=self.user, commit=True)
+        branch, mac, interface = self._merge_primary_mac_assignment()
 
         branch.revert(user=self.user, commit=True)
 
         mac.refresh_from_db()
         self.assertFalse(Interface.objects.filter(pk=interface.pk).exists())
         self.assertIsNone(mac.assigned_object_id)
+        self.assertEqual(mac.description, 'Edited in main')
 
     def test_merge_and_revert_config_template_sync(self):
         """Merge and revert a branch which syncs a config template from its data file."""
@@ -2130,7 +2133,7 @@ class BaseMergeTests(CableTestMixin):
 
         with activate_branch(branch), event_tracking(self._make_request()):
             ConfigTemplate.objects.get(pk=template.pk).sync(save=True)
-        self._edit_in_main(template, description='Edited in main')
+        self._edit(template, description='Edited in main')
 
         branch.merge(user=self.user, commit=True)
 
@@ -2140,8 +2143,8 @@ class BaseMergeTests(CableTestMixin):
 
         branch.revert(user=self.user, commit=True)
 
+        # template_code is not checked: undo's full_clean() re-syncs it from the unchanged data file
         template.refresh_from_db()
-        self.assertEqual(template.name, 'Template')
         self.assertEqual(template.description, 'Edited in main')
 
     def test_merge_and_revert_parent_device_move(self):
@@ -2167,8 +2170,8 @@ class BaseMergeTests(CableTestMixin):
         branch = self._create_and_provision_branch()
 
         with activate_branch(branch):
-            self._edit_in_main(parent, site=site2)
-        self._edit_in_main(child, description='Edited in main')
+            self._edit(parent, site=site2)
+        self._edit(child, description='Edited in main')
 
         branch.merge(user=self.user, commit=True)
 
