@@ -8,12 +8,16 @@ tests.
 
 from contextlib import contextmanager
 
-from django.contrib.auth.models import Group
-from django.test import TestCase
+from django.contrib.auth.models import Group, Permission
+from django.db import connection
+from django.test import TestCase, override_settings
 
 from ipam.models import Prefix
 from netbox_branching import utilities
+from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import (
+    activate_branch,
+    get_tables_to_replicate,
     register_branching_resolver,
     supports_branching,
 )
@@ -195,3 +199,67 @@ class ResolverDispatchTestCase(TestCase):
                 }
             ):
                 self.assertFalse(supports_branching(Group))
+
+
+def _group_resolver(model):
+    return True if model is Group else None
+
+
+GroupPermissions = Group.permissions.through
+GROUP_PERMISSIONS_TABLE = GroupPermissions._meta.db_table
+
+
+class ResolverTableReplicationTestCase(TestCase):
+    """``get_tables_to_replicate`` includes the tables of models a resolver makes branchable."""
+
+    def test_resolver_model_table_is_replicated(self):
+        self.assertNotIn(Group._meta.db_table, get_tables_to_replicate())
+        with _isolated_resolvers():
+            register_branching_resolver(_group_resolver)
+            tables = get_tables_to_replicate()
+            self.assertIn(Group._meta.db_table, tables)
+            self.assertIn(GROUP_PERMISSIONS_TABLE, tables)
+
+    def test_exempt_resolver_model_table_is_not_replicated(self):
+        with _isolated_resolvers():
+            register_branching_resolver(_group_resolver)
+            with override_settings(PLUGINS_CONFIG={'netbox_branching': {'exempt_models': ['auth.group']}}):
+                tables = get_tables_to_replicate()
+                self.assertNotIn(Group._meta.db_table, tables)
+                self.assertNotIn(GROUP_PERMISSIONS_TABLE, tables)
+
+
+class ResolverModelBranchTestCase(FastTeardownTransactionTestCase):
+    """A branch provisioned with a resolver registered gets its own copy of the model's table."""
+
+    serialized_rollback = True
+
+    def test_changes_in_branch_stay_in_branch(self):
+        Group.objects.create(name='Group A')
+        permission = Permission.objects.first()
+        with _isolated_resolvers():
+            register_branching_resolver(_group_resolver)
+            branch = provision_branch(user=None, name='Resolver Branch')
+
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    'SELECT 1 FROM information_schema.tables WHERE table_schema=%s AND table_name=%s',
+                    [branch.schema_name, Group._meta.db_table],
+                )
+                self.assertIsNotNone(cursor.fetchone())
+
+            with activate_branch(branch):
+                group = Group.objects.get(name='Group A')
+                group.name = 'Group B'
+                group.save()
+                group.permissions.add(permission)
+                self.assertTrue(Group.objects.filter(name='Group B').exists())
+                # Query the through table directly: NetBox's users.Group also has a permissions relation,
+                # and group.permissions.filter() joins users_group_permissions instead.
+                self.assertTrue(
+                    GroupPermissions.objects.using(group._state.db).filter(group=group, permission=permission).exists()
+                )
+
+        self.assertTrue(Group.objects.filter(name='Group A').exists())
+        self.assertFalse(Group.objects.filter(name='Group B').exists())
+        self.assertFalse(GroupPermissions.objects.filter(group__name='Group A').exists())

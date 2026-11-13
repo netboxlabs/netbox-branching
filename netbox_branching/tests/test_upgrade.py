@@ -17,20 +17,25 @@ be reconnected afterwards.
 """
 
 import gzip
+import importlib
 import uuid
 import weakref
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from django.apps import apps
 from django.contrib.auth import get_user_model
 from django.db import connection, connections
+from django.db.migrations.loader import MigrationLoader
 from django.db.models.signals import m2m_changed, post_save, pre_delete
-from django.test import RequestFactory
+from django.test import RequestFactory, TestCase
 from django.urls import reverse
 
+from core.models import ObjectType
 from core.signals import handle_changed_object, handle_deleted_object
-from dcim.models import Manufacturer
+from dcim.models import Device, Manufacturer, Site
+from extras.models import Tag
 from netbox.context_managers import event_tracking
 from netbox.signals import post_clean
 from netbox_branching.choices import BranchStatusChoices
@@ -275,3 +280,95 @@ class MigrateBranchSignalTestCase(FastTeardownTransactionTestCase):
 
         self.assertEqual(branch.get_unmerged_changes().count(), 0)
         self.assertTrue(_signal_handlers_connected())
+
+
+class TagObjectTypesMigrationTestCase(TestCase):
+    """
+    Regression tests for GitHub issue #705: migration 0006 must copy extras_tag_object_types into
+    open branches even when main has already applied extras.0131 (which renames the column to contenttype_id).
+    """
+
+    TABLE = 'extras_tag_object_types'
+    MIGRATION = ('extras', '0131_concrete_objecttype')
+
+    def setUp(self):
+        tag = Tag.objects.create(name='Tag 1', slug='tag-1')
+        tag.object_types.set([ObjectType.objects.get_for_model(Site), ObjectType.objects.get_for_model(Device)])
+
+    def _create_branch(self, include_0131):
+        branch = Branch(name='tag-object-types')
+        branch.save(provision=False)
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.READY)
+        schema = branch.schema_name
+        with connection.cursor() as cursor:
+            cursor.execute(f'CREATE SCHEMA "{schema}"')
+            cursor.execute(f'CREATE TABLE "{schema}".django_migrations AS SELECT * FROM public.django_migrations')
+            if not include_0131:
+                cursor.execute(f'DELETE FROM "{schema}".django_migrations WHERE app = %s AND name = %s', self.MIGRATION)
+        return schema
+
+    def _run_migration(self):
+        module = importlib.import_module('netbox_branching.migrations.0006_tag_object_types')
+        module.copy_table(apps, None)
+
+    def _columns(self, schema):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'SELECT column_name FROM information_schema.columns WHERE table_schema = %s AND table_name = %s',
+                [schema, self.TABLE],
+            )
+            return {row[0] for row in cursor.fetchall()}
+
+    def _rows(self, schema):
+        with connection.cursor() as cursor:
+            cursor.execute(f'SELECT * FROM "{schema}".{self.TABLE} ORDER BY id')
+            return cursor.fetchall()
+
+    def _index_names(self, schema):
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'SELECT indexname FROM pg_indexes WHERE schemaname = %s AND tablename = %s', [schema, self.TABLE]
+            )
+            return {row[0] for row in cursor.fetchall()}
+
+    def test_copy_table_for_branch_predating_0131(self):
+        schema = self._create_branch(include_0131=False)
+        self._run_migration()
+
+        # The branch's own migrate step must still be able to apply extras.0131
+        self.assertIn('objecttype_id', self._columns(schema))
+        self.assertNotIn('contenttype_id', self._columns(schema))
+        self.assertEqual(self._index_names(schema), self._index_names('public'))
+
+        self.assertEqual(self._rows(schema), self._rows('public'))
+
+    def test_branch_predating_0131_can_apply_0131(self):
+        schema = self._create_branch(include_0131=False)
+        self._run_migration()
+
+        # Apply extras.0131's AlterField for Tag.object_types against the branch schema
+        loader = MigrationLoader(connection)
+        migration = loader.get_migration(*self.MIGRATION)
+        from_state = loader.project_state(migration.dependencies[-1])
+        operation = next(op for op in migration.operations if op.model_name == 'tag' and op.name == 'object_types')
+        to_state = from_state.clone()
+        operation.state_forwards('extras', to_state)
+        with connection.cursor() as cursor:
+            cursor.execute(f'SET search_path TO "{schema}", public')
+        try:
+            with connection.schema_editor() as schema_editor:
+                operation.database_forwards('extras', schema_editor, from_state, to_state)
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute('SET search_path TO public')
+
+        self.assertIn('contenttype_id', self._columns(schema))
+        self.assertNotIn('objecttype_id', self._columns(schema))
+
+    def test_copy_table_for_branch_with_0131(self):
+        schema = self._create_branch(include_0131=True)
+        self._run_migration()
+
+        self.assertIn('contenttype_id', self._columns(schema))
+        self.assertEqual(self._index_names(schema), self._index_names('public'))
+        self.assertEqual(self._rows(schema), self._rows('public'))

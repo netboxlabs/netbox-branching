@@ -23,7 +23,8 @@ def copy_table(apps, schema_editor):
 
             # Abort if the table already exists (somehow)
             cursor.execute(
-                f"SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname='{schema_name}' AND tablename='{table}')"
+                "SELECT EXISTS (SELECT 1 FROM pg_tables WHERE schemaname=%s AND tablename=%s)",
+                [schema_name, table]
             )
             if cursor.fetchone()[0]:
                 print('Skipping; table already exists.', end='')
@@ -40,9 +41,17 @@ def copy_table(apps, schema_editor):
                 f"ALTER TABLE {schema_table} ALTER COLUMN id SET DEFAULT nextval('extras_tag_object_types_id_seq')"
             )
 
+            # Copied index names follow the column name, which extras.0131 renames to contenttype_id
+            cursor.execute(
+                "SELECT EXISTS (SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema=%s AND table_name=%s AND column_name='contenttype_id')",
+                [schema_name, table]
+            )
+            column = 'contenttype_id' if cursor.fetchone()[0] else 'objecttype_id'
+
             # Rename indexes
             cursor.execute(
-                f"ALTER INDEX {schema_name}.extras_tag_object_types_objecttype_id_idx "
+                f"ALTER INDEX {schema_name}.extras_tag_object_types_{column}_idx "
                 f"RENAME TO extras_tag_object_types_contenttype_id_c1b220c3"
             )
             cursor.execute(
@@ -50,9 +59,17 @@ def copy_table(apps, schema_editor):
                 f"RENAME TO extras_tag_object_types_tag_id_2e1aab29"
             )
             cursor.execute(
-                f"ALTER INDEX {schema_name}.extras_tag_object_types_tag_id_objecttype_id_key "
+                f"ALTER INDEX {schema_name}.extras_tag_object_types_tag_id_{column}_key "
                 f"RENAME TO extras_tag_object_types_tag_id_contenttype_id_2ff9910c_uniq"
             )
+
+            # If main has applied extras.0131 but the branch has not, restore the column name the branch expects
+            cursor.execute(
+                f"SELECT EXISTS (SELECT 1 FROM {schema_name}.django_migrations "
+                f"WHERE app='extras' AND name='0131_concrete_objecttype')"
+            )
+            if column == 'contenttype_id' and not cursor.fetchone()[0]:
+                cursor.execute(f"ALTER TABLE {schema_table} RENAME COLUMN contenttype_id TO objecttype_id")
 
             print('Success.', end='')
 
