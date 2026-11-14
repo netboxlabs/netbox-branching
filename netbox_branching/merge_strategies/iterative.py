@@ -2,6 +2,8 @@
 Iterative merge strategy implementation.
 """
 
+from collections import defaultdict
+
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS
 
@@ -53,7 +55,7 @@ class IterativeMergeStrategy(MergeStrategy):
         restored_pks_by_model = {}
 
         # Undo each change from the Branch
-        for change in changes:
+        for change in self._order_for_revert(changes):
             model_class = change.changed_object_type.model_class()
             models.add(model_class)
             if change.action != ObjectChangeActionChoices.ACTION_CREATE:
@@ -68,3 +70,41 @@ class IterativeMergeStrategy(MergeStrategy):
 
         # Perform cleanup tasks
         self._clean(models)
+
+    @classmethod
+    def _order_for_revert(cls, changes):
+        """
+        Yield changes newest first, except that an UPDATE whose prechange data references an object its own
+        request deleted (e.g. an Interface left by a Cable delete) waits for that object's restore. (#693)
+        """
+        changes = list(changes)
+        pending = defaultdict(set)
+        for change in changes:
+            if change.action == ObjectChangeActionChoices.ACTION_DELETE:
+                pending[change.request_id].add(_change_key(change))
+        waiting = defaultdict(list)
+
+        for change in changes:
+            request_pending = pending[change.request_id]
+            if change.action == ObjectChangeActionChoices.ACTION_UPDATE and request_pending:
+                model_class = change.changed_object_type.model_class()
+                refs = cls._get_fk_references(model_class, change.prechange_data, request_pending)
+                if refs:
+                    waiting[change.request_id].append((change, refs))
+                    continue
+
+            yield change
+
+            if change.action == ObjectChangeActionChoices.ACTION_DELETE:
+                request_pending.discard(_change_key(change))
+                held = waiting[change.request_id]
+                waiting[change.request_id] = [(c, refs) for c, refs in held if refs & request_pending]
+                yield from (c for c, refs in held if not refs & request_pending)
+
+        for held in waiting.values():
+            yield from (c for c, _ in held)
+
+
+def _change_key(change):
+    app_label, model = change.changed_object_type.natural_key()
+    return f'{app_label}.{model}', change.changed_object_id
