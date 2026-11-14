@@ -4,8 +4,8 @@ from django.db import DEFAULT_DB_ALIAS
 
 from netbox.registry import registry
 
-from .contextvars import active_branch
-from .utilities import supports_branching
+from .contextvars import active_branch, branch_refusal
+from .utilities import BranchUnavailable, supports_branching
 
 __all__ = ('BranchAwareRouter',)
 
@@ -31,6 +31,13 @@ class BranchAwareRouter:
         if not supports_branching(model):
             return None
 
+        return self._get_branch_db()
+
+    def _get_branch_db(self):
+        # A background job whose request named an unusable branch fails here rather than run in main (#702)
+        if refusal := branch_refusal.get():
+            raise BranchUnavailable(refusal)
+
         # Return the schema for the active branch (if any)
         if branch := active_branch.get():
             return self._get_connection(branch)
@@ -40,9 +47,7 @@ class BranchAwareRouter:
 
         # Always use the active branch (if any) when retrieving changelog records
         if model._meta.label == 'core.ObjectChange':
-            if branch := active_branch.get():
-                return self._get_connection(branch)
-            return None
+            return self._get_branch_db()
 
         return self._get_db(model, **hints)
 
