@@ -315,13 +315,24 @@ def strip_schema_local_references(model, data):
 def get_tables_to_replicate():
     """
     Return an ordered list of database tables to replicate when provisioning a new schema.
+
+    Tables which don't exist in main are skipped (with a warning), since there is nothing to copy. A model can
+    resolve without having a table in main, e.g. one a plugin created in a branch which hasn't been merged.
     """
     tables = set()
+    missing_tables = set()
+    existing_tables = set(connection.introspection.table_names())
+
+    def add_table(db_table):
+        if db_table in existing_tables:
+            tables.add(db_table)
+        else:
+            missing_tables.add(db_table)
 
     branch_aware_models = [ot.model_class() for ot in get_branchable_object_types() if ot.model_class() is not None]
     for model in branch_aware_models:
         # Capture the model's table
-        tables.add(model._meta.db_table)
+        add_table(model._meta.db_table)
 
         # Capture any M2M fields which reference other replicated models
         for m2m_field in model._meta.local_many_to_many:
@@ -330,14 +341,13 @@ def get_tables_to_replicate():
                 m2m_table = m2m_field.through._meta.db_table
             else:
                 m2m_table = m2m_field._get_m2m_db_table(model._meta)
-            tables.add(m2m_table)
+            add_table(m2m_table)
 
     # A model that a plugin's resolver makes branchable without change logging has no branching
     # feature, but the router sends its queries to the branch, so the branch needs its table too.
     if _branching_resolvers:
         from netbox.models.features import ChangeLoggingMixin
 
-        existing_tables = set(connection.introspection.table_names())
         for model in apps.get_models(include_auto_created=True):
             meta = model._meta
             if (
@@ -356,7 +366,10 @@ def get_tables_to_replicate():
                         m2m_table = m2m_field.through._meta.db_table
                     else:
                         m2m_table = m2m_field._get_m2m_db_table(meta)
-                    tables.add(m2m_table)
+                    add_table(m2m_table)
+
+    if missing_tables:
+        logger.warning('Not replicating tables missing from main: %s', ', '.join(sorted(missing_tables)))
 
     return sorted(tables)
 

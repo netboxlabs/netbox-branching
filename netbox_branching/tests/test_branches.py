@@ -4,10 +4,11 @@ from datetime import timedelta
 from django.core.exceptions import ValidationError
 from django.db import connection
 from django.db.models.signals import pre_delete
-from django.test import SimpleTestCase, override_settings
+from django.test import SimpleTestCase, TestCase, override_settings
 from django.utils import timezone
 
 from dcim.models import Manufacturer
+from extras.models import ConfigContext
 from extras.validators import CustomValidator
 from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchStatusChoices
@@ -19,6 +20,15 @@ from netbox_branching.signals import post_deprovision
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase, fetchall, fetchone
 from netbox_branching.utilities import BranchActionIndicator, activate_branch, get_tables_to_replicate
 from utilities.exceptions import AbortRequest
+
+# A branchable model and one of its M2M through tables, renamed by the tests below so they're missing from main
+MISSING_TABLES = (ConfigContext._meta.db_table, ConfigContext.sites.through._meta.db_table)
+
+
+def _rename_tables(tables, suffix_from, suffix_to):
+    with connection.cursor() as cursor:
+        for table in tables:
+            cursor.execute(f'ALTER TABLE {quote_ident(table + suffix_from)} RENAME TO {quote_ident(table + suffix_to)}')
 
 
 class BranchTestCase(FastTeardownTransactionTestCase):
@@ -473,6 +483,22 @@ class BranchTestCase(FastTeardownTransactionTestCase):
             Branch.register_preaction_check(noop, 'not_a_real_action')
 
 
+class TablesToReplicateTestCase(TestCase):
+    def test_tables_missing_from_main_are_skipped(self):
+        tables = get_tables_to_replicate()
+        for table in MISSING_TABLES:
+            self.assertIn(table, tables)
+
+        _rename_tables(MISSING_TABLES, '', '_hidden')
+        with self.assertLogs('netbox_branching.utilities', level='WARNING') as cm:
+            tables = get_tables_to_replicate()
+        for table in MISSING_TABLES:
+            self.assertNotIn(table, tables)
+            self.assertIn(table, cm.output[0])
+        # The model's other M2M tables are still in main, so they're still replicated
+        self.assertIn(ConfigContext.regions.through._meta.db_table, tables)
+
+
 class BranchStatusDescriptionTestCase(SimpleTestCase):
     def test_descriptions_cover_all_statuses(self):
         # Every status choice must have a description, and vice versa.
@@ -548,6 +574,30 @@ class BranchProvisionPipelineTestCase(FastTeardownTransactionTestCase):
             missing,
             msg=f'Branch schema is missing {len(missing)} indexes that exist on main: {sorted(missing)[:5]}',
         )
+
+    def test_provision_skips_tables_missing_from_main(self):
+        """
+        A branchable model whose table doesn't exist in main (e.g. one a plugin created in an unmerged branch)
+        doesn't stop a branch from being provisioned.
+        """
+        _rename_tables(MISSING_TABLES, '', '_hidden')
+        try:
+            branch = self._track(Branch(name='MissingTables'))
+            branch.save(provision=False)
+            branch.provision(user=None)
+        finally:
+            _rename_tables(MISSING_TABLES, '_hidden', '')
+
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'SELECT table_name FROM information_schema.tables WHERE table_schema=%s', [branch.schema_name]
+            )
+            branch_tables = {row[0] for row in cursor.fetchall()}
+        self.assertIn(Manufacturer._meta.db_table, branch_tables)
+        for table in MISSING_TABLES:
+            self.assertNotIn(table, branch_tables)
 
     def test_provision_imports_exported_snapshot(self):
         """
