@@ -1,6 +1,7 @@
-{% load helpers %}
-{% if object.object.get_absolute_url %}
-  {{ object.object|linkify }}
-{% else %}
-  {{ value }}
-{% endif %}
+{% with url=object.get_object_url %}
+  {% if url %}
+    <a href="{{ url }}">{{ value }}</a>
+  {% else %}
+    {{ value }}
+  {% endif %}
+{% endwith %}

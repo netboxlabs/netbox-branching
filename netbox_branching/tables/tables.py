@@ -1,4 +1,7 @@
+from collections import defaultdict
+
 import django_tables2 as tables
+from django.contrib.contenttypes.models import ContentType
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 
@@ -23,11 +26,21 @@ OBJECTCHANGE_FULL_NAME = """
 """
 
 OBJECTCHANGE_OBJECT = """
-{% if value and value.get_absolute_url %}
-    <a href="{{ value.get_absolute_url }}">{{ record.object_repr }}</a>
+{% if record.changed_object.get_absolute_url %}
+    <a href="{{ record.changed_object.get_absolute_url }}">{{ record.object_repr }}</a>
 {% else %}
     {{ record.object_repr }}
 {% endif %}
+"""
+
+CHANGEDIFF_OBJECT = """
+{% with url=record.get_object_url %}
+{% if url %}
+    <a href="{{ url }}">{{ record.object_repr }}</a>
+{% else %}
+    {{ record.object_repr }}
+{% endif %}
+{% endwith %}
 """
 
 BEFORE_DIFF = """
@@ -74,6 +87,15 @@ GROUPED_COUNT = (
     "{{ ''|placeholder }}"
     '{% endif %}'
 )
+
+
+def _rendered_records(table):
+    """
+    Return the records of the rows about to be rendered: the current page's, if the table is paginated.
+    """
+    if hasattr(table, 'page'):
+        return [row.record for row in table.page.object_list]
+    return list(table.data)
 
 
 class BranchTable(NetBoxTable):
@@ -127,7 +149,11 @@ class BranchTable(NetBoxTable):
 class ChangeDiffTable(NetBoxTable):
     id = tables.Column(verbose_name=_('ID'), linkify=True)
     branch = tables.Column(verbose_name=_('Branch'), linkify=True)
-    object = tables.TemplateColumn(template_code=OBJECTCHANGE_OBJECT, verbose_name=_('Object'), orderable=False)
+    # Rendered from ChangeDiff.get_object_url() rather than the object GenericForeignKey, whose prefetch would read
+    # from main
+    object = tables.TemplateColumn(
+        accessor=tables.A('object_repr'), template_code=CHANGEDIFF_OBJECT, verbose_name=_('Object'), orderable=False
+    )
     action = columns.ChoiceFieldColumn(
         verbose_name=_('Action'),
     )
@@ -163,6 +189,11 @@ class ChangeDiffTable(NetBoxTable):
             'current_diff',
         )
 
+    def before_render(self, request):
+        super().before_render(request)
+        # Look up the changed objects of the rows being rendered together, rather than one row at a time
+        ChangeDiff.resolve_objects(_rendered_records(self))
+
 
 class ChangesTable(NetBoxTable):
     time = columns.DateTimeColumn(verbose_name=_('Time'), timespec='minutes', linkify=True)
@@ -171,8 +202,9 @@ class ChangesTable(NetBoxTable):
     )
     model = tables.Column()
     changed_object_type = columns.ContentTypeColumn(verbose_name=_('Type'))
+    # Rendered from the changed object looked up in before_render(), rather than prefetching the changed_object
+    # GenericForeignKey
     object_repr = tables.TemplateColumn(
-        accessor=tables.A('changed_object'),
         template_code=OBJECTCHANGE_OBJECT,
         verbose_name=_('Object'),
         orderable=False,
@@ -199,6 +231,23 @@ class ChangesTable(NetBoxTable):
             'before',
             'after',
         )
+
+    def before_render(self, request):
+        super().before_render(request)
+        # Look up each changed object in the database its change was read from (the branch, on Changes Ahead).
+        # Prefetching the changed_object GenericForeignKey would go through the router, which reads from main unless
+        # the branch is active.
+        changed_object = ObjectChange._meta.get_field('changed_object')
+        groups = defaultdict(list)
+        for record in _rendered_records(self):
+            if record.changed_object_type_id:
+                groups[(record._state.db, record.changed_object_type_id)].append(record)
+        for (using, object_type_id), records in groups.items():
+            model = ContentType.objects.get_for_id(object_type_id).model_class()
+            pks = {record.changed_object_id for record in records}
+            objects = model._base_manager.using(using).in_bulk(pks) if model else {}
+            for record in records:
+                changed_object.set_cached_value(record, objects.get(record.changed_object_id))
 
 
 class ChangesGroupedTable(BaseTable):

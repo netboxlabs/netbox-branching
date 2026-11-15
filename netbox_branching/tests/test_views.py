@@ -14,6 +14,7 @@ from core.choices import JobStatusChoices, ObjectChangeActionChoices
 from core.models import ObjectChange
 from dcim.models import Site
 from netbox.context import current_request
+from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.jobs import MergeBranchJob
@@ -823,6 +824,81 @@ class ChangeDiffViewTestCase(TestCase):
         )
         response = self.client.get(self._url(diff))
         self.assertEqual(response.status_code, 200)
+
+
+class ChangedObjectLinkTestCase(FastTeardownTransactionTestCase):
+    """
+    The Diff tab, the Change Diff page and the Changes Ahead drill-down link each changed object where it exists:
+    in the branch (with the branch activated), or for a deletion in main.
+    """
+
+    serialized_rollback = True
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', is_superuser=True)
+        self.client.force_login(self.user)
+        self.request = RequestFactory().get(reverse('home'))
+        self.request.id = uuid.uuid4()
+        self.request.user = self.user
+
+        with event_tracking(self.request):
+            self.updated = Site.objects.create(name='Updated Site', slug='updated-site')
+            self.deleted = Site.objects.create(name='Deleted Site', slug='deleted-site')
+        self.branch = provision_branch(user=self.user)
+        with activate_branch(self.branch), event_tracking(self.request):
+            self.created = Site.objects.create(name='Created Site', slug='created-site')
+            site = Site.objects.get(pk=self.updated.pk)
+            site.snapshot()
+            site.description = 'changed in branch'
+            site.save()
+            Site.objects.get(pk=self.deleted.pk).delete()
+
+    def tearDown(self):
+        for branch in Branch.objects.all():
+            if branch.connection_name in connections:
+                connections[branch.connection_name].close()
+
+    def _diff(self, site):
+        return ChangeDiff.objects.get(branch=self.branch, object_id=site.pk)
+
+    def _branch_url(self, site):
+        return f'{site.get_absolute_url()}?{QUERY_PARAM}={self.branch.schema_id}'
+
+    def test_objects_are_found_where_they_exist(self):
+        created, updated, deleted = (self._diff(site) for site in (self.created, self.updated, self.deleted))
+        self.assertEqual(created.get_object().pk, self.created.pk)
+        self.assertEqual(created.get_object_url(), self._branch_url(self.created))
+        self.assertEqual(updated.get_object().description, 'changed in branch')
+        self.assertEqual(updated.get_object_url(), self._branch_url(self.updated))
+        self.assertEqual(deleted.get_object().pk, self.deleted.pk)
+        self.assertEqual(deleted.get_object_url(), self.deleted.get_absolute_url())
+
+    def test_objects_are_resolved_with_one_query_per_database_and_type(self):
+        ContentType.objects.get_for_model(Site)  # Warm the ContentType cache
+        diffs = list(ChangeDiff.objects.filter(branch=self.branch).select_related('branch'))
+        self.assertEqual(len(diffs), 3)
+        with self.assertNumQueries(1), self.assertNumQueries(1, using=self.branch.connection_name):
+            ChangeDiff.resolve_objects(diffs)
+        self.assertTrue(all(diff.get_object() is not None for diff in diffs))
+
+    def test_diff_tab_links_objects(self):
+        response = self.client.get(reverse('plugins:netbox_branching:branch_diff', args=[self.branch.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f'href="{self._branch_url(self.created)}"')
+        self.assertContains(response, f'href="{self._branch_url(self.updated)}"')
+        self.assertContains(response, f'href="{self.deleted.get_absolute_url()}"')
+
+    def test_changediff_page_links_object(self):
+        diff = self._diff(self.created)
+        response = self.client.get(reverse('plugins:netbox_branching:changediff', args=[diff.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f'href="{self._branch_url(self.created)}"')
+
+    def test_changes_ahead_drilldown_links_object(self):
+        url = reverse('plugins:netbox_branching:branch_changes-ahead', args=[self.branch.pk])
+        response = self.client.get(f'{url}?request_id={self.request.id}')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f'href="{self.created.get_absolute_url()}"')
 
 
 class GroupedChangesViewMixinTestCase(TestCase):

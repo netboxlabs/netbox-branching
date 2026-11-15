@@ -419,6 +419,7 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, FastTeardownTransactionTestC
             **self._branch_header(),
         )
         self.assertEqual(response.status_code, 201)
+        site_id = json.loads(response.content)['id']
 
         diff = ChangeDiff.objects.get(branch=self.branch)
         self.assertEqual(diff.action, ObjectChangeActionChoices.ACTION_CREATE)
@@ -430,6 +431,8 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, FastTeardownTransactionTestC
         result = json.loads(response.content)['results'][0]
         self.assertIn('diff', result)
         self.assertEqual(result['diff'], {'original': {}, 'modified': {}, 'current': {}})
+        # The object only exists in the branch
+        self.assertEqual(result['object']['id'], site_id)
 
     def test_changediff_list_update_action(self):
         """

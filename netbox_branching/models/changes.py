@@ -1,7 +1,9 @@
 import logging
+from collections import defaultdict
 from functools import cached_property
 
 from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.db import DEFAULT_DB_ALIAS, models
 from django.urls import reverse
@@ -12,6 +14,7 @@ from mptt.models import MPTTModel
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
 from netbox.models.features import ChangeLoggingMixin
+from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.utilities import (
     clear_mptt_fields,
     diff_for_merge,
@@ -284,6 +287,55 @@ class ChangeDiff(models.Model):
 
     def get_action_color(self):
         return ObjectChangeActionChoices.colors.get(self.action)
+
+    @classmethod
+    def resolve_objects(cls, diffs):
+        """
+        Look up the changed object of each ChangeDiff where it currently exists: in the branch, or for a deletion in
+        main (which is also used once the branch is no longer ready). Unlike the `object` GenericForeignKey, which is
+        always read from main, this finds objects created in the branch. Makes one query per database and object type.
+        """
+        diffs = [diff for diff in diffs if not hasattr(diff, '_changed_object')]
+        branch_model = cls._meta.get_field('branch').related_model
+        uncached_branch_ids = {diff.branch_id for diff in diffs if not cls.branch.is_cached(diff)}
+        branches = branch_model.objects.in_bulk(uncached_branch_ids) if uncached_branch_ids else {}
+
+        groups = defaultdict(list)
+        for diff in diffs:
+            branch = diff.branch if cls.branch.is_cached(diff) else branches[diff.branch_id]
+            in_branch = branch.ready and diff.action != ObjectChangeActionChoices.ACTION_DELETE
+            diff._changed_object = None
+            diff._changed_object_branch = branch if in_branch else None
+            using = branch.connection_name if in_branch else DEFAULT_DB_ALIAS
+            groups[(using, diff.object_type_id)].append(diff)
+
+        for (using, object_type_id), group in groups.items():
+            model = ContentType.objects.get_for_id(object_type_id).model_class()
+            if model is None:
+                continue
+            objects = model._base_manager.using(using).in_bulk({diff.object_id for diff in group})
+            for diff in group:
+                diff._changed_object = objects.get(diff.object_id)
+
+    def get_object(self):
+        """
+        Return the changed object where it currently exists (see resolve_objects()), or None if it isn't found.
+        """
+        if not hasattr(self, '_changed_object'):
+            self.resolve_objects([self])
+        return self._changed_object
+
+    def get_object_url(self):
+        """
+        Return the URL of the changed object, if it has one. An object in the branch is linked with the branch
+        activated.
+        """
+        obj = self.get_object()
+        if obj is None or not hasattr(obj, 'get_absolute_url'):
+            return None
+        if branch := self._changed_object_branch:
+            return f'{obj.get_absolute_url()}?{QUERY_PARAM}={branch.schema_id}'
+        return obj.get_absolute_url()
 
     def _update_conflicts(self):
         """
