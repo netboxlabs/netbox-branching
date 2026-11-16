@@ -2,11 +2,13 @@ from collections import defaultdict
 
 import django_tables2 as tables
 from django.contrib.contenttypes.models import ContentType
+from django.db import DEFAULT_DB_ALIAS
 from django.utils.safestring import mark_safe
 from django.utils.translation import gettext_lazy as _
 
 from core.models import ObjectChange
 from netbox.tables import BaseTable, NetBoxTable, columns
+from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.models import Branch, ChangeDiff
 from utilities.templatetags.builtins.filters import placeholder
 
@@ -26,8 +28,8 @@ OBJECTCHANGE_FULL_NAME = """
 """
 
 OBJECTCHANGE_OBJECT = """
-{% if record.changed_object.get_absolute_url %}
-    <a href="{{ record.changed_object.get_absolute_url }}">{{ record.object_repr }}</a>
+{% if record.changed_object_url %}
+    <a href="{{ record.changed_object_url }}">{{ record.object_repr }}</a>
 {% else %}
     {{ record.object_repr }}
 {% endif %}
@@ -149,8 +151,8 @@ class BranchTable(NetBoxTable):
 class ChangeDiffTable(NetBoxTable):
     id = tables.Column(verbose_name=_('ID'), linkify=True)
     branch = tables.Column(verbose_name=_('Branch'), linkify=True)
-    # Rendered from ChangeDiff.get_object_url() rather than the object GenericForeignKey, whose prefetch would read
-    # from main
+    # Rendered from ChangeDiff.get_object_url() rather than the object GenericForeignKey, whose prefetch would also
+    # look in main for objects created in the branch
     object = tables.TemplateColumn(
         accessor=tables.A('object_repr'), template_code=CHANGEDIFF_OBJECT, verbose_name=_('Object'), orderable=False
     )
@@ -232,11 +234,14 @@ class ChangesTable(NetBoxTable):
             'after',
         )
 
+    # The branch whose changes are listed, set by the view
+    branch = None
+
     def before_render(self, request):
         super().before_render(request)
-        # Look up each changed object in the database its change was read from (the branch, on Changes Ahead).
-        # Prefetching the changed_object GenericForeignKey would go through the router, which reads from main unless
-        # the branch is active.
+        # Look up each changed object in the database its change was read from (the branch, on Changes Ahead), and
+        # link an object in the branch with the branch activated. Prefetching the changed_object GenericForeignKey
+        # would go through the router, which reads from main unless the branch is active.
         changed_object = ObjectChange._meta.get_field('changed_object')
         groups = defaultdict(list)
         for record in _rendered_records(self):
@@ -246,8 +251,12 @@ class ChangesTable(NetBoxTable):
             model = ContentType.objects.get_for_id(object_type_id).model_class()
             pks = {record.changed_object_id for record in records}
             objects = model._base_manager.using(using).in_bulk(pks) if model else {}
+            query = f'?{QUERY_PARAM}={self.branch.schema_id}' if self.branch and using != DEFAULT_DB_ALIAS else ''
             for record in records:
-                changed_object.set_cached_value(record, objects.get(record.changed_object_id))
+                obj = objects.get(record.changed_object_id)
+                changed_object.set_cached_value(record, obj)
+                if obj is not None and hasattr(obj, 'get_absolute_url'):
+                    record.changed_object_url = f'{obj.get_absolute_url()}{query}'
 
 
 class ChangesGroupedTable(BaseTable):
