@@ -24,7 +24,7 @@ from .constants import INCLUDE_MODELS
 from .contextvars import active_branch
 from .events import *
 from .models import Branch, ChangeDiff
-from .utilities import deactivate_branch
+from .utilities import deactivate_branch, get_tables_to_replicate
 
 __all__ = (
     'check_pending_migrations',
@@ -263,10 +263,13 @@ def check_pending_migrations(sender, using, **kwargs):
     logger.info('Checking for branches with pending database migrations')
 
     open_branches = Branch.objects.filter(status=BranchStatusChoices.READY)
+    tables_to_replicate = get_tables_to_replicate() if open_branches else []
     update_count = 0
     for branch in open_branches:
         try:
-            if branch.pending_migrations:
+            # A branch lacking a table, e.g. of a model made branchable since it was provisioned, needs migrating
+            # too: migrate() copies the table from main. (#683)
+            if branch.pending_migrations or branch.get_missing_tables(tables_to_replicate):
                 branch.status = BranchStatusChoices.PENDING_MIGRATIONS
                 update_count += 1
         except Exception:

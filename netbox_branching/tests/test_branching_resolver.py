@@ -7,16 +7,18 @@ tests.
 """
 
 from contextlib import contextmanager
+from unittest.mock import patch
 
+from django.apps import apps as django_apps
 from django.contrib.auth.models import Group, Permission
-from django.db import IntegrityError, connection, migrations, models, transaction
+from django.db import DEFAULT_DB_ALIAS, IntegrityError, connection, migrations, models, transaction
 from django.test import TestCase, override_settings
 
-from dcim.models import Site
 from ipam.models import Prefix
 from netbox_branching import utilities
 from netbox_branching.choices import BranchStatusChoices
-from netbox_branching.models.branches import _fake_for_branch, _skip_unreplicated_operations
+from netbox_branching.models.branches import _skip_unreplicated_operations
+from netbox_branching.signal_receivers import check_pending_migrations
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import (
     activate_branch,
@@ -282,11 +284,7 @@ class NewlyBranchableModelMigrateTestCase(FastTeardownTransactionTestCase):
 
     serialized_rollback = True
 
-    def test_migrate_replicates_table(self):
-        Group.objects.create(name='Group A')
-        branch = provision_branch(user=None, name='Pre-resolver Branch')
-        self.assertFalse(_table_exists(branch.schema_name, Group._meta.db_table))
-
+    def _leave_auth_migrations_pending(self, branch):
         # Leave auth.0010 (AlterField on Group.name) pending in the branch. Django plans nothing for an app whose
         # leaf migration is applied, so the later ones must be pending too.
         with connection.cursor() as cursor:
@@ -295,15 +293,24 @@ class NewlyBranchableModelMigrateTestCase(FastTeardownTransactionTestCase):
                 ['auth', '0010'],
             )
 
+    def test_migrate_replicates_table(self):
+        Group.objects.create(name='Group A')
+        branch = provision_branch(user=None, name='Pre-resolver Branch')
+        self.assertFalse(_table_exists(branch.schema_name, Group._meta.db_table))
+        self._leave_auth_migrations_pending(branch)
+
         with _isolated_resolvers():
             register_branching_resolver(_group_resolver)
-            with self.assertLogs('netbox_branching.branch.migrate', level='DEBUG') as logs:
+            with patch(
+                'netbox_branching.models.branches._skip_unreplicated_operations', wraps=_skip_unreplicated_operations
+            ) as skip:
                 branch.migrate(user=None)
-            # The migration must not run against main's table
-            self.assertIn('Faking migration auth.0010_alter_group_name_max_length', '\n'.join(logs.output))
+            # Main has already applied the migration to the table the branch copied
+            self.assertIn(('auth', 'group'), skip.call_args.args[1])
 
             branch.refresh_from_db()
             self.assertEqual(branch.status, BranchStatusChoices.READY)
+            self.assertIn('auth.0010_alter_group_name_max_length', branch.applied_migrations)
             self.assertTrue(_table_exists(branch.schema_name, Group._meta.db_table))
             self.assertTrue(_table_exists(branch.schema_name, GROUP_PERMISSIONS_TABLE))
 
@@ -316,6 +323,43 @@ class NewlyBranchableModelMigrateTestCase(FastTeardownTransactionTestCase):
 
         self.assertFalse(Group.objects.filter(name='Group B').exists())
 
+    def test_migrate_without_pending_migrations(self):
+        branch = provision_branch(user=None, name='Pre-resolver Branch')
+
+        with _isolated_resolvers():
+            register_branching_resolver(_group_resolver)
+            self.assertEqual(branch.pending_migrations, [])
+            check_pending_migrations(sender=django_apps.get_app_config('netbox_branching'), using=DEFAULT_DB_ALIAS)
+            branch.refresh_from_db()
+            self.assertEqual(branch.status, BranchStatusChoices.PENDING_MIGRATIONS)
+
+            branch.migrate(user=None)
+            branch.refresh_from_db()
+            self.assertEqual(branch.status, BranchStatusChoices.READY)
+            self.assertTrue(_table_exists(branch.schema_name, Group._meta.db_table))
+
+    def test_failed_copy_can_be_retried(self):
+        branch = provision_branch(user=None, name='Pre-resolver Branch')
+        self._leave_auth_migrations_pending(branch)
+
+        with _isolated_resolvers():
+            register_branching_resolver(_group_resolver)
+            with (
+                patch('netbox_branching.models.branches.parallel_copy_tables', side_effect=RuntimeError('boom')),
+                self.assertRaises(RuntimeError),
+            ):
+                branch.migrate(user=None)
+
+            branch.refresh_from_db()
+            self.assertEqual(branch.status, BranchStatusChoices.PENDING_MIGRATIONS)
+            self.assertNotIn('auth.0010_alter_group_name_max_length', branch.applied_migrations)
+            self.assertFalse(_table_exists(branch.schema_name, Group._meta.db_table))
+
+            branch.migrate(user=None)
+            branch.refresh_from_db()
+            self.assertEqual(branch.status, BranchStatusChoices.READY)
+            self.assertTrue(_table_exists(branch.schema_name, Group._meta.db_table))
+
 
 class SkipUnreplicatedOperationsTestCase(TestCase):
     """Operations on branchable models whose table the branch lacks are skipped. (#683)"""
@@ -324,12 +368,6 @@ class SkipUnreplicatedOperationsTestCase(TestCase):
         migration = migrations.Migration('9999_test', app_label)
         migration.operations = operations
         return migration
-
-    def test_fake_when_only_unreplicated_models_affected(self):
-        migration = self._migration('dcim', [migrations.AddField('site', 'foo', models.IntegerField(null=True))])
-        self.assertTrue(supports_branching(Site))
-        self.assertFalse(_fake_for_branch(migration))
-        self.assertTrue(_fake_for_branch(migration, frozenset({('dcim', 'site')})))
 
     def test_unreplicated_operations_only_update_state(self):
         add_field = migrations.AddField('site', 'foo', models.IntegerField(null=True))
@@ -344,3 +382,14 @@ class SkipUnreplicatedOperationsTestCase(TestCase):
         # The loaded migration is left untouched
         self.assertEqual(migration.operations, [add_field, add_index])
         self.assertIs(_skip_unreplicated_operations(migration, frozenset()), migration)
+
+    def test_nested_database_operations_skipped(self):
+        add_field = migrations.AddField('site', 'foo', models.IntegerField(null=True))
+        add_index = migrations.AddIndex('region', models.Index(fields=['name'], name='test_idx'))
+        separate = migrations.SeparateDatabaseAndState(database_operations=[add_field, add_index])
+        migration = self._migration('dcim', [separate])
+
+        skipped = _skip_unreplicated_operations(migration, frozenset({('dcim', 'site')}))
+        self.assertEqual(skipped.operations[0].database_operations, [add_index])
+        self.assertEqual(skipped.operations[0].state_operations, [])
+        self.assertEqual(separate.database_operations, [add_field, add_index])
