@@ -2099,7 +2099,7 @@ class BaseMergeTests(CableTestMixin):
     def test_revert_primary_mac_assignment(self):
         """
         Undo unassigns the MAC address while the interface which designates it as primary still exists, which
-        MACAddress.clean() rejects.
+        MACAddress.clean() rejects. Refs: #739
         """
         branch, mac, interface = self._merge_primary_mac_assignment()
 
