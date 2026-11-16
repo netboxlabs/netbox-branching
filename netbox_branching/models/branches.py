@@ -35,8 +35,8 @@ from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
-from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
-from netbox_branching.contextvars import active_branch, unreplicated_models
+from netbox_branching.constants import BRANCH_ACTIONS, PLACEHOLDER_TABLE_COMMENT, SKIP_INDEXES
+from netbox_branching.contextvars import active_branch
 from netbox_branching.merge_strategies import get_merge_strategy
 from netbox_branching.provisioning import (
     build_main_constraint_map,
@@ -136,7 +136,7 @@ def _branch_isolated_runsql(branch_schema, main_schema):
         RunSQL.database_forwards = original
 
 
-def _fake_for_branch(migration, unreplicated=frozenset()):
+def _fake_for_branch(migration):
     """
     Return True if a migration should be faked when applied to a branch schema, False otherwise.
 
@@ -145,8 +145,7 @@ def _fake_for_branch(migration, unreplicated=frozenset()):
        directly: ``True`` forces faking, ``False`` forces the migration to run.
     2. Otherwise, fall back to a heuristic: fake migrations whose model-specific operations
        affect only non-branchable models. This prevents RunSQL operations from inadvertently
-       acting on the main (public) schema via the search_path. Models in ``unreplicated``, whose
-       table the branch lacks, count as non-branchable.
+       acting on the main (public) schema via the search_path.
 
     Migrations with no model-specific operations (e.g. pure RunSQL or RunPython) are not faked
     by the heuristic, as we cannot determine their intent without executing them. Authors of
@@ -183,7 +182,7 @@ def _fake_for_branch(migration, unreplicated=frozenset()):
             # conservatively treat it as branchable and don't fake.
             logger.warning(f'Could not resolve model {migration.app_label}.{model_name}; not faking {migration}')
             return False
-        if supports_branching(model) and (migration.app_label, model._meta.model_name) not in unreplicated:
+        if supports_branching(model):
             return False
     return has_model_operations
 
@@ -1092,24 +1091,21 @@ class Branch(JobsMixin, PrimaryModel):
                     # the current ProjectState from all applied migrations, which apply_migration
                     # requires as its starting point. There is no public equivalent as of Django 5.x.
                     state = executor._create_project_state(with_applied_migrations=True)
-                    # Migrate models whose table the branch lacks (e.g. made branchable since it was
-                    # provisioned) as non-branchable; their tables are copied from main below. (#683)
-                    unreplicated = self._get_unreplicated_models(state)
-                    token = unreplicated_models.set(unreplicated)
-                    try:
-                        for migration, _ in full_plan:
-                            if not migrations_to_run:
-                                break
-                            if migration in migrations_to_run:
-                                fake = _fake_for_branch(migration, unreplicated)
-                                state = executor.apply_migration(state, migration, fake=fake)
-                                if fake:
-                                    # apply_migration() doesn't advance the state when faking, leaving
-                                    # later data migrations with stale historical models. (#617)
-                                    state = migration.mutate_state(state, preserve=False)
-                                migrations_to_run.remove(migration)
-                    finally:
-                        unreplicated_models.reset(token)
+                    # Give models whose table the branch lacks (e.g. made branchable since it was
+                    # provisioned) an empty table to migrate, so nothing falls through to main's.
+                    # It's filled from main below. (#683)
+                    self._create_placeholder_tables(connection, state)
+                    for migration, _ in full_plan:
+                        if not migrations_to_run:
+                            break
+                        if migration in migrations_to_run:
+                            fake = _fake_for_branch(migration)
+                            state = executor.apply_migration(state, migration, fake=fake)
+                            if fake:
+                                # apply_migration() doesn't advance the state when faking, leaving
+                                # later data migrations with stale historical models. (#617)
+                                state = migration.mutate_state(state, preserve=False)
+                            migrations_to_run.remove(migration)
             except Exception as e:
                 if err_message := str(e):
                     logger.error(err_message)
@@ -1121,7 +1117,8 @@ class Branch(JobsMixin, PrimaryModel):
         else:
             logger.info('Found no migrations to apply')
 
-        # Copy any table the branch lacks from main, which has already applied every migration (#683)
+        # Fill the placeholders, and copy any table the branch still lacks, from main, which has already
+        # applied every migration (#683)
         try:
             self._replicate_tables(self.get_missing_tables(), main_schema)
         except Exception:
@@ -1156,29 +1153,63 @@ class Branch(JobsMixin, PrimaryModel):
             )
             return {row[0] for row in cursor.fetchall()}
 
+    def _get_placeholder_tables(self):
+        """
+        Return the names of the tables in the branch schema which are still placeholders awaiting main's rows.
+        """
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT c.relname
+                FROM pg_class c
+                JOIN pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = %s AND c.relkind = 'r' AND obj_description(c.oid, 'pg_class') = %s
+                """,
+                [self.schema_name, PLACEHOLDER_TABLE_COMMENT],
+            )
+            return {row[0] for row in cursor.fetchall()}
+
     def get_missing_tables(self, tables_to_replicate=None):
         """
-        Return the tables to replicate which the branch schema lacks.
+        Return the tables to replicate which the branch schema lacks, or holds only as placeholders.
         """
         if tables_to_replicate is None:
             tables_to_replicate = get_tables_to_replicate()
-        return sorted(set(tables_to_replicate) - self._get_tables())
+        tables_to_replicate = set(tables_to_replicate)
+        missing = tables_to_replicate - self._get_tables()
+        return sorted(missing | (self._get_placeholder_tables() & tables_to_replicate))
 
-    def _get_unreplicated_models(self, state):
+    def _create_placeholder_tables(self, branch_connection, state):
         """
-        Return the (app_label, model_name) of each model in the branch's migration state whose table the branch
-        schema lacks.
+        Create an empty table, as of the branch's migration ``state``, for each model whose table the branch
+        schema lacks. _replicate_tables() fills it with main's rows once the branch has been migrated. (#683)
         """
-        tables = self._get_tables()
-        return frozenset(
-            (model._meta.app_label, model._meta.model_name)
-            for model in state.apps.get_models()
-            if model._meta.db_table not in tables
-        )
+        logger = logging.getLogger('netbox_branching.branch.migrate')
+        absent = set(get_tables_to_replicate()) - self._get_tables()
+        models = [model for model in state.apps.get_models() if model._meta.db_table in absent]
+        if not models:
+            return
+
+        with branch_connection.schema_editor() as schema_editor:
+            for model in models:
+                logger.info(f'Creating placeholder table {self.schema_name}.{model._meta.db_table}')
+                # Also creates the model's M2M through tables
+                schema_editor.create_model(model)
+                tables = [
+                    model._meta.db_table,
+                    *(field.remote_field.through._meta.db_table for field in model._meta.local_many_to_many),
+                ]
+                for table in absent.intersection(tables):
+                    schema_editor.execute(
+                        f'COMMENT ON TABLE {quote_ident(self.schema_name)}.{quote_ident(table)} '
+                        f"IS '{PLACEHOLDER_TABLE_COMMENT}'"
+                    )
 
     def _replicate_tables(self, tables, main_schema):
         """
-        Copy the given tables, which the branch schema lacks, from main as provision() does.
+        Fill the given tables, which the branch schema lacks or holds only as placeholders, with main's rows as
+        provision() does. A table stays marked as a placeholder until it's complete, so a retry after the job is
+        interrupted picks up where it left off.
         """
         logger = logging.getLogger('netbox_branching.branch.migrate')
         if not tables:
@@ -1190,23 +1221,53 @@ class Branch(JobsMixin, PrimaryModel):
             f"main's current rows, not those as of the branch's creation."
         )
 
+        absent = set(tables) - self._get_tables()
         try:
             with connection.cursor() as cursor:
                 cursor.execute('BEGIN')
-                create_empty_tables(cursor, schema, main_schema, tables)
+                create_empty_tables(cursor, schema, main_schema, sorted(absent))
+                for table in tables:
+                    self._reset_placeholder_table(cursor, table)
                 cursor.execute('COMMIT')
+
             self._populate_tables(tables, main_schema, workers, logger)
+
+            with connection.cursor() as cursor:
+                cursor.execute('BEGIN')
+                for table in tables:
+                    table_ref = f'{quote_ident(schema)}.{quote_ident(table)}'
+                    cursor.execute(f'ALTER TABLE {table_ref} ENABLE TRIGGER USER')
+                    # Replace the placeholder mark with main's comment, if any
+                    cursor.execute(
+                        "SELECT quote_nullable(obj_description(%s::regclass, 'pg_class'))",
+                        [f'{quote_ident(main_schema)}.{quote_ident(table)}'],
+                    )
+                    cursor.execute(f'COMMENT ON TABLE {table_ref} IS {cursor.fetchone()[0]}')
+                cursor.execute('COMMIT')
         except Exception:
-            # Drop the partial copies, or a retry would skip them as already present. Reconnect first in case
-            # the failure left the connection aborted or closed.
-            try:
-                connection.close()
-                with connection.cursor() as cursor:
-                    for table in tables:
-                        cursor.execute(f'DROP TABLE IF EXISTS {quote_ident(schema)}.{quote_ident(table)}')
-            except Exception:
-                logger.exception(f'Failed to drop partial copies of {", ".join(tables)} from {schema}')
+            # The failure may have left the connection in an aborted transaction
+            connection.close()
             raise
+
+    def _reset_placeholder_table(self, cursor, table):
+        """
+        Mark a table as a placeholder and make it like the empty copies create_empty_tables() makes, for main's
+        rows: no rows, no foreign keys, and ids from main's sequence (set by the copy). Its triggers are disabled
+        until the copy is complete.
+        """
+        table_ref = f'{quote_ident(self.schema_name)}.{quote_ident(table)}'
+        cursor.execute(f"COMMENT ON TABLE {table_ref} IS '{PLACEHOLDER_TABLE_COMMENT}'")
+        cursor.execute(
+            "SELECT attname FROM pg_attribute WHERE attrelid = %s::regclass AND attidentity <> '' AND NOT attisdropped",
+            [table_ref],
+        )
+        for (column,) in cursor.fetchall():
+            cursor.execute(f'ALTER TABLE {table_ref} ALTER COLUMN {quote_ident(column)} DROP IDENTITY')
+        cursor.execute("SELECT conname FROM pg_constraint WHERE conrelid = %s::regclass AND contype = 'f'", [table_ref])
+        for (constraint,) in cursor.fetchall():
+            cursor.execute(f'ALTER TABLE {table_ref} DROP CONSTRAINT {quote_ident(constraint)}')
+        cursor.execute(f'ALTER TABLE {table_ref} DISABLE TRIGGER USER')
+        cursor.execute(f'DELETE FROM {table_ref}')
 
     def merge(self, user, commit=True):
         """
@@ -1527,19 +1588,23 @@ class Branch(JobsMixin, PrimaryModel):
         triggers of those tables and ``extra_tables``, and ANALYZE them.
         """
         schema = self.schema_name
+        relevant_tables = {*tables, *extra_tables}
         with connection.cursor() as cursor:
             # Prefetch every index definition on main in one query — the per-table
             # entries drive the post-data-load index build.
-            main_indexes_by_table = build_main_index_map(cursor, main_schema)
+            main_indexes_by_table = build_main_index_map(cursor, main_schema, relevant_tables)
             # Same for PRIMARY KEY / UNIQUE / EXCLUDE constraints. We replay
             # these via ALTER TABLE ADD CONSTRAINT so the branch schema's
             # pg_constraint mirrors main's — necessary for later migrations
             # that drop or alter constraints by name.
-            main_constraints_by_table = build_main_constraint_map(cursor, main_schema)
+            main_constraints_by_table = build_main_constraint_map(cursor, main_schema, relevant_tables)
             # On-disk size per table, used to dispatch the heaviest tables first in
             # each parallel phase so a single large table can't be picked up last and
             # left running alone while every other worker sits idle.
-            main_table_sizes = build_main_table_sizes(cursor, main_schema)
+            main_table_sizes = build_main_table_sizes(cursor, main_schema, relevant_tables)
+            # Those the branch's tables already have, e.g. placeholders created by migrate() (#683)
+            branch_indexes_by_table = build_main_index_map(cursor, schema, relevant_tables)
+            branch_constraints_by_table = build_main_constraint_map(cursor, schema, relevant_tables)
 
         # Order parallel work heaviest-table-first (longest-processing-time
         # scheduling) so a single large table can't be dispatched last and left
@@ -1590,22 +1655,33 @@ class Branch(JobsMixin, PrimaryModel):
         # ALTER TABLE ADD CONSTRAINT — each one builds its backing index
         # implicitly under the constraint's name, so we exclude those
         # index names from the plain CREATE INDEX pass to avoid duplicates.
-        relevant_tables = {*tables, *extra_tables}
-
         sorted_relevant = by_size_desc(relevant_tables)
+
+        def index_key(indexdef):
+            # An index's definition without its name and schema
+            return indexdef.startswith('CREATE UNIQUE '), indexdef.partition(' USING ')[2]
+
+        branch_index_names = {name for indexes in branch_indexes_by_table.values() for name, _ in indexes}
 
         constraint_tasks = []
         constraint_backed_indexes = set()
         index_tasks = []
         # Build both task lists heaviest-table-first so the constraint and index
-        # phases drain their largest work early rather than tailing on it.
+        # phases drain their largest work early rather than tailing on it. Skip
+        # any the branch's table already has, by name or definition.
         for table_name in sorted_relevant:
+            branch_constraints = branch_constraints_by_table.get(table_name, ())
+            branch_constraint_names = {conname for conname, _, _ in branch_constraints}
+            branch_condefs = {condef for _, condef, _ in branch_constraints}
             for conname, condef, backing_indexname in main_constraints_by_table.get(table_name, ()):
-                constraint_tasks.append((table_name, conname, condef))
                 if backing_indexname:
                     constraint_backed_indexes.add(backing_indexname)
+                if conname not in branch_constraint_names and condef not in branch_condefs:
+                    constraint_tasks.append((table_name, conname, condef))
+            branch_index_keys = {index_key(indexdef) for _, indexdef in branch_indexes_by_table.get(table_name, ())}
             for indexname, indexdef in main_indexes_by_table.get(table_name, ()):
-                index_tasks.append((table_name, indexname, indexdef))
+                if indexname not in branch_index_names and index_key(indexdef) not in branch_index_keys:
+                    index_tasks.append((table_name, indexname, indexdef))
 
         parallel_add_constraints(
             constraint_tasks=constraint_tasks,
@@ -1703,6 +1779,7 @@ class Branch(JobsMixin, PrimaryModel):
                 # function names (both live in the main schema). Emitting them
                 # qualified would rebind the recreated trigger to the main table.
                 cursor.execute(f'SET LOCAL search_path = {quote_ident(main_schema)}')
+                # Skip any the branch's table already has, e.g. a placeholder created by migrate() (#683)
                 cursor.execute(
                     """
                     SELECT c.relname, pg_get_triggerdef(t.oid, true)
@@ -1712,8 +1789,15 @@ class Branch(JobsMixin, PrimaryModel):
                     WHERE n.nspname = %s
                       AND NOT t.tgisinternal
                       AND c.relname = ANY(%s)
+                      AND NOT EXISTS (
+                        SELECT 1
+                        FROM pg_trigger bt
+                        JOIN pg_class bc ON bt.tgrelid = bc.oid
+                        JOIN pg_namespace bn ON bc.relnamespace = bn.oid
+                        WHERE bn.nspname = %s AND bc.relname = c.relname AND bt.tgname = t.tgname
+                      )
                     """,
-                    [main_schema, list(tables)],
+                    [main_schema, list(tables), schema],
                 )
                 triggerdefs = cursor.fetchall()
 

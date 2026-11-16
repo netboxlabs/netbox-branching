@@ -562,6 +562,7 @@ class BranchMigrateView(generic.ObjectView):
                 'branch': branch,
                 'form': form,
                 'action_permitted': action_permitted,
+                'missing_tables': branch.get_missing_tables(),
             },
         )
 
@@ -585,6 +586,7 @@ class BranchMigrateView(generic.ObjectView):
                 'branch': branch,
                 'form': form,
                 'action_permitted': action_permitted,
+                'missing_tables': branch.get_missing_tables(),
             },
         )
 

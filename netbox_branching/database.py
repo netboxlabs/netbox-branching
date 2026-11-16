@@ -1,11 +1,12 @@
 import warnings
 
+from django.apps import apps
 from django.db import DEFAULT_DB_ALIAS
 
 from netbox.registry import registry
 
-from .contextvars import active_branch, unreplicated_models
-from .utilities import supports_branching
+from .contextvars import active_branch
+from .utilities import _branching_resolvers, supports_branching
 
 __all__ = ('BranchAwareRouter',)
 
@@ -64,24 +65,27 @@ class BranchAwareRouter:
 
         # Disallow migrations for models which don't support branching
         if model_name:
-            # Or whose table the branch lacks; Branch.migrate() copies it from main afterward (#683)
-            if (app_label, model_name) in unreplicated_models.get():
-                return False
-
             # Permit migrations for the ObjectChange model
             if app_label == 'core' and model_name == 'objectchange':
                 return True
 
             from core.models import ObjectType
 
-            if (
-                not ObjectType.objects.using(DEFAULT_DB_ALIAS)
-                .filter(
-                    app_label=app_label,
-                    model=model_name,
-                    features__contains=['branching'],
-                )
-                .exists()
-            ):
+            if not ObjectType.objects.using(DEFAULT_DB_ALIAS).filter(
+                app_label=app_label,
+                model=model_name,
+                features__contains=['branching'],
+            ).exists() and not self._resolved_as_branchable(app_label, model_name):
                 return False
         return None
+
+    @staticmethod
+    def _resolved_as_branchable(app_label, model_name):
+        # A model a plugin's resolver makes branchable has no branching feature, but its table is replicated
+        if not _branching_resolvers:
+            return False
+        try:
+            model = apps.get_model(app_label, model_name)
+        except LookupError:
+            return False
+        return supports_branching(model)

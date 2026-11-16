@@ -18,8 +18,8 @@ from django.test import TestCase, override_settings
 from ipam.models import Prefix
 from netbox_branching import utilities
 from netbox_branching.choices import BranchStatusChoices
-from netbox_branching.contextvars import unreplicated_models
 from netbox_branching.database import BranchAwareRouter
+from netbox_branching.models import Branch
 from netbox_branching.signal_receivers import check_pending_migrations
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import (
@@ -359,7 +359,8 @@ class NewlyBranchableModelMigrateTestCase(FastTeardownTransactionTestCase):
             branch.refresh_from_db()
             self.assertEqual(branch.status, BranchStatusChoices.PENDING_MIGRATIONS)
             self.assertIn('auth.0010_alter_group_name_max_length', branch.applied_migrations)
-            self.assertFalse(_table_exists(branch.schema_name, Group._meta.db_table))
+            # The placeholder is left for the retry to fill
+            self.assertIn(Group._meta.db_table, branch.get_missing_tables())
 
             branch.migrate(user=None)
             branch.refresh_from_db()
@@ -409,14 +410,6 @@ class NewlyBranchableModelMigrateTestCase(FastTeardownTransactionTestCase):
             later_operations=[migrations.RemoveField('group', 'tmp')],
         )
 
-    def test_runsql_already_applied_on_main(self):
-        branch = provision_branch(user=None, name='Pre-resolver Branch')
-        self._leave_auth_migrations_pending(branch)
-
-        self._migrate_with_operations(
-            branch, [migrations.RunSQL('ALTER TABLE auth_group ADD CONSTRAINT auth_group_name_key UNIQUE (name)')]
-        )
-
     def test_explicit_fake_on_branch_respected(self):
         branch = provision_branch(user=None, name='Pre-resolver Branch')
         self._leave_auth_migrations_pending(branch)
@@ -437,16 +430,138 @@ class NewlyBranchableModelMigrateTestCase(FastTeardownTransactionTestCase):
         self.assertEqual(ran, [True])
 
 
-class UnreplicatedModelRouterTestCase(TestCase):
-    """The router skips schema operations on models whose table the branch being migrated lacks. (#683)"""
+class ResolverModelRouterTestCase(TestCase):
+    """The router permits migrations in a branch for a model a resolver makes branchable."""
 
     def test_allow_migrate(self):
         router = BranchAwareRouter()
         db = 'schema_branch_test'
+        with _isolated_resolvers():
+            self.assertFalse(router.allow_migrate(db, 'auth', model_name='group'))
+            register_branching_resolver(_group_resolver)
+            self.assertIsNone(router.allow_migrate(db, 'auth', model_name='group'))
+            self.assertFalse(router.allow_migrate(db, 'auth', model_name='permission'))
         self.assertIsNone(router.allow_migrate(db, 'dcim', model_name='site'))
-        token = unreplicated_models.set(frozenset({('dcim', 'site')}))
-        try:
-            self.assertFalse(router.allow_migrate(db, 'dcim', model_name='site'))
-            self.assertIsNone(router.allow_migrate(db, 'dcim', model_name='region'))
-        finally:
-            unreplicated_models.reset(token)
+
+
+def _group_and_permission_resolver(model):
+    return True if model._meta.label_lower in ('auth.group', 'auth.permission') else None
+
+
+def _permission_resolver(model):
+    return True if model._meta.label_lower == 'auth.permission' else None
+
+
+class NewlyBranchableModelLeakTestCase(FastTeardownTransactionTestCase):
+    """Migrating a branch never touches main's copy of a table the branch lacks. (#683)"""
+
+    serialized_rollback = True
+
+    def setUp(self):
+        super().setUp()
+        Group.objects.create(name='Group A')
+
+    def _provision(self):
+        branch = provision_branch(user=None, name='Pre-resolver Branch')
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'DELETE FROM "{branch.schema_name}".django_migrations WHERE app = %s AND name >= %s',
+                ['auth', '0010'],
+            )
+        return branch
+
+    def _migrate(self, branch, operations=(), later_operations=(), resolver=_group_label_resolver):
+        with (
+            _isolated_resolvers(),
+            patch.object(AUTH_0010, 'operations', [*AUTH_0010.operations, *operations]),
+            patch.object(AUTH_0011, 'operations', [*AUTH_0011.operations, *later_operations]),
+        ):
+            register_branching_resolver(resolver)
+            branch.migrate(user=None)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+    def _branch_group_names(self, branch):
+        with connection.cursor() as cursor:
+            cursor.execute(f'SELECT name FROM "{branch.schema_name}".auth_group ORDER BY name')
+            return [row[0] for row in cursor.fetchall()]
+
+    def test_data_only_migration_does_not_write_to_main(self):
+        branch = self._provision()
+
+        def rename_groups(apps, schema_editor):
+            apps.get_model('auth', 'Group').objects.update(name='Renamed')
+
+        # auth.0011 has no model operations, so it isn't faked
+        self._migrate(branch, later_operations=[migrations.RunPython(rename_groups)])
+        self.assertTrue(Group.objects.filter(name='Group A').exists())
+        self.assertEqual(self._branch_group_names(branch), ['Group A'])
+
+    def test_runsql_on_missing_table(self):
+        branch = self._provision()
+        self._migrate(
+            branch, later_operations=[migrations.RunSQL('CREATE INDEX auth_group_683_idx ON auth_group (name)')]
+        )
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT schemaname FROM pg_indexes WHERE indexname = 'auth_group_683_idx'")
+            self.assertEqual(cursor.fetchall(), [(branch.schema_name,)])
+
+    def test_migration_with_other_work_is_not_faked(self):
+        branch = self._provision()
+        ran = []
+        self._migrate(branch, [migrations.RunPython(lambda apps, schema_editor: ran.append(True))])
+        self.assertEqual(ran, [True])
+
+    def test_new_fk_references_branch_table(self):
+        with _isolated_resolvers():
+            register_branching_resolver(_permission_resolver)
+            branch = self._provision()
+
+        self._migrate(
+            branch,
+            [
+                migrations.AddField(
+                    'permission', 'grp', models.ForeignKey('auth.Group', null=True, on_delete=models.CASCADE)
+                )
+            ],
+            resolver=_group_and_permission_resolver,
+        )
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT ref_ns.nspname || '.' || ref.relname
+                FROM pg_constraint con
+                JOIN pg_class cls ON cls.oid = con.conrelid
+                JOIN pg_namespace ns ON ns.oid = cls.relnamespace
+                JOIN pg_class ref ON ref.oid = con.confrelid
+                JOIN pg_namespace ref_ns ON ref_ns.oid = ref.relnamespace
+                WHERE ns.nspname = %s AND cls.relname = 'auth_permission' AND ref.relname = 'auth_group'
+                """,
+                [branch.schema_name],
+            )
+            self.assertEqual(cursor.fetchall(), [(f'{branch.schema_name}.auth_group',)])
+
+    def test_copy_resumes_after_worker_killed(self):
+        branch = self._provision()
+
+        class WorkerKilled(BaseException):
+            pass
+
+        # A BaseException skips the except clauses, as a SIGKILL would
+        with (
+            patch('netbox_branching.models.branches.parallel_add_constraints', side_effect=WorkerKilled),
+            self.assertRaises(WorkerKilled),
+        ):
+            self._migrate(branch)
+
+        # As recovery after a killed worker leaves it
+        Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.PENDING_MIGRATIONS)
+        branch.refresh_from_db()
+        self._migrate(branch)
+        self.assertEqual(self._branch_group_names(branch), ['Group A'])
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT 1 FROM pg_constraint WHERE conrelid = %s::regclass AND contype = 'p'",
+                [f'"{branch.schema_name}".auth_group'],
+            )
+            self.assertIsNotNone(cursor.fetchone())

@@ -18,6 +18,7 @@ __all__ = (
     'EXEMPT_PATHS',
     'INCLUDE_MODELS',
     'PG_UNIQUE_VIOLATION',
+    'PLACEHOLDER_TABLE_COMMENT',
     'QUERY_PARAM',
     'SKIP_INDEXES',
 )
@@ -80,6 +81,9 @@ EXEMPT_MODELS = (
 # PostgreSQL error code for unique constraint violations, used in error_report.py
 # to detect and generate human-readable messages for duplicate-value merge failures.
 PG_UNIQUE_VIOLATION = '23505'
+
+# Marks a branch table which Branch.migrate() has yet to fill with main's rows
+PLACEHOLDER_TABLE_COMMENT = 'netbox_branching: awaiting rows from main'
 
 # Indexes to ignore as they are removed in a NetBox v4.3 migration, but might be present
 # in earlier NetBox releases.

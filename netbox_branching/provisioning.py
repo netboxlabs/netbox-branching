@@ -214,7 +214,7 @@ def create_empty_tables(cursor, schema, main_schema, tables):
         )
 
 
-def build_main_index_map(cursor, main_schema):
+def build_main_index_map(cursor, main_schema, tables):
     """
     Return ``{tablename: [(indexname, indexdef), ...]}`` for every index in the
     main schema. ``indexdef`` is PostgreSQL's reconstructed CREATE INDEX statement;
@@ -223,10 +223,11 @@ def build_main_index_map(cursor, main_schema):
     Args:
         cursor: A database cursor on the main connection.
         main_schema: Name of the schema whose indexes are read.
+        tables: Names of the tables whose indexes are read.
     """
     cursor.execute(
-        'SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = %s',
-        [main_schema],
+        'SELECT tablename, indexname, indexdef FROM pg_indexes WHERE schemaname = %s AND tablename = ANY(%s)',
+        [main_schema, list(tables)],
     )
     result = defaultdict(list)
     for tablename, indexname, indexdef in cursor.fetchall():
@@ -234,7 +235,7 @@ def build_main_index_map(cursor, main_schema):
     return result
 
 
-def build_main_table_sizes(cursor, main_schema):
+def build_main_table_sizes(cursor, main_schema, tables):
     """
     Return ``{tablename: size_in_bytes}`` for every ordinary table in the main schema.
 
@@ -247,6 +248,7 @@ def build_main_table_sizes(cursor, main_schema):
     Args:
         cursor: A database cursor on the main connection.
         main_schema: Name of the schema whose tables are measured.
+        tables: Names of the tables to measure.
     """
     cursor.execute(
         """
@@ -255,13 +257,14 @@ def build_main_table_sizes(cursor, main_schema):
         JOIN pg_namespace ns ON ns.oid = cls.relnamespace
         WHERE ns.nspname = %s
           AND cls.relkind = 'r'
+          AND cls.relname = ANY(%s)
         """,
-        [main_schema],
+        [main_schema, list(tables)],
     )
     return dict(cursor.fetchall())
 
 
-def build_main_constraint_map(cursor, main_schema):
+def build_main_constraint_map(cursor, main_schema, tables):
     """
     Return ``{tablename: [(conname, condef, backing_indexname), ...]}`` for every
     PRIMARY KEY, UNIQUE, and EXCLUDE constraint in the main schema. ``condef`` is
@@ -285,6 +288,7 @@ def build_main_constraint_map(cursor, main_schema):
     Args:
         cursor: A database cursor on the main connection.
         main_schema: Name of the schema whose constraints are read.
+        tables: Names of the tables whose constraints are read.
     """
     cursor.execute(
         """
@@ -299,8 +303,9 @@ def build_main_constraint_map(cursor, main_schema):
         LEFT JOIN pg_class idx ON idx.oid = con.conindid
         WHERE ns.nspname = %s
           AND con.contype IN ('p', 'u', 'x')
+          AND cls.relname = ANY(%s)
         """,
-        [main_schema],
+        [main_schema, list(tables)],
     )
     result = defaultdict(list)
     for tablename, conname, condef, backing_indexname in cursor.fetchall():

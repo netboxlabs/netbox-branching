@@ -263,13 +263,20 @@ def check_pending_migrations(sender, using, **kwargs):
     logger.info('Checking for branches with pending database migrations')
 
     open_branches = Branch.objects.filter(status=BranchStatusChoices.READY)
-    tables_to_replicate = get_tables_to_replicate() if open_branches else []
+    try:
+        tables_to_replicate = get_tables_to_replicate() if open_branches else []
+    except Exception:
+        # Still check for pending migrations
+        logger.exception('Failed to determine the tables to replicate; not checking branches for missing tables')
+        tables_to_replicate = None
     update_count = 0
     for branch in open_branches:
         try:
             # A branch lacking a table, e.g. of a model made branchable since it was provisioned, needs migrating
             # too: migrate() copies the table from main. (#683)
-            if branch.pending_migrations or branch.get_missing_tables(tables_to_replicate):
+            if branch.pending_migrations or (
+                tables_to_replicate is not None and branch.get_missing_tables(tables_to_replicate)
+            ):
                 branch.status = BranchStatusChoices.PENDING_MIGRATIONS
                 update_count += 1
         except Exception:
