@@ -1186,18 +1186,26 @@ class Branch(JobsMixin, PrimaryModel):
         """
         logger = logging.getLogger('netbox_branching.branch.migrate')
         absent = set(get_tables_to_replicate()) - self._get_tables()
-        models = [model for model in state.apps.get_models() if model._meta.db_table in absent]
+        models = [
+            model
+            for model in state.apps.get_models()
+            if model._meta.db_table in absent and model._meta.managed and not model._meta.proxy
+        ]
         if not models:
             return
 
         with branch_connection.schema_editor() as schema_editor:
             for model in models:
                 logger.info(f'Creating placeholder table {self.schema_name}.{model._meta.db_table}')
-                # Also creates the model's M2M through tables
+                # Also creates the model's auto-created M2M through tables
                 schema_editor.create_model(model)
                 tables = [
                     model._meta.db_table,
-                    *(field.remote_field.through._meta.db_table for field in model._meta.local_many_to_many),
+                    *(
+                        field.remote_field.through._meta.db_table
+                        for field in model._meta.local_many_to_many
+                        if field.remote_field.through._meta.auto_created
+                    ),
                 ]
                 for table in absent.intersection(tables):
                     schema_editor.execute(
