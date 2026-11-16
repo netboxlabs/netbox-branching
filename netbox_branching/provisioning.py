@@ -22,6 +22,7 @@ __all__ = (
     'build_main_constraint_map',
     'build_main_index_map',
     'build_main_table_sizes',
+    'create_empty_tables',
     'parallel_add_constraints',
     'parallel_analyze_tables',
     'parallel_build_indexes',
@@ -196,6 +197,21 @@ def _run_pool(tasks, label, workers):
 
     if errors:
         raise errors[0]
+
+
+def create_empty_tables(cursor, schema, main_schema, tables):
+    """
+    Create empty copies of main's ``tables`` in ``schema``, without indexes or constraints.
+
+    Indexes are built after the data is loaded, which is far cheaper than maintaining them row-by-row during
+    INSERT. INCLUDING GENERATED keeps generated columns computed rather than copied as plain columns.
+    """
+    for table in tables:
+        logger.debug(f'Creating table {schema}.{table}')
+        cursor.execute(
+            f'CREATE TABLE {quote_ident(schema)}.{quote_ident(table)} '
+            f'( LIKE {quote_ident(main_schema)}.{quote_ident(table)} INCLUDING GENERATED )'
+        )
 
 
 def build_main_index_map(cursor, main_schema):

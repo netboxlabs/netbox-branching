@@ -6,6 +6,7 @@ each test snapshots and restores it so registrations don't leak between
 tests.
 """
 
+import importlib
 from contextlib import contextmanager
 from unittest.mock import patch
 
@@ -17,7 +18,7 @@ from django.test import TestCase, override_settings
 from ipam.models import Prefix
 from netbox_branching import utilities
 from netbox_branching.choices import BranchStatusChoices
-from netbox_branching.models.branches import _skip_unreplicated_operations
+from netbox_branching.models.branches import _alters_only_unreplicated_models, _skip_unreplicated_operations
 from netbox_branching.signal_receivers import check_pending_migrations
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import (
@@ -270,6 +271,15 @@ class ResolverModelBranchTestCase(FastTeardownTransactionTestCase):
         self.assertFalse(GroupPermissions.objects.filter(group__name='Group A').exists())
 
 
+def _group_label_resolver(model):
+    # Match by label so that the historical models of data migrations resolve too
+    return True if model._meta.label_lower == 'auth.group' else None
+
+
+AUTH_0010 = importlib.import_module('django.contrib.auth.migrations.0010_alter_group_name_max_length').Migration
+AUTH_0011 = importlib.import_module('django.contrib.auth.migrations.0011_update_proxy_permissions').Migration
+
+
 def _table_exists(schema, table):
     with connection.cursor() as cursor:
         cursor.execute(
@@ -301,12 +311,7 @@ class NewlyBranchableModelMigrateTestCase(FastTeardownTransactionTestCase):
 
         with _isolated_resolvers():
             register_branching_resolver(_group_resolver)
-            with patch(
-                'netbox_branching.models.branches._skip_unreplicated_operations', wraps=_skip_unreplicated_operations
-            ) as skip:
-                branch.migrate(user=None)
-            # Main has already applied the migration to the table the branch copied
-            self.assertIn(('auth', 'group'), skip.call_args.args[1])
+            branch.migrate(user=None)
 
             branch.refresh_from_db()
             self.assertEqual(branch.status, BranchStatusChoices.READY)
@@ -360,6 +365,57 @@ class NewlyBranchableModelMigrateTestCase(FastTeardownTransactionTestCase):
             self.assertEqual(branch.status, BranchStatusChoices.READY)
             self.assertTrue(_table_exists(branch.schema_name, Group._meta.db_table))
 
+    def _migrate_with_operations(self, branch, operations, later_operations=()):
+        # Append operations to auth.0010 (and auth.0011), which main has already applied
+        with (
+            _isolated_resolvers(),
+            patch.object(AUTH_0010, 'operations', [*AUTH_0010.operations, *operations]),
+            patch.object(AUTH_0011, 'operations', [*AUTH_0011.operations, *later_operations]),
+        ):
+            register_branching_resolver(_group_label_resolver)
+            branch.migrate(user=None)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+
+    def test_data_migration_not_rerun_on_copy(self):
+        Group.objects.create(name='Group A')
+        branch = provision_branch(user=None, name='Pre-resolver Branch')
+        self._leave_auth_migrations_pending(branch)
+
+        def rename_groups(apps, schema_editor):
+            for group in apps.get_model('auth', 'Group').objects.all():
+                group.name += ' (migrated)'
+                group.save()
+
+        self._migrate_with_operations(branch, [migrations.RunPython(rename_groups)])
+        # The copy already holds main's migrated rows
+        with connection.cursor() as cursor:
+            cursor.execute(f'SELECT name FROM "{branch.schema_name}".auth_group')
+            self.assertEqual(cursor.fetchall(), [('Group A',)])
+        self.assertTrue(Group.objects.filter(name='Group A').exists())
+
+    def test_data_migration_on_column_main_has_removed(self):
+        Group.objects.create(name='Group A')
+        branch = provision_branch(user=None, name='Pre-resolver Branch')
+        self._leave_auth_migrations_pending(branch)
+
+        def read_groups(apps, schema_editor):
+            list(apps.get_model('auth', 'Group').objects.all())
+
+        self._migrate_with_operations(
+            branch,
+            [migrations.AddField('group', 'tmp', models.IntegerField(null=True)), migrations.RunPython(read_groups)],
+            later_operations=[migrations.RemoveField('group', 'tmp')],
+        )
+
+    def test_runsql_already_applied_on_main(self):
+        branch = provision_branch(user=None, name='Pre-resolver Branch')
+        self._leave_auth_migrations_pending(branch)
+
+        self._migrate_with_operations(
+            branch, [migrations.RunSQL('ALTER TABLE auth_group ADD CONSTRAINT auth_group_name_key UNIQUE (name)')]
+        )
+
 
 class SkipUnreplicatedOperationsTestCase(TestCase):
     """Operations on branchable models whose table the branch lacks are skipped. (#683)"""
@@ -368,6 +424,21 @@ class SkipUnreplicatedOperationsTestCase(TestCase):
         migration = migrations.Migration('9999_test', app_label)
         migration.operations = operations
         return migration
+
+    def test_alters_only_unreplicated_models(self):
+        add_field = migrations.AddField('site', 'foo', models.IntegerField(null=True))
+        add_index = migrations.AddIndex('region', models.Index(fields=['name'], name='test_idx'))
+        run_python = migrations.RunPython(migrations.RunPython.noop)
+        separate = migrations.SeparateDatabaseAndState(database_operations=[add_field])
+
+        def alters_only(app_label, operations):
+            return _alters_only_unreplicated_models(self._migration(app_label, operations), {('dcim', 'site')})
+
+        self.assertTrue(alters_only('dcim', [add_field, run_python]))
+        self.assertTrue(alters_only('dcim', [separate]))
+        self.assertFalse(alters_only('dcim', [add_field, add_index]))
+        self.assertFalse(alters_only('dcim', [run_python]))
+        self.assertFalse(alters_only('ipam', [add_field]))
 
     def test_unreplicated_operations_only_update_state(self):
         add_field = migrations.AddField('site', 'foo', models.IntegerField(null=True))
