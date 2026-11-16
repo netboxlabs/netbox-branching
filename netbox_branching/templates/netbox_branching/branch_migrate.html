@@ -24,7 +24,8 @@
        id="action-form"
        role="tabpanel"
        aria-labelledby="action-form-tab">
-    {% if branch.pending_migrations %}
+    {% with missing_tables=branch.get_missing_tables %}
+    {% if branch.pending_migrations or missing_tables %}
       <form action="" method="post" enctype="multipart/form-data">
         {% csrf_token %}
         <div class="card">
@@ -40,6 +41,12 @@
             <ul class="font-monospace text-muted">
               {% for app_label, name in branch.pending_migrations %}<li>{{ app_label }}.{{ name }}</li>{% endfor %}
             </ul>
+            {% if missing_tables %}
+              <p>{% trans "The following tables, which the branch lacks, will be copied from main:" %}</p>
+              <ul class="font-monospace text-muted">
+                {% for table in missing_tables %}<li>{{ table }}</li>{% endfor %}
+              </ul>
+            {% endif %}
             {% render_field form.confirm %}
           </div>
           <div class="card-footer text-end">
@@ -52,6 +59,7 @@
     {% else %}
       <p>{% trans "No pending migrations found." %}</p>
     {% endif %}
+    {% endwith %}
   </div>
   {# /Form tab #}
 {% endblock content %}

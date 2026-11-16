@@ -89,7 +89,7 @@
       </div>
     {% endif %}
   {% endwith %}
-  {% if object.pending_migrations %}
+  {% if object.pending_migrations or object.status == 'pending-migrations' %}
     <div class="alert alert-warning d-flex justify-content-between align-items-center"
          role="alert">
       <i class="mdi mdi-alert fs-1 text-warning"></i>

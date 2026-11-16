@@ -18,7 +18,8 @@ from django.test import TestCase, override_settings
 from ipam.models import Prefix
 from netbox_branching import utilities
 from netbox_branching.choices import BranchStatusChoices
-from netbox_branching.models.branches import _alters_only_unreplicated_models, _skip_unreplicated_operations
+from netbox_branching.contextvars import unreplicated_models
+from netbox_branching.database import BranchAwareRouter
 from netbox_branching.signal_receivers import check_pending_migrations
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import (
@@ -357,7 +358,7 @@ class NewlyBranchableModelMigrateTestCase(FastTeardownTransactionTestCase):
 
             branch.refresh_from_db()
             self.assertEqual(branch.status, BranchStatusChoices.PENDING_MIGRATIONS)
-            self.assertNotIn('auth.0010_alter_group_name_max_length', branch.applied_migrations)
+            self.assertIn('auth.0010_alter_group_name_max_length', branch.applied_migrations)
             self.assertFalse(_table_exists(branch.schema_name, Group._meta.db_table))
 
             branch.migrate(user=None)
@@ -416,51 +417,36 @@ class NewlyBranchableModelMigrateTestCase(FastTeardownTransactionTestCase):
             branch, [migrations.RunSQL('ALTER TABLE auth_group ADD CONSTRAINT auth_group_name_key UNIQUE (name)')]
         )
 
+    def test_explicit_fake_on_branch_respected(self):
+        branch = provision_branch(user=None, name='Pre-resolver Branch')
+        self._leave_auth_migrations_pending(branch)
+        ran = []
 
-class SkipUnreplicatedOperationsTestCase(TestCase):
-    """Operations on branchable models whose table the branch lacks are skipped. (#683)"""
+        module = importlib.import_module(AUTH_0010.__module__)
+        import_module = importlib.import_module
 
-    def _migration(self, app_label, operations):
-        migration = migrations.Migration('9999_test', app_label)
-        migration.operations = operations
-        return migration
+        def import_auth_migration(name, *args, **kwargs):
+            # _fake_for_branch looks the module up by app label
+            return module if name == 'auth.migrations.0010_alter_group_name_max_length' else import_module(name)
 
-    def test_alters_only_unreplicated_models(self):
-        add_field = migrations.AddField('site', 'foo', models.IntegerField(null=True))
-        add_index = migrations.AddIndex('region', models.Index(fields=['name'], name='test_idx'))
-        run_python = migrations.RunPython(migrations.RunPython.noop)
-        separate = migrations.SeparateDatabaseAndState(database_operations=[add_field])
+        with (
+            patch.object(module, 'fake_on_branch', False, create=True),
+            patch('netbox_branching.models.branches.importlib.import_module', import_auth_migration),
+        ):
+            self._migrate_with_operations(branch, [migrations.RunPython(lambda apps, schema_editor: ran.append(True))])
+        self.assertEqual(ran, [True])
 
-        def alters_only(app_label, operations):
-            return _alters_only_unreplicated_models(self._migration(app_label, operations), {('dcim', 'site')})
 
-        self.assertTrue(alters_only('dcim', [add_field, run_python]))
-        self.assertTrue(alters_only('dcim', [separate]))
-        self.assertFalse(alters_only('dcim', [add_field, add_index]))
-        self.assertFalse(alters_only('dcim', [run_python]))
-        self.assertFalse(alters_only('ipam', [add_field]))
+class UnreplicatedModelRouterTestCase(TestCase):
+    """The router skips schema operations on models whose table the branch being migrated lacks. (#683)"""
 
-    def test_unreplicated_operations_only_update_state(self):
-        add_field = migrations.AddField('site', 'foo', models.IntegerField(null=True))
-        add_index = migrations.AddIndex('region', models.Index(fields=['name'], name='test_idx'))
-        migration = self._migration('dcim', [add_field, add_index])
-
-        skipped = _skip_unreplicated_operations(migration, frozenset({('dcim', 'site')}))
-        self.assertIsInstance(skipped.operations[0], migrations.SeparateDatabaseAndState)
-        self.assertEqual(skipped.operations[0].state_operations, [add_field])
-        self.assertEqual(skipped.operations[0].database_operations, [])
-        self.assertIs(skipped.operations[1], add_index)
-        # The loaded migration is left untouched
-        self.assertEqual(migration.operations, [add_field, add_index])
-        self.assertIs(_skip_unreplicated_operations(migration, frozenset()), migration)
-
-    def test_nested_database_operations_skipped(self):
-        add_field = migrations.AddField('site', 'foo', models.IntegerField(null=True))
-        add_index = migrations.AddIndex('region', models.Index(fields=['name'], name='test_idx'))
-        separate = migrations.SeparateDatabaseAndState(database_operations=[add_field, add_index])
-        migration = self._migration('dcim', [separate])
-
-        skipped = _skip_unreplicated_operations(migration, frozenset({('dcim', 'site')}))
-        self.assertEqual(skipped.operations[0].database_operations, [add_index])
-        self.assertEqual(skipped.operations[0].state_operations, [])
-        self.assertEqual(separate.database_operations, [add_field, add_index])
+    def test_allow_migrate(self):
+        router = BranchAwareRouter()
+        db = 'schema_branch_test'
+        self.assertIsNone(router.allow_migrate(db, 'dcim', model_name='site'))
+        token = unreplicated_models.set(frozenset({('dcim', 'site')}))
+        try:
+            self.assertFalse(router.allow_migrate(db, 'dcim', model_name='site'))
+            self.assertIsNone(router.allow_migrate(db, 'dcim', model_name='region'))
+        finally:
+            unreplicated_models.reset(token)

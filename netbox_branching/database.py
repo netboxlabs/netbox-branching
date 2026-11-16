@@ -4,7 +4,7 @@ from django.db import DEFAULT_DB_ALIAS
 
 from netbox.registry import registry
 
-from .contextvars import active_branch
+from .contextvars import active_branch, unreplicated_models
 from .utilities import supports_branching
 
 __all__ = ('BranchAwareRouter',)
@@ -64,6 +64,10 @@ class BranchAwareRouter:
 
         # Disallow migrations for models which don't support branching
         if model_name:
+            # Or whose table the branch lacks; Branch.migrate() copies it from main afterward (#683)
+            if (app_label, model_name) in unreplicated_models.get():
+                return False
+
             # Permit migrations for the ObjectChange model
             if app_label == 'core' and model_name == 'objectchange':
                 return True
