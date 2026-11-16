@@ -1,3 +1,4 @@
+import copy
 import importlib
 import logging
 import math
@@ -17,6 +18,7 @@ from django.contrib.postgres.fields import ArrayField
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, connection, connections, models, transaction
 from django.db.migrations.executor import MigrationExecutor
+from django.db.migrations.operations.models import ModelOperation
 from django.db.migrations.operations.special import RunSQL, SeparateDatabaseAndState
 from django.db.models.signals import post_save, pre_delete
 from django.db.utils import DatabaseError, ProgrammingError
@@ -135,7 +137,7 @@ def _branch_isolated_runsql(branch_schema, main_schema):
         RunSQL.database_forwards = original
 
 
-def _fake_for_branch(migration):
+def _fake_for_branch(migration, unreplicated_models=frozenset()):
     """
     Return True if a migration should be faked when applied to a branch schema, False otherwise.
 
@@ -143,7 +145,8 @@ def _fake_for_branch(migration):
     1. If the migration module sets a ``fake_on_branch`` attribute, that value is respected
        directly: ``True`` forces faking, ``False`` forces the migration to run.
     2. Otherwise, fall back to a heuristic: fake migrations whose model-specific operations
-       affect only non-branchable models. This prevents RunSQL operations from inadvertently
+       affect only non-branchable models, or models in ``unreplicated_models`` (branchable models
+       whose table the branch schema lacks). This prevents RunSQL operations from inadvertently
        acting on the main (public) schema via the search_path.
 
     Migrations with no model-specific operations (e.g. pure RunSQL or RunPython) are not faked
@@ -181,9 +184,40 @@ def _fake_for_branch(migration):
             # conservatively treat it as branchable and don't fake.
             logger.warning(f'Could not resolve model {migration.app_label}.{model_name}; not faking {migration}')
             return False
-        if supports_branching(model):
+        if supports_branching(model) and (migration.app_label, model._meta.model_name) not in unreplicated_models:
             return False
     return has_model_operations
+
+
+def _operation_model_name(operation):
+    """
+    Return the lowercased name of the model whose table a migration operation alters, or None.
+    """
+    if (model_name := getattr(operation, 'model_name_lower', None)) is not None:
+        return model_name
+    if isinstance(operation, ModelOperation):
+        return operation.name_lower
+    return None
+
+
+def _skip_unreplicated_operations(migration, unreplicated_models):
+    """
+    Return a copy of the migration whose operations on ``unreplicated_models`` only update the migration
+    state. Their tables exist only in main, which has already applied the migration. (#683)
+    """
+    if not any(
+        (migration.app_label, _operation_model_name(operation)) in unreplicated_models
+        for operation in migration.operations
+    ):
+        return migration
+    migration = copy.copy(migration)
+    migration.operations = [
+        SeparateDatabaseAndState(state_operations=[operation])
+        if (migration.app_label, _operation_model_name(operation)) in unreplicated_models
+        else operation
+        for operation in migration.operations
+    ]
+    return migration
 
 
 class Branch(JobsMixin, PrimaryModel):
@@ -1073,8 +1107,8 @@ class Branch(JobsMixin, PrimaryModel):
         executor = MigrationExecutor(connection, progress_callback=migration_progress_callback)
         targets = executor.loader.graph.leaf_nodes()
         main_schema = get_plugin_config('netbox_branching', 'main_schema')
-        if plan := executor.migration_plan(targets):
-            try:
+        try:
+            if plan := executor.migration_plan(targets):
                 # Activate the branch so that any ORM queries inside data migrations
                 # (RunPython) route to the branch schema rather than main. Without this,
                 # historical-model queries fall through the BranchAwareRouter to the default
@@ -1090,27 +1124,35 @@ class Branch(JobsMixin, PrimaryModel):
                     # the current ProjectState from all applied migrations, which apply_migration
                     # requires as its starting point. There is no public equivalent as of Django 5.x.
                     state = executor._create_project_state(with_applied_migrations=True)
+                    unreplicated_models = self._get_unreplicated_models(state)
                     for migration, _ in full_plan:
                         if not migrations_to_run:
                             break
                         if migration in migrations_to_run:
-                            fake = _fake_for_branch(migration)
-                            state = executor.apply_migration(state, migration, fake=fake)
-                            if fake:
+                            if _fake_for_branch(migration, unreplicated_models):
+                                state = executor.apply_migration(state, migration, fake=True)
                                 # apply_migration() doesn't advance the state when faking, leaving
                                 # later data migrations with stale historical models. (#617)
                                 state = migration.mutate_state(state, preserve=False)
+                            else:
+                                state = executor.apply_migration(
+                                    state, _skip_unreplicated_operations(migration, unreplicated_models), fake=False
+                                )
                             migrations_to_run.remove(migration)
-            except Exception as e:
-                if err_message := str(e):
-                    logger.error(err_message)
-                # Mark the branch as failed so it cannot be activated in a partially-migrated
-                # state. Migrations already applied have been persisted by the progress callback.
-                Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
-                self.status = BranchStatusChoices.FAILED
-                raise
-        else:
-            logger.info('Found no migrations to apply')
+            else:
+                logger.info('Found no migrations to apply')
+
+            # Give the branch its own copy of any table it lacks, e.g. for a model made branchable after the
+            # branch was provisioned. (#683)
+            self._replicate_missing_tables(main_schema)
+        except Exception as e:
+            if err_message := str(e):
+                logger.error(err_message)
+            # Mark the branch as failed so it cannot be activated in a partially-migrated
+            # state. Migrations already applied have been persisted by the progress callback.
+            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.FAILED)
+            self.status = BranchStatusChoices.FAILED
+            raise
 
         # Reset Branch status to ready
         logger.debug(f'Setting branch status to {BranchStatusChoices.READY}')
@@ -1127,6 +1169,107 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info('Migration completed')
 
     migrate.alters_data = True
+
+    def _get_missing_tables(self):
+        """
+        Return the tables to replicate which the branch schema lacks.
+        """
+        with connection.cursor() as cursor:
+            cursor.execute(
+                'SELECT table_name FROM information_schema.tables WHERE table_schema = %s', [self.schema_name]
+            )
+            branch_tables = {row[0] for row in cursor.fetchall()}
+        return sorted(set(get_tables_to_replicate()) - branch_tables)
+
+    def _get_unreplicated_models(self, state):
+        """
+        Return the (app_label, model_name) of each model in the migration state which is branchable but whose
+        table the branch schema lacks, e.g. because the model became branchable after the branch was provisioned.
+        """
+        missing_tables = set(self._get_missing_tables())
+        unreplicated_models = set()
+        for app_label, model_name in state.models:
+            try:
+                model = apps.get_model(app_label, model_name)
+            except LookupError:
+                continue
+            if model._meta.db_table in missing_tables:
+                unreplicated_models.add((app_label, model_name))
+        return frozenset(unreplicated_models)
+
+    def _replicate_missing_tables(self, main_schema):
+        """
+        Copy from main every table to replicate which the branch schema lacks, as provision() does.
+        """
+        logger = logging.getLogger('netbox_branching.branch.migrate')
+        if not (tables := self._get_missing_tables()):
+            return
+        schema = self.schema_name
+        workers = get_plugin_config('netbox_branching', 'provision_workers') or 1
+        logger.warning(
+            f'Copying tables missing from branch schema {schema} from main: {", ".join(tables)}. They hold '
+            f"main's current rows, not those as of the branch's creation."
+        )
+
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute('BEGIN')
+                for table in tables:
+                    cursor.execute(
+                        f'CREATE TABLE {quote_ident(schema)}.{quote_ident(table)} '
+                        f'( LIKE {quote_ident(main_schema)}.{quote_ident(table)} INCLUDING GENERATED )'
+                    )
+                main_indexes_by_table = build_main_index_map(cursor, main_schema)
+                main_constraints_by_table = build_main_constraint_map(cursor, main_schema)
+                cursor.execute('COMMIT')
+
+            with connection.cursor() as cursor:
+                cursor.execute('BEGIN')
+                cursor.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+                cursor.execute('SELECT pg_export_snapshot()')
+                snapshot_token = cursor.fetchone()[0]
+                try:
+                    parallel_copy_tables(
+                        tables=tables,
+                        snapshot_token=snapshot_token,
+                        schema=schema,
+                        main_schema=main_schema,
+                        workers=workers,
+                    )
+                finally:
+                    cursor.execute('COMMIT')
+
+            constraint_tasks = []
+            constraint_backed_indexes = set()
+            index_tasks = []
+            for table in tables:
+                for conname, condef, backing_indexname in main_constraints_by_table.get(table, ()):
+                    constraint_tasks.append((table, conname, condef))
+                    if backing_indexname:
+                        constraint_backed_indexes.add(backing_indexname)
+                for indexname, indexdef in main_indexes_by_table.get(table, ()):
+                    index_tasks.append((table, indexname, indexdef))
+            parallel_add_constraints(constraint_tasks=constraint_tasks, schema=schema, workers=workers)
+            parallel_build_indexes(
+                index_tasks=index_tasks,
+                schema=schema,
+                main_schema=main_schema,
+                workers=workers,
+                skip_indexes={*SKIP_INDEXES, *constraint_backed_indexes},
+            )
+            self._replicate_triggers(schema, main_schema, tables)
+        except Exception:
+            # Drop the partial copies, or a retry would skip them as already present
+            if (
+                connection.connection is not None
+                and connection.connection.info.transaction_status != TransactionStatus.IDLE
+            ):
+                with connection.cursor() as cursor:
+                    cursor.execute('ROLLBACK')
+            with connection.cursor() as cursor:
+                for table in tables:
+                    cursor.execute(f'DROP TABLE IF EXISTS {quote_ident(schema)}.{quote_ident(table)}')
+            raise
 
     def merge(self, user, commit=True):
         """

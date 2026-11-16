@@ -9,11 +9,14 @@ tests.
 from contextlib import contextmanager
 
 from django.contrib.auth.models import Group, Permission
-from django.db import connection
+from django.db import IntegrityError, connection, migrations, models, transaction
 from django.test import TestCase, override_settings
 
+from dcim.models import Site
 from ipam.models import Prefix
 from netbox_branching import utilities
+from netbox_branching.choices import BranchStatusChoices
+from netbox_branching.models.branches import _fake_for_branch, _skip_unreplicated_operations
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import (
     activate_branch,
@@ -263,3 +266,81 @@ class ResolverModelBranchTestCase(FastTeardownTransactionTestCase):
         self.assertTrue(Group.objects.filter(name='Group A').exists())
         self.assertFalse(Group.objects.filter(name='Group B').exists())
         self.assertFalse(GroupPermissions.objects.filter(group__name='Group A').exists())
+
+
+def _table_exists(schema, table):
+    with connection.cursor() as cursor:
+        cursor.execute(
+            'SELECT 1 FROM information_schema.tables WHERE table_schema=%s AND table_name=%s',
+            [schema, table],
+        )
+        return cursor.fetchone() is not None
+
+
+class NewlyBranchableModelMigrateTestCase(FastTeardownTransactionTestCase):
+    """Migrating a branch provisioned before a model became branchable gives it its own copy of the table. (#683)"""
+
+    serialized_rollback = True
+
+    def test_migrate_replicates_table(self):
+        Group.objects.create(name='Group A')
+        branch = provision_branch(user=None, name='Pre-resolver Branch')
+        self.assertFalse(_table_exists(branch.schema_name, Group._meta.db_table))
+
+        # Leave auth.0010 (AlterField on Group.name) pending in the branch. Django plans nothing for an app whose
+        # leaf migration is applied, so the later ones must be pending too.
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f'DELETE FROM "{branch.schema_name}".django_migrations WHERE app = %s AND name >= %s',
+                ['auth', '0010'],
+            )
+
+        with _isolated_resolvers():
+            register_branching_resolver(_group_resolver)
+            with self.assertLogs('netbox_branching.branch.migrate', level='DEBUG') as logs:
+                branch.migrate(user=None)
+            # The migration must not run against main's table
+            self.assertIn('Faking migration auth.0010_alter_group_name_max_length', '\n'.join(logs.output))
+
+            branch.refresh_from_db()
+            self.assertEqual(branch.status, BranchStatusChoices.READY)
+            self.assertTrue(_table_exists(branch.schema_name, Group._meta.db_table))
+            self.assertTrue(_table_exists(branch.schema_name, GROUP_PERMISSIONS_TABLE))
+
+            with activate_branch(branch):
+                self.assertTrue(Group.objects.filter(name='Group A').exists())
+                Group.objects.create(name='Group B')
+                # Main's constraints were copied
+                with self.assertRaises(IntegrityError), transaction.atomic(using=branch.connection_name):
+                    Group.objects.create(name='Group A')
+
+        self.assertFalse(Group.objects.filter(name='Group B').exists())
+
+
+class SkipUnreplicatedOperationsTestCase(TestCase):
+    """Operations on branchable models whose table the branch lacks are skipped. (#683)"""
+
+    def _migration(self, app_label, operations):
+        migration = migrations.Migration('9999_test', app_label)
+        migration.operations = operations
+        return migration
+
+    def test_fake_when_only_unreplicated_models_affected(self):
+        migration = self._migration('dcim', [migrations.AddField('site', 'foo', models.IntegerField(null=True))])
+        self.assertTrue(supports_branching(Site))
+        self.assertFalse(_fake_for_branch(migration))
+        self.assertTrue(_fake_for_branch(migration, frozenset({('dcim', 'site')})))
+
+    def test_unreplicated_operations_only_update_state(self):
+        add_field = migrations.AddField('site', 'foo', models.IntegerField(null=True))
+        add_index = migrations.AddIndex('region', models.Index(fields=['name'], name='test_idx'))
+        migration = self._migration('dcim', [add_field, add_index])
+
+        skipped = _skip_unreplicated_operations(migration, frozenset({('dcim', 'site')}))
+        self.assertIsInstance(skipped.operations[0], migrations.SeparateDatabaseAndState)
+        self.assertEqual(skipped.operations[0].state_operations, [add_field])
+        self.assertEqual(skipped.operations[0].database_operations, [])
+        self.assertIs(skipped.operations[1], add_index)
+        # The loaded migration is left untouched
+        self.assertEqual(migration.operations, [add_field, add_index])
+        self.assertIs(_skip_unreplicated_operations(migration, frozenset()), migration)

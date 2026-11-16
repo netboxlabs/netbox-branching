@@ -310,4 +310,6 @@ Pure schema migrations (`AddField`, `AlterField`, etc.) on branchable models don
 
 If a plugin is installed or upgraded after branches have been created, the existing branch schemas will **not** automatically receive the new database migrations. Branches with outstanding migrations will be flagged with the **Pending Migrations** status and can be brought up to date using the **Migrate** action; until they are migrated, they cannot be activated or merged.
 
+If an upgrade makes an existing model branchable (for example, by changing it to a `ChangeLoggedModel`), branches created before the upgrade have no copy of its table. Migrating such a branch skips the schema operations on that model, since main has already applied them, and then copies the table from main. The copy holds main's rows as of the migration, not as of the branch's creation.
+
 The recommended practice is to install or upgrade plugins before creating branches, and to merge or remove all open branches before upgrading a plugin that modifies existing models.
