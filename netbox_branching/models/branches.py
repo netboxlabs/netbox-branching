@@ -35,14 +35,13 @@ from netbox.models import PrimaryModel
 from netbox.models.features import JobsMixin
 from netbox.plugins import get_plugin_config
 from netbox_branching.choices import BranchEventTypeChoices, BranchMergeStrategyChoices, BranchStatusChoices
-from netbox_branching.constants import BRANCH_ACTIONS, PLACEHOLDER_TABLE_COMMENT, SKIP_INDEXES
+from netbox_branching.constants import BRANCH_ACTIONS, SKIP_INDEXES
 from netbox_branching.contextvars import active_branch
 from netbox_branching.merge_strategies import get_merge_strategy
 from netbox_branching.provisioning import (
     build_main_constraint_map,
     build_main_index_map,
     build_main_table_sizes,
-    create_empty_tables,
     parallel_add_constraints,
     parallel_analyze_tables,
     parallel_build_indexes,
@@ -207,8 +206,6 @@ class Branch(JobsMixin, PrimaryModel):
         default=list,
     )
     last_sync = models.DateTimeField(blank=True, null=True, editable=False)
-    # {object type ID: time of main's latest change to it in a table migrate() copied from main} (#683)
-    copied_changes = models.JSONField(blank=True, default=dict, editable=False)
     merged_time = models.DateTimeField(verbose_name=_('merged time'), blank=True, null=True)
     merged_by = models.ForeignKey(
         to=get_user_model(), on_delete=models.SET_NULL, blank=True, null=True, related_name='+'
@@ -312,7 +309,6 @@ class Branch(JobsMixin, PrimaryModel):
     LIFECYCLE_FIELDS = (
         'status',
         'last_sync',
-        'copied_changes',
         'merged_time',
         'merged_by',
         'applied_migrations',
@@ -395,15 +391,11 @@ class Branch(JobsMixin, PrimaryModel):
         # upon provisioning. Defaults to the branch creation time.
         last_sync = self.last_sync or self.created
         if self.status == BranchStatusChoices.READY:
-            changes = (
+            return (
                 ObjectChange.objects.using(DEFAULT_DB_ALIAS)
                 .exclude(application__branch=self)
                 .filter(changed_object_type__in=get_branchable_object_types(), time__gt=last_sync)
             )
-            # The tables migrate() copied from main already hold these (#683)
-            for object_type_id, copied_until in self.copied_changes.items():
-                changes = changes.exclude(changed_object_type_id=object_type_id, time__lte=copied_until)
-            return changes
         return ObjectChange.objects.none()
 
     def get_unmerged_changes(self):
@@ -1034,7 +1026,6 @@ class Branch(JobsMixin, PrimaryModel):
         # Record the branch's last_synced time & update its status
         logger.debug(f'Setting branch status to {BranchStatusChoices.READY}')
         self.last_sync = sync_started
-        self.copied_changes = {}
         self.status = BranchStatusChoices.READY
         self.save(update_merge_sync_fields=True)
 
@@ -1099,10 +1090,6 @@ class Branch(JobsMixin, PrimaryModel):
                     # the current ProjectState from all applied migrations, which apply_migration
                     # requires as its starting point. There is no public equivalent as of Django 5.x.
                     state = executor._create_project_state(with_applied_migrations=True)
-                    # Give models whose table the branch lacks (e.g. made branchable since it was
-                    # provisioned) an empty table to migrate, so nothing falls through to main's.
-                    # It's replaced with a copy of main's below. (#683)
-                    self._create_placeholder_tables(connection, state)
                     for migration, _ in full_plan:
                         if not migrations_to_run:
                             break
@@ -1125,16 +1112,6 @@ class Branch(JobsMixin, PrimaryModel):
         else:
             logger.info('Found no migrations to apply')
 
-        # Replace the placeholders, and any table the branch still lacks, with copies of main's, which has already
-        # applied every migration (#683)
-        try:
-            self._replicate_tables(self.get_missing_tables(), main_schema)
-        except Exception:
-            # Every migration has been applied, so a retry only repeats the copy
-            Branch.objects.filter(pk=self.pk).update(status=BranchStatusChoices.PENDING_MIGRATIONS)
-            self.status = BranchStatusChoices.PENDING_MIGRATIONS
-            raise
-
         # Reset Branch status to ready
         logger.debug(f'Setting branch status to {BranchStatusChoices.READY}')
         self.status = BranchStatusChoices.READY
@@ -1150,136 +1127,6 @@ class Branch(JobsMixin, PrimaryModel):
         logger.info('Migration completed')
 
     migrate.alters_data = True
-
-    def _get_tables(self):
-        """
-        Return the names of the tables in the branch schema.
-        """
-        with connection.cursor() as cursor:
-            cursor.execute(
-                'SELECT table_name FROM information_schema.tables WHERE table_schema = %s', [self.schema_name]
-            )
-            return {row[0] for row in cursor.fetchall()}
-
-    def _get_placeholder_tables(self):
-        """
-        Return the names of the tables in the branch schema which are still placeholders awaiting main's rows.
-        """
-        with connection.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT c.relname
-                FROM pg_class c
-                JOIN pg_namespace n ON n.oid = c.relnamespace
-                WHERE n.nspname = %s AND c.relkind = 'r' AND obj_description(c.oid, 'pg_class') = %s
-                """,
-                [self.schema_name, PLACEHOLDER_TABLE_COMMENT],
-            )
-            return {row[0] for row in cursor.fetchall()}
-
-    def get_missing_tables(self, tables_to_replicate=None):
-        """
-        Return the tables to replicate which the branch schema lacks, or holds only as placeholders.
-        """
-        if tables_to_replicate is None:
-            tables_to_replicate = get_tables_to_replicate()
-        tables_to_replicate = set(tables_to_replicate)
-        missing = tables_to_replicate - self._get_tables()
-        return sorted(missing | (self._get_placeholder_tables() & tables_to_replicate))
-
-    def _create_placeholder_tables(self, branch_connection, state):
-        """
-        Create an empty table, as of the branch's migration ``state``, for each model whose table the branch
-        schema lacks. _replicate_tables() replaces it with a copy of main's once the branch has been migrated. (#683)
-        """
-        logger = logging.getLogger('netbox_branching.branch.migrate')
-        absent = set(get_tables_to_replicate()) - self._get_tables()
-        models = [
-            model
-            for model in state.apps.get_models()
-            if model._meta.db_table in absent and model._meta.managed and not model._meta.proxy
-        ]
-        if not models:
-            return
-
-        with branch_connection.schema_editor() as schema_editor:
-            for model in models:
-                logger.info(f'Creating placeholder table {self.schema_name}.{model._meta.db_table}')
-                # Also creates the model's auto-created M2M through tables
-                schema_editor.create_model(model)
-                tables = [
-                    model._meta.db_table,
-                    *(
-                        field.remote_field.through._meta.db_table
-                        for field in model._meta.local_many_to_many
-                        if field.remote_field.through._meta.auto_created
-                    ),
-                ]
-                for table in absent.intersection(tables):
-                    schema_editor.execute(
-                        f'COMMENT ON TABLE {quote_ident(self.schema_name)}.{quote_ident(table)} '
-                        f"IS '{PLACEHOLDER_TABLE_COMMENT}'"
-                    )
-
-    def _replicate_tables(self, tables, main_schema):
-        """
-        Copy the given tables, which the branch schema lacks or holds only as placeholders, from main as provision()
-        does. A table stays marked as a placeholder until its copy is complete, so a retry after the job is
-        interrupted starts it over.
-        """
-        logger = logging.getLogger('netbox_branching.branch.migrate')
-        if not tables:
-            return
-        schema = self.schema_name
-        workers = get_plugin_config('netbox_branching', 'provision_workers') or 1
-        logger.warning(
-            f'Copying tables missing from branch schema {schema} from main: {", ".join(tables)}. They hold '
-            f"main's current rows, not those as of the branch's creation."
-        )
-
-        placeholders = set(tables) & self._get_tables()
-        object_types = [
-            object_type
-            for object_type in get_branchable_object_types()
-            if (model := object_type.model_class()) is not None and model._meta.db_table in tables
-        ]
-        try:
-            with connection.cursor() as cursor:
-                cursor.execute('BEGIN')
-                # Replace each placeholder with an empty copy of main's table, whose columns may differ from those
-                # the branch's migration state gave it
-                for table in placeholders:
-                    cursor.execute(f'DROP TABLE {quote_ident(schema)}.{quote_ident(table)} CASCADE')
-                create_empty_tables(cursor, schema, main_schema, tables)
-                for table in tables:
-                    cursor.execute(
-                        f"COMMENT ON TABLE {quote_ident(schema)}.{quote_ident(table)} IS '{PLACEHOLDER_TABLE_COMMENT}'"
-                    )
-                cursor.execute('COMMIT')
-
-            copied_until = self._populate_tables(tables, main_schema, workers, logger, object_types=object_types)
-
-            # Record it before unmarking the tables, so sync never replays a change the copy holds
-            if copied_until:
-                self.copied_changes |= {str(object_type.pk): copied_until.isoformat() for object_type in object_types}
-                Branch.objects.filter(pk=self.pk).update(copied_changes=self.copied_changes)
-
-            with connection.cursor() as cursor:
-                cursor.execute('BEGIN')
-                for table in tables:
-                    # Replace the placeholder mark with main's comment, if any
-                    cursor.execute(
-                        "SELECT quote_nullable(obj_description(%s::regclass, 'pg_class'))",
-                        [f'{quote_ident(main_schema)}.{quote_ident(table)}'],
-                    )
-                    cursor.execute(
-                        f'COMMENT ON TABLE {quote_ident(schema)}.{quote_ident(table)} IS {cursor.fetchone()[0]}'
-                    )
-                cursor.execute('COMMIT')
-        except Exception:
-            # The failure may have left the connection in an aborted transaction
-            connection.close()
-            raise
 
     def merge(self, user, commit=True):
         """
@@ -1437,7 +1284,8 @@ class Branch(JobsMixin, PrimaryModel):
         Five phases:
           1. Metadata setup — create the schema, the ObjectChange skeleton, the
              django_migrations copy, and the empty (no constraints, no indexes)
-             destination tables.
+             destination tables. The constraint and index maps for main are
+             also captured here for use in Phase 3.
           2. Parallel data copy — export an MVCC snapshot from main and let a worker
              pool run INSERT INTO branch.t SELECT ... FROM main.t across tables.
           3. Parallel constraint + index build — add PK/UNIQUE/EXCLUDE constraints
@@ -1508,6 +1356,19 @@ class Branch(JobsMixin, PrimaryModel):
                         )
                     raise
 
+                # Prefetch every index definition on main in one query — the per-table
+                # entries drive the post-data-load index build.
+                main_indexes_by_table = build_main_index_map(cursor, main_schema)
+                # Same for PRIMARY KEY / UNIQUE / EXCLUDE constraints. We replay
+                # these via ALTER TABLE ADD CONSTRAINT so the branch schema's
+                # pg_constraint mirrors main's — necessary for later migrations
+                # that drop or alter constraints by name.
+                main_constraints_by_table = build_main_constraint_map(cursor, main_schema)
+                # On-disk size per table, used to dispatch the heaviest tables first in
+                # each parallel phase so a single large table can't be picked up last and
+                # left running alone while every other worker sits idle.
+                main_table_sizes = build_main_table_sizes(cursor, main_schema)
+
                 # Empty copy of the global change log. Share the ID sequence from main
                 # so change record IDs stay globally unique.
                 objectchange_table = ObjectChange_._meta.db_table
@@ -1540,18 +1401,137 @@ class Branch(JobsMixin, PrimaryModel):
                     f'ALTER SEQUENCE {quote_ident(schema)}.django_migrations_id_seq RESTART WITH {starting_id}'
                 )
 
-                create_empty_tables(cursor, schema, main_schema, tables_to_replicate)
+                # Create empty destination tables (no indexes) for the parallel copy.
+                # Indexes are built in Phase 3 after the data is loaded — far cheaper
+                # than maintaining them row-by-row during INSERT. INCLUDING GENERATED
+                # keeps generated columns computed rather than copied as plain columns.
+                for table in tables_to_replicate:
+                    logger.debug(f'Creating table {schema}.{table}')
+                    cursor.execute(
+                        f'CREATE TABLE {quote_ident(schema)}.{quote_ident(table)} '
+                        f'( LIKE {quote_ident(main_schema)}.{quote_ident(table)} INCLUDING GENERATED )'
+                    )
 
                 cursor.execute('COMMIT')
 
-            # Phases 2-5
-            self._populate_tables(
-                tables_to_replicate,
-                main_schema,
-                workers,
-                logger,
-                extra_tables=(objectchange_table, 'django_migrations'),
+            # Order parallel work heaviest-table-first (longest-processing-time
+            # scheduling) so a single large table can't be dispatched last and left
+            # running alone while the other workers idle. Used by every phase below.
+            def by_size_desc(table_names):
+                return sorted(table_names, key=lambda t: main_table_sizes.get(t, 0), reverse=True)
+
+            # Phase 2: parallel data copy under a single MVCC snapshot.
+            # The coordinator transaction holds the exported snapshot alive while
+            # workers import it; do not commit until every worker has finished.
+            coordinator_commit_failed = False
+            with connection.cursor() as cursor:
+                cursor.execute('BEGIN')
+                cursor.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+                cursor.execute('SELECT pg_export_snapshot()')
+                snapshot_token = cursor.fetchone()[0]
+                logger.debug(f'Exported snapshot {snapshot_token} for {len(tables_to_replicate)} tables')
+
+                try:
+                    parallel_copy_tables(
+                        tables=by_size_desc(tables_to_replicate),
+                        snapshot_token=snapshot_token,
+                        schema=schema,
+                        main_schema=main_schema,
+                        workers=workers,
+                    )
+                finally:
+                    # Close the snapshot-exporting transaction. Swallow any error
+                    # here so it can't mask a worker exception that's already in
+                    # flight — the original traceback is what the operator needs.
+                    try:
+                        cursor.execute('COMMIT')
+                    except Exception:
+                        coordinator_commit_failed = True
+                        logger.exception('Failed to COMMIT Phase 2 coordinator transaction')
+
+            # The copied data is already durable (each worker committed its own
+            # transaction) and this coordinator transaction was read-only, so a failed
+            # COMMIT is not fatal. But it can leave the main connection in an aborted
+            # transaction, which would then break the success-path status=READY write
+            # (and the cleanup path) with "current transaction is aborted". Drop the
+            # connection so Django reconnects clean for the remaining ORM work.
+            if coordinator_commit_failed:
+                connection.close()
+
+            # Phase 3: rebuild constraints and indexes against the populated
+            # branch tables. PK/UNIQUE/EXCLUDE constraints are added via
+            # ALTER TABLE ADD CONSTRAINT — each one builds its backing index
+            # implicitly under the constraint's name, so we exclude those
+            # index names from the plain CREATE INDEX pass to avoid duplicates.
+            relevant_tables = {*tables_to_replicate, objectchange_table, 'django_migrations'}
+
+            sorted_relevant = by_size_desc(relevant_tables)
+
+            constraint_tasks = []
+            constraint_backed_indexes = set()
+            index_tasks = []
+            # Build both task lists heaviest-table-first so the constraint and index
+            # phases drain their largest work early rather than tailing on it.
+            for table_name in sorted_relevant:
+                for conname, condef, backing_indexname in main_constraints_by_table.get(table_name, ()):
+                    constraint_tasks.append((table_name, conname, condef))
+                    if backing_indexname:
+                        constraint_backed_indexes.add(backing_indexname)
+                for indexname, indexdef in main_indexes_by_table.get(table_name, ()):
+                    index_tasks.append((table_name, indexname, indexdef))
+
+            parallel_add_constraints(
+                constraint_tasks=constraint_tasks,
+                schema=schema,
+                workers=workers,
             )
+
+            parallel_build_indexes(
+                index_tasks=index_tasks,
+                schema=schema,
+                main_schema=main_schema,
+                workers=workers,
+                skip_indexes={*SKIP_INDEXES, *constraint_backed_indexes},
+            )
+
+            # Phase 4: replicate triggers. CREATE TABLE ... (LIKE ...) does not
+            # copy triggers, and NetBox 4.7+ relies on per-table triggers to keep
+            # ltree path/sort_path and denormalized _site/_location/_rack columns
+            # up to date (both were previously maintained in Python). Install them
+            # only after the Phase 2 data copy so they don't fire per row on the
+            # bulk snapshot load, which already carries correct values from main.
+            self._replicate_triggers(schema, main_schema, relevant_tables)
+
+            # Phase 5: refresh planner statistics. After the bulk copy the branch
+            # tables have no statistics, so the first queries against the branch
+            # (sync, change-diff computation, etc.) would plan against empty-table
+            # estimates until autovacuum eventually catches up. ANALYZE is
+            # statistics-only and never affects correctness, so a failure here must
+            # not fail the provision — log it and leave the stats to autovacuum.
+            #
+            # Skip empty tables: a zero-size table's planner estimate is already
+            # correct (there is nothing to mis-estimate), and a typical install has
+            # hundreds of empty branchable tables — ANALYZE-ing every one of them adds
+            # a fixed hundreds-of-statements tax that can dominate a small provision.
+            analyze_tables = [t for t in sorted_relevant if main_table_sizes.get(t, 0) > 0]
+            try:
+                parallel_analyze_tables(
+                    tables=analyze_tables,
+                    schema=schema,
+                    workers=workers,
+                )
+            except JobTimeoutException:
+                # RQ is killing the job via its timeout (raised in this, the main,
+                # thread). It is an Exception subclass, so it would otherwise be
+                # swallowed by the best-effort handler below — let it propagate to
+                # the cleanup path instead of marking a half-provisioned branch READY.
+                raise
+            except Exception:
+                logger.warning(
+                    f'ANALYZE of branch schema {schema} failed; planner statistics will be '
+                    f'populated by autovacuum instead.',
+                    exc_info=True,
+                )
 
         except Exception as e:
             logger.error(e)
@@ -1593,157 +1573,6 @@ class Branch(JobsMixin, PrimaryModel):
         BranchEvent.objects.create(branch=self, user=user, type=BranchEventTypeChoices.PROVISIONED)
 
     provision.alters_data = True
-
-    def _populate_tables(self, tables, main_schema, workers, logger, extra_tables=(), object_types=()):
-        """
-        Copy main's rows into the branch's empty copies of ``tables``, then rebuild the constraints, indexes and
-        triggers of those tables and ``extra_tables``, and ANALYZE them. Return the time of main's latest change to
-        any of ``object_types`` which the copy includes, if any.
-        """
-        schema = self.schema_name
-        relevant_tables = {*tables, *extra_tables}
-        with connection.cursor() as cursor:
-            # Prefetch every index definition on main in one query — the per-table
-            # entries drive the post-data-load index build.
-            main_indexes_by_table = build_main_index_map(cursor, main_schema, relevant_tables)
-            # Same for PRIMARY KEY / UNIQUE / EXCLUDE constraints. We replay
-            # these via ALTER TABLE ADD CONSTRAINT so the branch schema's
-            # pg_constraint mirrors main's — necessary for later migrations
-            # that drop or alter constraints by name.
-            main_constraints_by_table = build_main_constraint_map(cursor, main_schema, relevant_tables)
-            # On-disk size per table, used to dispatch the heaviest tables first in
-            # each parallel phase so a single large table can't be picked up last and
-            # left running alone while every other worker sits idle.
-            main_table_sizes = build_main_table_sizes(cursor, main_schema, relevant_tables)
-
-        # Order parallel work heaviest-table-first (longest-processing-time
-        # scheduling) so a single large table can't be dispatched last and left
-        # running alone while the other workers idle. Used by every phase below.
-        def by_size_desc(table_names):
-            return sorted(table_names, key=lambda t: main_table_sizes.get(t, 0), reverse=True)
-
-        # Phase 2: parallel data copy under a single MVCC snapshot.
-        # The coordinator transaction holds the exported snapshot alive while
-        # workers import it; do not commit until every worker has finished.
-        coordinator_commit_failed = False
-        with connection.cursor() as cursor:
-            cursor.execute('BEGIN')
-            cursor.execute('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
-            cursor.execute('SELECT pg_export_snapshot()')
-            snapshot_token = cursor.fetchone()[0]
-            logger.debug(f'Exported snapshot {snapshot_token} for {len(tables)} tables')
-
-            copied_until = None
-            if object_types:
-                # A change and the row it changed commit together, so the snapshot holds both or neither
-                cursor.execute(
-                    f'SELECT max(time) FROM {quote_ident(main_schema)}.{quote_ident(ObjectChange_._meta.db_table)} '
-                    f'WHERE changed_object_type_id = ANY(%s)',
-                    [[object_type.pk for object_type in object_types]],
-                )
-                copied_until = cursor.fetchone()[0]
-
-            try:
-                parallel_copy_tables(
-                    tables=by_size_desc(tables),
-                    snapshot_token=snapshot_token,
-                    schema=schema,
-                    main_schema=main_schema,
-                    workers=workers,
-                )
-            finally:
-                # Close the snapshot-exporting transaction. Swallow any error
-                # here so it can't mask a worker exception that's already in
-                # flight — the original traceback is what the operator needs.
-                try:
-                    cursor.execute('COMMIT')
-                except Exception:
-                    coordinator_commit_failed = True
-                    logger.exception('Failed to COMMIT Phase 2 coordinator transaction')
-
-        # The copied data is already durable (each worker committed its own
-        # transaction) and this coordinator transaction was read-only, so a failed
-        # COMMIT is not fatal. But it can leave the main connection in an aborted
-        # transaction, which would then break the success-path status=READY write
-        # (and the cleanup path) with "current transaction is aborted". Drop the
-        # connection so Django reconnects clean for the remaining ORM work.
-        if coordinator_commit_failed:
-            connection.close()
-
-        # Phase 3: rebuild constraints and indexes against the populated
-        # branch tables. PK/UNIQUE/EXCLUDE constraints are added via
-        # ALTER TABLE ADD CONSTRAINT — each one builds its backing index
-        # implicitly under the constraint's name, so we exclude those
-        # index names from the plain CREATE INDEX pass to avoid duplicates.
-        sorted_relevant = by_size_desc(relevant_tables)
-
-        constraint_tasks = []
-        constraint_backed_indexes = set()
-        index_tasks = []
-        # Build both task lists heaviest-table-first so the constraint and index
-        # phases drain their largest work early rather than tailing on it.
-        for table_name in sorted_relevant:
-            for conname, condef, backing_indexname in main_constraints_by_table.get(table_name, ()):
-                constraint_tasks.append((table_name, conname, condef))
-                if backing_indexname:
-                    constraint_backed_indexes.add(backing_indexname)
-            for indexname, indexdef in main_indexes_by_table.get(table_name, ()):
-                index_tasks.append((table_name, indexname, indexdef))
-
-        parallel_add_constraints(
-            constraint_tasks=constraint_tasks,
-            schema=schema,
-            workers=workers,
-        )
-
-        parallel_build_indexes(
-            index_tasks=index_tasks,
-            schema=schema,
-            main_schema=main_schema,
-            workers=workers,
-            skip_indexes={*SKIP_INDEXES, *constraint_backed_indexes},
-        )
-
-        # Phase 4: replicate triggers. CREATE TABLE ... (LIKE ...) does not
-        # copy triggers, and NetBox 4.7+ relies on per-table triggers to keep
-        # ltree path/sort_path and denormalized _site/_location/_rack columns
-        # up to date (both were previously maintained in Python). Install them
-        # only after the Phase 2 data copy so they don't fire per row on the
-        # bulk snapshot load, which already carries correct values from main.
-        self._replicate_triggers(schema, main_schema, relevant_tables)
-
-        # Phase 5: refresh planner statistics. After the bulk copy the branch
-        # tables have no statistics, so the first queries against the branch
-        # (sync, change-diff computation, etc.) would plan against empty-table
-        # estimates until autovacuum eventually catches up. ANALYZE is
-        # statistics-only and never affects correctness, so a failure here must
-        # not fail the provision — log it and leave the stats to autovacuum.
-        #
-        # Skip empty tables: a zero-size table's planner estimate is already
-        # correct (there is nothing to mis-estimate), and a typical install has
-        # hundreds of empty branchable tables — ANALYZE-ing every one of them adds
-        # a fixed hundreds-of-statements tax that can dominate a small provision.
-        analyze_tables = [t for t in sorted_relevant if main_table_sizes.get(t, 0) > 0]
-        try:
-            parallel_analyze_tables(
-                tables=analyze_tables,
-                schema=schema,
-                workers=workers,
-            )
-        except JobTimeoutException:
-            # RQ is killing the job via its timeout (raised in this, the main,
-            # thread). It is an Exception subclass, so it would otherwise be
-            # swallowed by the best-effort handler below — let it propagate to
-            # the cleanup path instead of marking a half-provisioned branch READY.
-            raise
-        except Exception:
-            logger.warning(
-                f'ANALYZE of branch schema {schema} failed; planner statistics will be '
-                f'populated by autovacuum instead.',
-                exc_info=True,
-            )
-
-        return copied_until
 
     def _replicate_triggers(self, schema, main_schema, tables):
         """
@@ -1788,7 +1617,6 @@ class Branch(JobsMixin, PrimaryModel):
                 # function names (both live in the main schema). Emitting them
                 # qualified would rebind the recreated trigger to the main table.
                 cursor.execute(f'SET LOCAL search_path = {quote_ident(main_schema)}')
-                # Skip any the branch's table already has, e.g. a placeholder created by migrate() (#683)
                 cursor.execute(
                     """
                     SELECT c.relname, pg_get_triggerdef(t.oid, true)
@@ -1798,15 +1626,8 @@ class Branch(JobsMixin, PrimaryModel):
                     WHERE n.nspname = %s
                       AND NOT t.tgisinternal
                       AND c.relname = ANY(%s)
-                      AND NOT EXISTS (
-                        SELECT 1
-                        FROM pg_trigger bt
-                        JOIN pg_class bc ON bt.tgrelid = bc.oid
-                        JOIN pg_namespace bn ON bc.relnamespace = bn.oid
-                        WHERE bn.nspname = %s AND bc.relname = c.relname AND bt.tgname = t.tgname
-                      )
                     """,
-                    [main_schema, list(tables), schema],
+                    [main_schema, list(tables)],
                 )
                 triggerdefs = cursor.fetchall()
 

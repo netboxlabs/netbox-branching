@@ -1,12 +1,11 @@
 import warnings
 
-from django.apps import apps
 from django.db import DEFAULT_DB_ALIAS
 
 from netbox.registry import registry
 
 from .contextvars import active_branch
-from .utilities import _branching_resolvers, supports_branching
+from .utilities import supports_branching
 
 __all__ = ('BranchAwareRouter',)
 
@@ -71,21 +70,14 @@ class BranchAwareRouter:
 
             from core.models import ObjectType
 
-            if not ObjectType.objects.using(DEFAULT_DB_ALIAS).filter(
-                app_label=app_label,
-                model=model_name,
-                features__contains=['branching'],
-            ).exists() and not self._resolved_as_branchable(app_label, model_name):
+            if (
+                not ObjectType.objects.using(DEFAULT_DB_ALIAS)
+                .filter(
+                    app_label=app_label,
+                    model=model_name,
+                    features__contains=['branching'],
+                )
+                .exists()
+            ):
                 return False
         return None
-
-    @staticmethod
-    def _resolved_as_branchable(app_label, model_name):
-        # A model a plugin's resolver makes branchable has no branching feature, but its table is replicated
-        if not _branching_resolvers:
-            return False
-        try:
-            model = apps.get_model(app_label, model_name)
-        except LookupError:
-            return False
-        return supports_branching(model)

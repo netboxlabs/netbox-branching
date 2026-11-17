@@ -24,30 +24,22 @@
        id="action-form"
        role="tabpanel"
        aria-labelledby="action-form-tab">
-    {% if branch.pending_migrations or missing_tables %}
+    {% if branch.pending_migrations %}
       <form action="" method="post" enctype="multipart/form-data">
         {% csrf_token %}
         <div class="card">
           <h2 class="card-header">{% trans "Pending Migrations" %}</h2>
           <div class="card-body">
-            {% if branch.pending_migrations %}
-              <p>
-                {% with count=branch.pending_migrations|length %}
-                  {% blocktrans %}
-                    The following <strong>{{ count }} database migrations</strong> will be applied to the branch:
-                  {% endblocktrans %}
-                {% endwith %}
-              </p>
-              <ul class="font-monospace text-muted">
-                {% for app_label, name in branch.pending_migrations %}<li>{{ app_label }}.{{ name }}</li>{% endfor %}
-              </ul>
-            {% endif %}
-            {% if missing_tables %}
-              <p>{% trans "The following tables, which the branch lacks, will be copied from main:" %}</p>
-              <ul class="font-monospace text-muted">
-                {% for table in missing_tables %}<li>{{ table }}</li>{% endfor %}
-              </ul>
-            {% endif %}
+            <p>
+              {% with count=branch.pending_migrations|length %}
+                {% blocktrans %}
+                  The following <strong>{{ count }} database migrations</strong> will be applied to the branch:
+                {% endblocktrans %}
+              {% endwith %}
+            </p>
+            <ul class="font-monospace text-muted">
+              {% for app_label, name in branch.pending_migrations %}<li>{{ app_label }}.{{ name }}</li>{% endfor %}
+            </ul>
             {% render_field form.confirm %}
           </div>
           <div class="card-footer text-end">

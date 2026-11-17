@@ -310,6 +310,7 @@ Pure schema migrations (`AddField`, `AlterField`, etc.) on branchable models don
 
 If a plugin is installed or upgraded after branches have been created, the existing branch schemas will **not** automatically receive the new database migrations. Branches with outstanding migrations will be flagged with the **Pending Migrations** status and can be brought up to date using the **Migrate** action; until they are migrated, they cannot be activated or merged.
 
-If an upgrade makes an existing model branchable (for example, by changing it to a `ChangeLoggedModel`), branches created before the upgrade have no copy of its table, and `manage.py migrate` flags them with **Pending Migrations** even if no migration is outstanding. Migrating such a branch gives it an empty copy of the table to apply its pending migrations to, then replaces it with a copy of main's table as of the migration, not as of the branch's creation. A data migration that runs on the branch therefore sees no rows in that table.
-
 The recommended practice is to install or upgrade plugins before creating branches, and to merge or remove all open branches before upgrading a plugin that modifies existing models.
+
+!!! danger "Models that become branchable"
+    Migrating a branch does not copy tables for models that were not branchable when it was provisioned. If an upgrade makes an existing model branchable — e.g. it gains change logging, a [branching resolver](#opting-in-register_branching_resolver) or is removed from `exempt_models` — open branches have no table for it, and changes made to it within those branches are written directly to main. Merge, archive or delete all open branches before such an upgrade.

@@ -107,4 +107,4 @@ This matches the pattern NetBox's own views use internally and is required for a
 
 * **Deletion:** Deletion removes the branch entirely, including all of its event history. This can be useful to avoid confusion around which branches can be reverted, but the branch record will no longer be available for reference.
 
-* **Migration:** A migrated branch (i.e. one whose schema has been brought up to date with main after a NetBox upgrade) behaves no differently from a freshly provisioned branch. If you do not plan to migrate a branch after a NetBox upgrade, archive or delete it instead.
+* **Migration:** A migrated branch (i.e. one whose schema has been brought up to date with main after a NetBox upgrade) behaves no differently from a freshly provisioned branch. If you do not plan to migrate a branch after a NetBox upgrade, archive or delete it instead. Migration cannot give a branch tables for models that the upgrade made branchable; see [Models that become branchable](./plugin-development.md#branches-and-plugin-upgrades).
