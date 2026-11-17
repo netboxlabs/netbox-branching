@@ -7,15 +7,20 @@ tests.
 """
 
 import importlib
+import uuid
 from contextlib import contextmanager
 from unittest.mock import patch
 
 from django.apps import apps as django_apps
+from django.contrib.auth import get_user_model
 from django.contrib.auth.models import Group, Permission
 from django.db import DEFAULT_DB_ALIAS, IntegrityError, connection, migrations, models, transaction
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, TestCase, override_settings
+from django.urls import reverse
 
+from dcim.models import Manufacturer
 from ipam.models import Prefix
+from netbox.context_managers import event_tracking
 from netbox_branching import utilities
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.database import BranchAwareRouter
@@ -28,6 +33,8 @@ from netbox_branching.utilities import (
     register_branching_resolver,
     supports_branching,
 )
+
+User = get_user_model()
 
 
 @contextmanager
@@ -429,6 +436,50 @@ class NewlyBranchableModelMigrateTestCase(FastTeardownTransactionTestCase):
             self._migrate_with_operations(branch, [migrations.RunPython(lambda apps, schema_editor: ran.append(True))])
         self.assertEqual(ran, [True])
 
+    def test_copy_has_columns_migration_state_lacks(self):
+        Group.objects.create(name='Group A')
+        branch = provision_branch(user=None, name='Pre-resolver Branch')
+        self._leave_auth_migrations_pending(branch)
+        # A column added outside the migration state, e.g. by RunSQL
+        with connection.cursor() as cursor:
+            cursor.execute('ALTER TABLE auth_group ADD COLUMN extra integer DEFAULT 1')
+        try:
+            self._migrate_with_operations(branch, [])
+            with connection.cursor() as cursor:
+                cursor.execute(f'SELECT name, extra FROM "{branch.schema_name}".auth_group')
+                self.assertEqual(cursor.fetchall(), [('Group A', 1)])
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute('ALTER TABLE auth_group DROP COLUMN extra')
+
+    def test_sync_skips_changes_in_copy(self):
+        user = User.objects.create_user(username='testuser')
+        request = RequestFactory().get(reverse('home'))
+        request.id = uuid.uuid4()
+        request.user = user
+        branch = provision_branch(user=user, name='Pre-branchable Branch')
+        # As if Manufacturer had become branchable after the branch was provisioned
+        with connection.cursor() as cursor:
+            cursor.execute(f'DROP TABLE "{branch.schema_name}".{Manufacturer._meta.db_table} CASCADE')
+
+        with event_tracking(request):
+            Manufacturer.objects.create(name='Manufacturer 1', slug='manufacturer-1')
+        branch.migrate(user=user)
+        branch.refresh_from_db()
+        self.assertEqual(branch.status, BranchStatusChoices.READY)
+        # The copy already holds Manufacturer 1
+        self.assertFalse(branch.get_unsynced_changes().exists())
+
+        with event_tracking(request):
+            Manufacturer.objects.create(name='Manufacturer 2', slug='manufacturer-2')
+        branch.sync(user=user)
+        branch.refresh_from_db()
+        self.assertEqual(branch.copied_changes, {})
+        with activate_branch(branch):
+            self.assertEqual(
+                sorted(Manufacturer.objects.values_list('name', flat=True)), ['Manufacturer 1', 'Manufacturer 2']
+            )
+
 
 class ResolverModelRouterTestCase(TestCase):
     """The router permits migrations in a branch for a model a resolver makes branchable."""
@@ -502,9 +553,10 @@ class NewlyBranchableModelLeakTestCase(FastTeardownTransactionTestCase):
         self._migrate(
             branch, later_operations=[migrations.RunSQL('CREATE INDEX auth_group_683_idx ON auth_group (name)')]
         )
+        # The branch's table is then replaced with a copy of main's, which in practice has run the RunSQL too
         with connection.cursor() as cursor:
             cursor.execute("SELECT schemaname FROM pg_indexes WHERE indexname = 'auth_group_683_idx'")
-            self.assertEqual(cursor.fetchall(), [(branch.schema_name,)])
+            self.assertEqual(cursor.fetchall(), [])
 
     def test_migration_with_other_work_is_not_faked(self):
         branch = self._provision()
@@ -539,7 +591,8 @@ class NewlyBranchableModelLeakTestCase(FastTeardownTransactionTestCase):
                 """,
                 [branch.schema_name],
             )
-            self.assertEqual(cursor.fetchall(), [(f'{branch.schema_name}.auth_group',)])
+            # It referenced the branch's placeholder, and went with it; copies of main's tables have no foreign keys
+            self.assertEqual(cursor.fetchall(), [])
 
     def test_copy_resumes_after_worker_killed(self):
         branch = self._provision()
