@@ -425,6 +425,11 @@ class BranchMigrateViewTestCase(TestCase):
         response = self.client.get(self._url(self.pending))
         self.assertEqual(response.status_code, 200)
 
+    def test_migrate_get_lists_missing_tables_only_for_pending_branch(self):
+        # Neither branch has a schema, so every table is missing from it
+        self.assertTrue(self.client.get(self._url(self.pending)).context['missing_tables'])
+        self.assertEqual(self.client.get(self._url(self.ready)).context['missing_tables'], [])
+
     def test_migrate_post_enqueues_job_for_pending_branch(self):
         with patch('netbox_branching.views.MigrateBranchJob.enqueue') as mock_enqueue:
             response = self.client.post(self._url(self.pending), data={'confirm': 'on'})

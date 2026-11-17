@@ -550,6 +550,13 @@ class BranchMigrateView(generic.ObjectView):
     def get_required_permission(self):
         return 'netbox_branching.migrate_branch'
 
+    @staticmethod
+    def _get_missing_tables(branch):
+        # Other branches can't be migrated, and may have no schema to compare
+        if branch.status != BranchStatusChoices.PENDING_MIGRATIONS:
+            return []
+        return branch.get_missing_tables()
+
     def get(self, request, **kwargs):
         branch = self.get_object(**kwargs)
         action_permitted = branch.can_migrate
@@ -562,7 +569,7 @@ class BranchMigrateView(generic.ObjectView):
                 'branch': branch,
                 'form': form,
                 'action_permitted': action_permitted,
-                'missing_tables': branch.get_missing_tables(),
+                'missing_tables': self._get_missing_tables(branch),
             },
         )
 
@@ -586,7 +593,7 @@ class BranchMigrateView(generic.ObjectView):
                 'branch': branch,
                 'form': form,
                 'action_permitted': action_permitted,
-                'missing_tables': branch.get_missing_tables(),
+                'missing_tables': self._get_missing_tables(branch),
             },
         )
 
