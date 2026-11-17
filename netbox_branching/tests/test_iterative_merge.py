@@ -27,6 +27,7 @@ from dcim.models import (
     FrontPortTemplate,
     Interface,
     InterfaceTemplate,
+    Location,
     MACAddress,
     Manufacturer,
     Module,
@@ -2249,6 +2250,70 @@ class BaseMergeTests(CableTestMixin):
             self.assertEqual(component.device, device_a)
         self.assertEqual((interface.name, nested_bay.name), ('Ethernet1/1', 'Sub 1'))
 
+    def test_revert_module_move_with_created_reference(self):
+        """A moved component which also references a branch-created object is still undone after its module. (#722)"""
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        for position in ('1', '2'):
+            ModuleBayTemplate.objects.create(device_type=self.device_type, name=f'Slot {position}', position=position)
+        module_type = ModuleType.objects.create(manufacturer=self.manufacturer, model='Module Type 1')
+        InterfaceTemplate.objects.create(module_type=module_type, name='Ethernet{module}/1', type='1000base-t')
+        device_a, device_b = (
+            Device.objects.create(name=name, site=site, device_type=self.device_type, role=self.device_role)
+            for name in ('Chassis A', 'Chassis B')
+        )
+        module = Module.objects.create(
+            device=device_a, module_bay=device_a.modulebays.get(name='Slot 1'), module_type=module_type
+        )
+        interface = module.interfaces.get()
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit(module, device=device_b, module_bay=device_b.modulebays.get(name='Slot 2'))
+            with event_tracking(self._make_request()):
+                mac = MACAddress.objects.create(mac_address='00:00:00:00:00:01', assigned_object=interface)
+            self._edit(interface, primary_mac_address=mac)
+
+        branch.merge(user=self.user, commit=True)
+        branch.revert(user=self.user, commit=True)
+
+        module.refresh_from_db()
+        interface.refresh_from_db()
+        self.assertEqual(module.device, device_a)
+        self.assertEqual(
+            (interface.device, interface.name, interface.primary_mac_address), (device_a, 'Ethernet1/1', None)
+        )
+        self.assertFalse(MACAddress.objects.filter(pk=mac.pk).exists())
+
+    def test_revert_widen_cluster_scope_then_move_host(self):
+        """A host moved within its cluster's widened scope is undone before the scope is narrowed again."""
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        location1, location2 = (
+            Location.objects.create(name=f'Location {i}', slug=f'location-{i}', site=site) for i in (1, 2)
+        )
+        cluster_type = ClusterType.objects.create(name='Cluster Type', slug='cluster-type')
+        cluster = Cluster.objects.create(name='Cluster', type=cluster_type, scope=location1)
+        device = Device.objects.create(
+            name='Host',
+            site=site,
+            location=location1,
+            cluster=cluster,
+            device_type=self.device_type,
+            role=self.device_role,
+        )
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit(cluster, scope=site)
+            self._edit(device, location=location2)
+
+        branch.merge(user=self.user, commit=True)
+        branch.revert(user=self.user, commit=True)
+
+        cluster.refresh_from_db()
+        device.refresh_from_db()
+        self.assertEqual(cluster.scope, location1)
+        self.assertEqual((device.location, device.cluster), (location1, cluster))
+
     def test_merge_and_revert_update_reference_cycle(self):
         """Revert a branch whose UPDATEs reference each other in a cycle (Device -> IP -> Interface -> Device)."""
         site = Site.objects.create(name='Test Site', slug='test-site')
@@ -2316,6 +2381,11 @@ class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
     def test_revert_module_move(self):
         """Reverse-chronological undo moves each component back before its module. Refs: #722"""
         super().test_revert_module_move()
+
+    @unittest.expectedFailure
+    def test_revert_module_move_with_created_reference(self):
+        """Reverse-chronological undo moves each component back before its module. Refs: #722"""
+        super().test_revert_module_move_with_created_reference()
 
 
 class DiffForMergeTests(SimpleTestCase):

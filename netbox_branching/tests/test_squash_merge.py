@@ -16,7 +16,7 @@ from dcim.models import Device, Interface, Location, MACAddress, Region, Site, V
 from ipam.models import IPAddress
 from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
-from netbox_branching.merge_strategies.squash import SquashMergeStrategy
+from netbox_branching.merge_strategies.squash import ActionType, SquashMergeStrategy
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase
 from netbox_branching.utilities import activate_branch
 
@@ -1056,29 +1056,40 @@ class SquashMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
         )
 
 
-class UpdateReferenceDepthsTestCase(SimpleTestCase):
-    """Unit tests for SquashMergeStrategy._update_reference_depths(). (#722)"""
+class RevertSideEffectEdgesTestCase(SimpleTestCase):
+    """Unit tests for SquashMergeStrategy._add_revert_side_effect_edges(). (#722)"""
 
     @staticmethod
-    def _depths(references):
-        """Rank UPDATEs given each one's references, held both before and after the change."""
-        updates = [
-            SimpleNamespace(key=key, model_class=None, prechange_data=refs, postchange_data=refs)
-            for key, refs in references.items()
-        ]
+    def _edges(nodes):
+        """Add edges for UPDATEs given as {key: (references, request_ids, depends_on)}; return each one's depends_on."""
+        changes = {
+            key: SimpleNamespace(
+                key=key,
+                final_action=ActionType.UPDATE,
+                prechange_data=refs,
+                postchange_data=refs,
+                request_ids=requests,
+                depends_on=set(depends_on),
+                depended_by=set(),
+            )
+            for key, (refs, requests, depends_on) in nodes.items()
+        }
         with mock.patch.object(
-            SquashMergeStrategy, '_get_fk_references', side_effect=lambda model, data, keys: set(data) & keys
+            SquashMergeStrategy,
+            '_iter_references',
+            side_effect=lambda collapsed, nodes, ct_cache, data: ((None, ref, False) for ref in data if ref in nodes),
         ):
-            return SquashMergeStrategy._update_reference_depths(updates)
+            SquashMergeStrategy._add_revert_side_effect_edges(changes, mock.Mock())
+        return {key: change.depends_on for key, change in changes.items()}
 
-    def test_chain(self):
-        self.assertEqual(self._depths({'a': {'b'}, 'b': {'c'}, 'c': set()}), {'a': 2, 'b': 1, 'c': 0})
+    def test_same_request(self):
+        edges = self._edges({'module': (set(), {1}, ()), 'interface': ({'module'}, {1, 2}, ())})
+        self.assertEqual(edges, {'module': {'interface'}, 'interface': set()})
 
-    def test_cycle_shares_one_depth(self):
-        depths = self._depths({'a': {'b'}, 'b': {'c'}, 'c': {'a', 'd'}, 'd': set(), 'e': {'a'}})
-        self.assertEqual(depths, {'a': 1, 'b': 1, 'c': 1, 'd': 0, 'e': 2})
+    def test_separate_requests(self):
+        edges = self._edges({'cluster': (set(), {1}, ()), 'device': ({'cluster'}, {2}, ())})
+        self.assertEqual(edges, {'cluster': set(), 'device': set()})
 
-    def test_long_chain_does_not_recurse(self):
-        length = 5000
-        depths = self._depths({i: {i + 1} if i + 1 < length else set() for i in range(length)})
-        self.assertEqual(depths[0], length - 1)
+    def test_skips_edge_closing_cycle(self):
+        edges = self._edges({'a': ({'b'}, {1}, ()), 'b': ({'a'}, {1}, ())})
+        self.assertEqual(edges, {'a': set(), 'b': {'a'}})

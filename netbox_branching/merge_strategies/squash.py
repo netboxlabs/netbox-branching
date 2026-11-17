@@ -44,6 +44,7 @@ class CollapsedChange:
         self.last_change = None  # The most recent ObjectChange (for metadata)
         self.synthetic = False  # True for UPDATEs injected by cycle breaking
         self.touched_fields = set()  # Fields altered by any individual UPDATE, even if net unchanged
+        self.request_ids = set()  # Requests which changed this object
 
         # Dependencies for ordering
         self.depends_on = set()  # Set of keys this change depends on
@@ -66,6 +67,7 @@ class CollapsedChange:
         """
         self.change_count += 1
         self.last_change = change
+        self.request_ids.add(change.request_id)
 
         # Dispatch to specific handler based on action type
         if change.action == 'create':
@@ -734,59 +736,44 @@ class SquashMergeStrategy(MergeStrategy):
             logger.error(f'    ... and {len(remaining) - max_to_show} more nodes in cycle')
 
     @staticmethod
-    def _update_reference_depths(updates):
+    def _add_revert_side_effect_edges(collapsed_changes, logger):
         """
-        Map each UPDATE's key to the length of its longest chain of references, held both before and after the
-        change, through other UPDATEs. A revert undoes the deepest last, so a referenced object (e.g. a moved Module)
-        is undone before the objects whose state its save() rewrites. (#722)
+        For revert, make an UPDATE depend on each UPDATE which references it throughout and shares a request with it:
+        that save() rewrote the referencing object (e.g. a moved Module's components), so it must be undone first,
+        and revert reverses this order. Edges which would close a cycle are skipped, leaving those to time. (#722)
         """
-        update_keys = {u.key for u in updates}
-        # A reference the change itself added or dropped is the user's edit, so reverse time order applies
-        references = {
-            u.key: (
-                SquashMergeStrategy._get_fk_references(u.model_class, u.prechange_data, update_keys)
-                & SquashMergeStrategy._get_fk_references(u.model_class, u.postchange_data, update_keys)
+        updates = {k: c for k, c in collapsed_changes.items() if c.final_action == ActionType.UPDATE}
+        ct_cache = {}
+        for update in updates.values():
+            held_before, held_after = (
+                {ref for _, ref, _ in SquashMergeStrategy._iter_references(update, updates, ct_cache, data)}
+                for data in (update.prechange_data, update.postchange_data)
             )
-            - {u.key}
-            for u in updates
-        }
-        index, low, depths, stack, on_stack = {}, {}, {}, [], set()
-
-        def enter(key):
-            index[key] = low[key] = len(index)
-            stack.append(key)
-            on_stack.add(key)
-            return key, iter(references[key])
-
-        # Iterative Tarjan's algorithm: each reference cycle shares one depth, leaving its order to time
-        for root in references:
-            if root in index:
-                continue
-            work = [enter(root)]
-            while work:
-                key, refs = work[-1]
-                if (ref := next(refs, None)) is not None:
-                    if ref not in index:
-                        work.append(enter(ref))
-                    elif ref in on_stack:
-                        low[key] = min(low[key], index[ref])
+            for ref_key in held_before & held_after:
+                referenced = updates[ref_key]
+                if not update.request_ids & referenced.request_ids:
                     continue
-                work.pop()
-                if work:
-                    parent = work[-1][0]
-                    low[parent] = min(low[parent], low[key])
-                if low[key] == index[key]:
-                    # Components pop only after every component they reference, so those depths are known
-                    component = set()
-                    while key not in component:
-                        component.add(stack.pop())
-                    on_stack.difference_update(component)
-                    depth = max((depths[ref] + 1 for k in component for ref in references[k] - component), default=0)
-                    depths.update(dict.fromkeys(component, depth))
-        return depths
+                if SquashMergeStrategy._depends_on(collapsed_changes, update.key, ref_key):
+                    logger.debug(f'    Not ordering {update} before {referenced}: would close a cycle')
+                    continue
+                referenced.depends_on.add(update.key)
+                update.depended_by.add(ref_key)
+                logger.debug(f'    {referenced} depends on {update} (its save() rewrote the referencing object)')
 
     @staticmethod
-    def _dependency_order_by_references(collapsed_changes, logger, update_depths=None):
+    def _depends_on(collapsed_changes, key, target):
+        """Return True if ``key`` depends on ``target``, directly or transitively."""
+        seen, stack = set(), [key]
+        while stack:
+            for dep in collapsed_changes[stack.pop()].depends_on - seen:
+                if dep == target:
+                    return True
+                seen.add(dep)
+                stack.append(dep)
+        return False
+
+    @staticmethod
+    def _dependency_order_by_references(collapsed_changes, logger):
         """
         Orders collapsed changes using topological sort with cycle detection.
 
@@ -797,15 +784,13 @@ class SquashMergeStrategy(MergeStrategy):
         then all nodes whose dependencies have been satisfied, and so on.
 
         When multiple nodes have no dependencies (equal priority in the dependency graph),
-        they are ordered by action type priority: DELETE (0) -> UPDATE (1) -> CREATE (2), then by
-        descending ``update_depths`` (if given), then by time.
+        they are ordered by action type priority: DELETE (0) -> UPDATE (1) -> CREATE (2).
 
         If cycles are detected, raises an exception.
 
         Returns: ordered list of keys
         """
         logger.info('Adjusting ordering by references...')
-        update_depths = update_depths or {}
 
         # Define action priority (lower number = higher priority = processed first)
         action_priority = {
@@ -845,7 +830,6 @@ class SquashMergeStrategy(MergeStrategy):
             ready.sort(
                 key=lambda k: (
                     action_priority.get(collapsed_changes[k].final_action, 99),
-                    -update_depths.get(k, 0),
                     collapsed_changes[k].last_change.time,
                 )
             )
@@ -888,8 +872,8 @@ class SquashMergeStrategy(MergeStrategy):
              (CREATE must exist before UPDATE can reference it)
            - If CREATE references another created object in postchange_data → referenced CREATE must come first
              (Referenced object must exist before referencing object is created)
-        3. Topological sort respecting dependencies; on revert, ready UPDATEs are also ranked by reference depth
-           (see _update_reference_depths)
+           - On revert, an UPDATE depends on UPDATEs its save() rewrote (see _add_revert_side_effect_edges)
+        3. Topological sort respecting dependencies
 
         This ensures:
         - DELETEs generally happen first to free unique constraints
@@ -942,14 +926,10 @@ class SquashMergeStrategy(MergeStrategy):
             collapsed_changes=to_process,
             operation=operation,
         )
-        # Revert reverses this order, so deeper-referencing UPDATEs go first here to be undone last. Read UPDATEs from
-        # to_process so any added by squash_dependency_graph_built receivers are ranked too.
-        update_depths = None
+        # After the signal, so the cycle check sees any edges its receivers added
         if operation == 'revert':
-            update_depths = SquashMergeStrategy._update_reference_depths(
-                [v for v in to_process.values() if v.final_action == ActionType.UPDATE]
-            )
-        ordered_keys = SquashMergeStrategy._dependency_order_by_references(to_process, logger, update_depths)
+            SquashMergeStrategy._add_revert_side_effect_edges(to_process, logger)
+        ordered_keys = SquashMergeStrategy._dependency_order_by_references(to_process, logger)
 
         # Convert keys back to collapsed changes
         result = [to_process[key] for key in ordered_keys]
