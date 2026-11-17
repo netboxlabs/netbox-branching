@@ -312,5 +312,8 @@ If a plugin is installed or upgraded after branches have been created, the exist
 
 The recommended practice is to install or upgrade plugins before creating branches, and to merge or remove all open branches before upgrading a plugin that modifies existing models.
 
-!!! danger "Models that become branchable"
-    Migrating a branch does not copy tables for models that were not branchable when it was provisioned. If an upgrade makes an existing model branchable — e.g. it gains change logging, a [branching resolver](#opting-in-register_branching_resolver) or is removed from `exempt_models` — open branches have no table for it, and changes made to it within those branches are written directly to main. Merge, archive or delete all open branches before such an upgrade.
+### Making an Existing Model Branchable
+
+An edge case arises when a plugin release makes an existing model branchable, e.g. by adding change logging or a [branching resolver](#opting-in-register_branching_resolver). Migrating a branch does not add tables for models that were not branchable when it was provisioned, so open branches have no table for the model and changes made to it within them are written directly to main.
+
+Treat such a release as a breaking change, and highlight in its release notes that users must merge, archive or delete all open branches before upgrading.
