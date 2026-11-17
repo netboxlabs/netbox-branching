@@ -123,6 +123,7 @@ class BranchFilterSetTestCase(TestCase, BaseFilterSetTests):
     ignore_fields = (
         'schema_id',
         'applied_migrations',
+        'copied_changes',
         'merged_time',
         'merged_by',
         'merge_strategy',
