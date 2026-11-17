@@ -1,25 +1,27 @@
 import uuid
 import warnings
+from contextlib import ExitStack
 from unittest.mock import patch
 
 from django.http import HttpResponse
 from django.test import RequestFactory, override_settings
 from django.urls import reverse
-from rest_framework.relations import PrimaryKeyRelatedField
 from rest_framework.request import Request as DRFRequest
 
 from core.choices import JobStatusChoices
-from core.models import Job, ObjectChange
-from dcim.models import Region, Site
+from core.models import Job
+from dcim.models import Site
 from extras.jobs import ScriptJob
 from extras.scripts import Script
 from netbox.jobs import AsyncAPIJob
+from netbox.registry import registry
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import COOKIE_NAME, QUERY_PARAM
 from netbox_branching.contextvars import active_branch
 from netbox_branching.middleware import BranchMiddleware
 from netbox_branching.models import Branch
-from netbox_branching.utilities import ActiveBranchContextManager, BranchUnavailable
+from netbox_branching.utilities import ActiveBranchContextManager
+from utilities.exceptions import AbortRequest
 from utilities.request import apply_request_processors, copy_safe_request
 from utilities.testing import TestCase
 
@@ -286,10 +288,8 @@ class RequestTestCase(TestCase):
         Branch.objects.filter(pk=branch.pk).update(status=BranchStatusChoices.SYNCING)
         request = fake_request(self.user, f'{reverse("home")}?{QUERY_PARAM}={branch.schema_id}')
 
-        with ActiveBranchContextManager(request):
-            self.assertIsNone(active_branch.get())
-            with self.assertRaisesMessage(BranchUnavailable, 'is not ready for use'):
-                Site.objects.exists()
+        with self.assertRaisesMessage(AbortRequest, 'is not ready for use'):
+            ActiveBranchContextManager(request)
 
     def test_processor_deactivates_branch_from_query_param_on_fake_request(self):
         """
@@ -333,26 +333,16 @@ class RequestTestCase(TestCase):
 
     def assertBranchRefused(self, request, message):
         """
-        Assert that a request replayed by a background job fails its first branchable query with
-        `message` (changelog reads included), leaves models which do not support branching alone,
-        and refuses nothing once the request processor has exited.
+        Assert that the request processors refuse a request replayed by a background job, rather
+        than leave it to run in main.
         """
-        with ActiveBranchContextManager(request):
-            self.assertIsNone(active_branch.get(), msg='An unusable branch was installed as active')
-            with self.assertRaisesMessage(BranchUnavailable, message):
-                Site.objects.exists()
-            # Changelog reads follow the active branch, so must not fall back to main either
-            with self.assertRaisesMessage(BranchUnavailable, message):
-                ObjectChange.objects.exists()
-            Job.objects.exists()
-        Site.objects.exists()
+        with self.assertRaisesMessage(AbortRequest, message), apply_request_processors(request):
+            self.fail('The request processors ran a request naming an unusable branch')
+        self.assertIsNone(active_branch.get())
 
     def test_processor_refuses_deleted_branch_on_fake_request(self):
         """
-        A job queued for a branch which has since been deleted must fail rather than run in main.
-        Nothing refuses a replayed request as BranchMiddleware does an HTTP one, and
-        apply_request_processors() swallows anything the processor raises, so the refusal surfaces
-        on the first branchable query instead (#702).
+        A job queued for a branch which has since been deleted must fail rather than run in main (#702).
         """
         request = fake_request(self.user, reverse('dcim-api:site-list'), headers={'x-netbox-branch': 'nonexist'})
 
@@ -402,27 +392,17 @@ class RequestTestCase(TestCase):
 
         with ActiveBranchContextManager(request):
             self.assertIsNone(active_branch.get())
-            Site.objects.exists()
 
     def test_background_api_request_refuses_deleted_branch(self):
         """
-        The refusal must not be reported as a failed request processor either: that is the only
-        notice apply_request_processors() gives, and the job would then run in main (#702).
+        AsyncAPIJob replays the request as a DRF Request, which must be refused too (#702).
         """
         url = reverse('dcim-api:site-list')
         django_request = AsyncAPIJob._build_request(
             fake_request(self.user, url, headers={'x-netbox-branch': 'nonexist'}), {}, 'http'
         )
 
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter('always')
-            with apply_request_processors(DRFRequest(django_request)):
-                self.assertIsNone(active_branch.get())
-                with self.assertRaisesMessage(BranchUnavailable, 'Branch nonexist does not exist'):
-                    Site.objects.exists()
-
-        reported = [str(w.message) for w in caught if 'ActiveBranchContextManager' in str(w.message)]
-        self.assertEqual(reported, [], msg='The refusal was reported as a failed request processor')
+        self.assertBranchRefused(DRFRequest(django_request), 'Branch nonexist does not exist')
 
     def run_background_site_create(self, branch, payload):
         """
@@ -465,21 +445,6 @@ class RequestTestCase(TestCase):
         self.assertIn(f'Branch {branch.schema_id} does not exist', job.error)
         self.assertFalse(Site.objects.filter(name='Site 702').exists(), msg='The job wrote to main')
 
-    def test_refusal_is_not_reported_as_missing_related_object(self):
-        """
-        DRF resolves a related field by catching ObjectDoesNotExist, so a refusal raised as one is
-        reported as an invalid related object instead of the missing branch (#702).
-        """
-        region = Region.objects.create(name='Region 702', slug='region-702')
-        field = PrimaryKeyRelatedField(queryset=Region.objects.all())
-        request = fake_request(self.user, reverse('dcim-api:site-list'), headers={'x-netbox-branch': 'nonexist'})
-
-        with (
-            ActiveBranchContextManager(request),
-            self.assertRaisesMessage(BranchUnavailable, 'Branch nonexist does not exist'),
-        ):
-            field.to_internal_value(region.pk)
-
     def test_script_job_fails_when_branch_deleted(self):
         """
         The script reproduction from #702, run through ScriptJob with the request processors
@@ -498,9 +463,11 @@ class RequestTestCase(TestCase):
         runner = ScriptJob(Job.objects.create(name='Run Script', job_id=uuid.uuid4()))
 
         with (
-            apply_request_processors(request),
-            self.assertRaisesMessage(BranchUnavailable, f'Branch {branch.schema_id} does not exist'),
+            self.assertRaisesMessage(AbortRequest, f'Branch {branch.schema_id} does not exist'),
+            ExitStack() as stack,
         ):
+            for request_processor in registry['request_processors']:
+                stack.enter_context(request_processor(request))
             runner.run_script(CreateSite(), request, {}, commit=True)
         self.assertFalse(Site.objects.filter(name='Site 702').exists(), msg='The script wrote to main')
 

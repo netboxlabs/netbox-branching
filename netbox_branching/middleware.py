@@ -58,7 +58,7 @@ class BranchMiddleware:
 
         # A cookie present with no branch active is stale (e.g. the branch was archived or merged since
         # it was set). Drop it from the request too: a background job queued from this request copies
-        # its cookies, and would fail on a branch the user had already fallen back to main from (#702).
+        # its cookies, and would fail on a branch the user had already fallen back to main from.
         stale_cookie = not branch and request.COOKIES.pop(COOKIE_NAME, None) is not None
 
         response = self.get_response(request)

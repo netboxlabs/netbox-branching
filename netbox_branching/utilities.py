@@ -19,6 +19,7 @@ from django.utils.translation import gettext as _
 from core.choices import JobStatusChoices
 from netbox.plugins import get_plugin_config
 from netbox.utils import register_request_processor
+from utilities.exceptions import AbortRequest
 
 from .constants import (
     _FILE_NOT_FOUND_EXCEPTIONS,
@@ -29,7 +30,7 @@ from .constants import (
     INCLUDE_MODELS,
     QUERY_PARAM,
 )
-from .contextvars import active_branch, branch_refusal
+from .contextvars import active_branch
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,6 @@ __all__ = (
     'ActiveBranchContextManager',
     'BranchActionIndicator',
     'BranchNotReady',
-    'BranchUnavailable',
     'ChangeSummary',
     'DynamicSchemaDict',
     'ListHandler',
@@ -70,7 +70,6 @@ __all__ = (
     'is_api_request',
     'is_job_abandoned',
     'record_applied_change',
-    'refuse_branch',
     'register_branching_resolver',
     'register_objectchange_field_migrator',
     'resolve_changes_summary',
@@ -167,20 +166,6 @@ def deactivate_branch():
         yield
     finally:
         active_branch.reset(token)
-
-
-@contextmanager
-def refuse_branch(reason):
-    """
-    A context manager under which every branchable query raises BranchUnavailable(reason) instead
-    of being routed. Used in place of activate_branch() when a request names a branch which cannot
-    be activated and nothing else will refuse the request, such as a background job replaying it.
-    """
-    token = branch_refusal.set(str(reason))
-    try:
-        yield
-    finally:
-        branch_refusal.reset(token)
 
 
 def get_branchable_object_types():
@@ -559,15 +544,8 @@ class BranchNotReady(Exception):
     Raised by get_active_branch() when the request names a branch which exists but is not ready for
     use. Returning the branch would let queries run against a schema which may be mid-sync, mid-merge
     or gone entirely, so the request has to be refused: BranchMiddleware translates this into an HTTP
-    400. A caller which cannot refuse the request itself must not activate a branch; it can defer the
-    refusal to the router with refuse_branch().
-    """
-
-
-class BranchUnavailable(Exception):
-    """
-    Raised by BranchAwareRouter for a branchable query made under refuse_branch(). Deliberately not
-    an ObjectDoesNotExist, which DRF and others catch as "related object not found" (#702).
+    400. Callers which cannot refuse the request (such as request processors) must treat it as "no
+    branch" rather than activating one.
     """
 
 
@@ -598,7 +576,7 @@ def get_active_branch(request, strict=False):
 
     An unready branch named by the query parameter, or a stale branch cookie, falls back to main
     instead: the user is told, and the middleware clears the cookie. With `strict`, these raise
-    too, for a request a background job replays with no user to fall back to main for (#702).
+    too, for a request a background job replays with no user to fall back to main for.
     """
     # The active Branch may be specified by HTTP header for REST & GraphQL API requests.
     # A background job receives a NetBoxFakeRequest, which has no headers attribute (#675).
@@ -710,14 +688,15 @@ def ActiveBranchContextManager(request):
     # refusal as a failed processor on every such request.
     #
     # A background job replays its request (a NetBoxFakeRequest, or the DRF Request AsyncAPIJob
-    # rebuilds) through the request processors alone, so nothing refuses it and anything raised here
-    # is swallowed. The refusal is deferred to the router instead: the first branchable query fails
-    # the job rather than running in main (#702).
+    # rebuilds) through the request processors alone, so nothing else refuses it. AbortRequest fails
+    # the job instead of letting it run in main.
     replayed = not isinstance(request, HttpRequest)
     try:
         branch = get_active_branch(request, strict=replayed)
     except (BranchNotReady, ObjectDoesNotExist) as e:
-        return refuse_branch(e) if replayed else nullcontext()
+        if replayed:
+            raise AbortRequest(str(e)) from e
+        return nullcontext()
 
     if branch:
         return activate_branch(branch)
