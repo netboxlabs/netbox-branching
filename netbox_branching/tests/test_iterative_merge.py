@@ -52,6 +52,7 @@ from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import CableTestMixin, FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import DELETED, _deep_merge_dict, _strip_deleted, activate_branch, diff_for_merge
 from utilities.exceptions import AbortTransaction
+from virtualization.models import Cluster, ClusterType
 from wireless.models import WirelessLink
 
 User = get_user_model()
@@ -2274,6 +2275,31 @@ class BaseMergeTests(CableTestMixin):
         self.assertIsNone(device.primary_ip4)
         self.assertIsNone(ip.assigned_object_id)
         self.assertEqual(interface.description, '')
+
+    def test_merge_and_revert_rescope_then_assign_cluster(self):
+        """Revert must unassign a host before restoring its cluster's scope, which Cluster.clean() checks. (#722)"""
+        site1 = Site.objects.create(name='Site 1', slug='site-1')
+        site2 = Site.objects.create(name='Site 2', slug='site-2')
+        cluster_type = ClusterType.objects.create(name='Cluster Type', slug='cluster-type')
+        cluster = Cluster.objects.create(name='Cluster', type=cluster_type, scope=site1)
+        device = Device.objects.create(name='Host', site=site2, device_type=self.device_type, role=self.device_role)
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit(cluster, scope=site2)
+            self._edit(device, cluster=cluster)
+
+        branch.merge(user=self.user, commit=True)
+
+        device.refresh_from_db()
+        self.assertEqual(device.cluster, cluster)
+
+        branch.revert(user=self.user, commit=True)
+
+        cluster.refresh_from_db()
+        device.refresh_from_db()
+        self.assertEqual(cluster.scope, site1)
+        self.assertIsNone(device.cluster)
 
 
 class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):

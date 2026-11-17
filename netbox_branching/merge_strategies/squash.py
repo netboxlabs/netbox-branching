@@ -736,43 +736,53 @@ class SquashMergeStrategy(MergeStrategy):
     @staticmethod
     def _update_reference_depths(updates):
         """
-        Map each UPDATE's key to the length of its longest reference chain through other UPDATEs, so a revert can
-        undo a referenced object (e.g. a moved Module) before the objects whose state its save() rewrites. (#722)
+        Map each UPDATE's key to the length of its longest chain of references, held both before and after the
+        change, through other UPDATEs. A revert undoes the deepest last, so a referenced object (e.g. a moved Module)
+        is undone before the objects whose state its save() rewrites. (#722)
         """
         update_keys = {u.key for u in updates}
+        # A reference the change itself added or dropped is the user's edit, so reverse time order applies
         references = {
             u.key: (
                 SquashMergeStrategy._get_fk_references(u.model_class, u.prechange_data, update_keys)
-                | SquashMergeStrategy._get_fk_references(u.model_class, u.postchange_data, update_keys)
+                & SquashMergeStrategy._get_fk_references(u.model_class, u.postchange_data, update_keys)
             )
             - {u.key}
             for u in updates
         }
         index, low, depths, stack, on_stack = {}, {}, {}, [], set()
 
-        # Tarjan's algorithm: each reference cycle shares one depth, leaving its order to time
-        def visit(key):
+        def enter(key):
             index[key] = low[key] = len(index)
             stack.append(key)
             on_stack.add(key)
-            for ref in references[key]:
-                if ref not in index:
-                    visit(ref)
-                    low[key] = min(low[key], low[ref])
-                elif ref in on_stack:
-                    low[key] = min(low[key], index[ref])
-            if low[key] == index[key]:
-                # Components pop only after every component they reference, so those depths are known
-                component = set()
-                while key not in component:
-                    component.add(stack.pop())
-                on_stack.difference_update(component)
-                depth = max((depths[ref] + 1 for k in component for ref in references[k] - component), default=0)
-                depths.update(dict.fromkeys(component, depth))
+            return key, iter(references[key])
 
-        for key in references:
-            if key not in index:
-                visit(key)
+        # Iterative Tarjan's algorithm: each reference cycle shares one depth, leaving its order to time
+        for root in references:
+            if root in index:
+                continue
+            work = [enter(root)]
+            while work:
+                key, refs = work[-1]
+                if (ref := next(refs, None)) is not None:
+                    if ref not in index:
+                        work.append(enter(ref))
+                    elif ref in on_stack:
+                        low[key] = min(low[key], index[ref])
+                    continue
+                work.pop()
+                if work:
+                    parent = work[-1][0]
+                    low[parent] = min(low[parent], low[key])
+                if low[key] == index[key]:
+                    # Components pop only after every component they reference, so those depths are known
+                    component = set()
+                    while key not in component:
+                        component.add(stack.pop())
+                    on_stack.difference_update(component)
+                    depth = max((depths[ref] + 1 for k in component for ref in references[k] - component), default=0)
+                    depths.update(dict.fromkeys(component, depth))
         return depths
 
     @staticmethod
@@ -795,6 +805,7 @@ class SquashMergeStrategy(MergeStrategy):
         Returns: ordered list of keys
         """
         logger.info('Adjusting ordering by references...')
+        update_depths = update_depths or {}
 
         # Define action priority (lower number = higher priority = processed first)
         action_priority = {
@@ -834,7 +845,7 @@ class SquashMergeStrategy(MergeStrategy):
             ready.sort(
                 key=lambda k: (
                     action_priority.get(collapsed_changes[k].final_action, 99),
-                    -(update_depths or {}).get(k, 0),
+                    -update_depths.get(k, 0),
                     collapsed_changes[k].last_change.time,
                 )
             )
@@ -877,7 +888,8 @@ class SquashMergeStrategy(MergeStrategy):
              (CREATE must exist before UPDATE can reference it)
            - If CREATE references another created object in postchange_data → referenced CREATE must come first
              (Referenced object must exist before referencing object is created)
-        3. Topological sort respecting dependencies
+        3. Topological sort respecting dependencies; on revert, ready UPDATEs are also ranked by reference depth
+           (see _update_reference_depths)
 
         This ensures:
         - DELETEs generally happen first to free unique constraints
@@ -930,8 +942,13 @@ class SquashMergeStrategy(MergeStrategy):
             collapsed_changes=to_process,
             operation=operation,
         )
-        # Revert reverses this order, so deeper-referencing UPDATEs go first here to be undone last
-        update_depths = SquashMergeStrategy._update_reference_depths(updates) if operation == 'revert' else None
+        # Revert reverses this order, so deeper-referencing UPDATEs go first here to be undone last. Read UPDATEs from
+        # to_process so any added by squash_dependency_graph_built receivers are ranked too.
+        update_depths = None
+        if operation == 'revert':
+            update_depths = SquashMergeStrategy._update_reference_depths(
+                [v for v in to_process.values() if v.final_action == ActionType.UPDATE]
+            )
         ordered_keys = SquashMergeStrategy._dependency_order_by_references(to_process, logger, update_depths)
 
         # Convert keys back to collapsed changes

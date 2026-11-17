@@ -3,10 +3,12 @@ Tests for Branch merge functionality with ObjectChange collapsing using squash m
 """
 
 import uuid
+from types import SimpleNamespace
+from unittest import mock
 
 from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
-from django.test import RequestFactory
+from django.test import RequestFactory, SimpleTestCase
 from django.urls import reverse
 
 from circuits.models import Circuit, CircuitTermination, CircuitType, Provider
@@ -14,6 +16,7 @@ from dcim.models import Device, Interface, Location, MACAddress, Region, Site, V
 from ipam.models import IPAddress
 from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
+from netbox_branching.merge_strategies.squash import SquashMergeStrategy
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase
 from netbox_branching.utilities import activate_branch
 
@@ -1051,3 +1054,31 @@ class SquashMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
             Site.objects.filter(id=site_id).exists(),
             msg='UPDATE+DELETE must collapse to a single DELETE; main row remains',
         )
+
+
+class UpdateReferenceDepthsTestCase(SimpleTestCase):
+    """Unit tests for SquashMergeStrategy._update_reference_depths(). (#722)"""
+
+    @staticmethod
+    def _depths(references):
+        """Rank UPDATEs given each one's references, held both before and after the change."""
+        updates = [
+            SimpleNamespace(key=key, model_class=None, prechange_data=refs, postchange_data=refs)
+            for key, refs in references.items()
+        ]
+        with mock.patch.object(
+            SquashMergeStrategy, '_get_fk_references', side_effect=lambda model, data, keys: set(data) & keys
+        ):
+            return SquashMergeStrategy._update_reference_depths(updates)
+
+    def test_chain(self):
+        self.assertEqual(self._depths({'a': {'b'}, 'b': {'c'}, 'c': set()}), {'a': 2, 'b': 1, 'c': 0})
+
+    def test_cycle_shares_one_depth(self):
+        depths = self._depths({'a': {'b'}, 'b': {'c'}, 'c': {'a', 'd'}, 'd': set(), 'e': {'a'}})
+        self.assertEqual(depths, {'a': 1, 'b': 1, 'c': 1, 'd': 0, 'e': 2})
+
+    def test_long_chain_does_not_recurse(self):
+        length = 5000
+        depths = self._depths({i: {i + 1} if i + 1 < length else set() for i in range(length)})
+        self.assertEqual(depths[0], length - 1)
