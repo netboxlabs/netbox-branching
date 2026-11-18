@@ -64,12 +64,24 @@ def appconfig_version():
     max_version declarations cannot be picked up by accident.
     """
     tree = ast.parse(APPCONFIG.read_text())
+    # Module-level constants, so `version = __version__` resolves to the scaffold's header.
+    constants = {
+        t.id: node.value.value
+        for node in tree.body
+        if isinstance(node, ast.Assign) and isinstance(node.value, ast.Constant)
+        for t in node.targets
+        if isinstance(t, ast.Name)
+    }
     for class_def in (node for node in ast.walk(tree) if isinstance(node, ast.ClassDef)):
         for statement in class_def.body:
-            if not isinstance(statement, ast.Assign) or not isinstance(statement.value, ast.Constant):
+            if not isinstance(statement, ast.Assign):
                 continue
-            if any(isinstance(t, ast.Name) and t.id == 'version' for t in statement.targets):
+            if not any(isinstance(t, ast.Name) and t.id == 'version' for t in statement.targets):
+                continue
+            if isinstance(statement.value, ast.Constant):
                 return statement.value.value
+            if isinstance(statement.value, ast.Name) and statement.value.id in constants:
+                return constants[statement.value.id]
     raise SystemExit(f'Could not find a version declaration in {APPCONFIG}')
 
 

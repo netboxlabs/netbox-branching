@@ -1,7 +1,8 @@
 <!--
-    Thank you for contributing to NetBox Branching! Pull requests are
-    accepted ONLY for approved issues. Specify the issue resolved by this
-    PR on the line below.
+    Thank you for your interest in contributing to NetBox Branching! Pull
+    requests are accepted ONLY for approved, assigned issues. Specify the
+    issue resolved by this PR on the line below; PRs that do not reference
+    an assigned issue will be closed automatically.
 -->
 ### Fixes: #1234
 

@@ -56,15 +56,16 @@ Changelog = "https://github.com/netboxlabs/netbox-branching/releases"
 
 [project.optional-dependencies]
 dev = [
-    "build==1.2.2",
-    "twine==6.1.0",
+    "build==1.6.1",
+    "twine==7.0.0",
 ]
 test = [
     "check-manifest==0.51",
-    "coverage[toml]==7.6.10",
+    "coverage[toml]==7.17.0",
+    "tblib==3.2.2",
 ]
 docs = [
-    "zensical==0.0.73",
+    "zensical==0.1.1",
 ]
 
 [tool.check-manifest]
@@ -77,6 +78,7 @@ ignore = [
     "AGENTS.md",
     "CLAUDE.md",
     "COMPATIBILITY.md",
+    "CONTRIBUTING.md",
     "SECURITY.md",
     "docs/*.md",
     "docs/models/*.md",

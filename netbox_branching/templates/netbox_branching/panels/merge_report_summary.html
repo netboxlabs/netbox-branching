@@ -41,7 +41,7 @@
       </tr>
     </table>
     {% if changes_summary %}
-      {% include 'netbox_branching/inc/changes_summary.html' with prefix='report' expanded=True %}
+      {% include "netbox_branching/inc/changes_summary.html" with prefix="report" expanded=True %}
     {% endif %}
   {% endif %}
 {% endblock panel_content %}

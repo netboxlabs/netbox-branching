@@ -5,9 +5,9 @@
   <div class="card-body">
     {% if added is None %}
       <span class="text-muted">
-        {% if object.action == 'create' %}
+        {% if object.action == "create" %}
           {% trans "Object Created" %}
-        {% elif object.action == 'delete' %}
+        {% elif object.action == "delete" %}
           {% trans "Object Deleted" %}
         {% else %}
           {% trans "No Changes" %}

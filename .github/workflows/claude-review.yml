@@ -48,14 +48,14 @@ jobs:
       actions: read  # Required for Claude to read CI results on PRs
     steps:
       - name: Checkout repository
-        # actions/checkout v6.0.2
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
       - name: Run Claude Code
         id: claude
-        # anthropics/claude-code-action v1.0.108
-        uses: anthropics/claude-code-action@11a9dadd198803a0cea6bd53da3e0e8a762fc6ea  # yamllint disable-line rule:line-length
+        # anthropics/claude-code-action v1.0.248
+        uses: anthropics/claude-code-action@1d6de8cb0c237e7c15e9e1bdf973826ebae490cc  # yamllint disable-line rule:line-length
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}

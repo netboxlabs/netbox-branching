@@ -6,11 +6,15 @@ commit messages.
 
 ## Checklist
 
-1. **Bump the version in both declaration sites.** `version` in `pyproject.toml` and
-   `AppConfig.version` in `netbox_branching/__init__.py` must agree; the release
-   workflow fails the build if they don't, on release PRs as well as on the tag.
+1. **Bump the version.** From a clean tree, run
+   `copier update --trust --defaults --vcs-ref=:current: --data version=X.Y.Z`. It bumps
+   `version` in `pyproject.toml` and `__version__` in `netbox_branching/__init__.py`, which
+   must agree. Resolve the `pyproject.toml` conflict by keeping the
+   `netboxlabs-netbox-branching` name with the new version, and keep this repo's
+   `README.md`; the release workflow fails the build if they don't, on release PRs as well
+   as on the tag.
 
-2. **Update the change log.** Add the release's entries to `docs/changelog.md`.
+2. **Update the change log.** Add the release's entries to `docs/releases.md`.
 
 3. **Push the tag.**
 
@@ -48,3 +52,7 @@ as a pre-release automatically.
 Running the release workflow manually (`workflow_dispatch`) from a `v*` tag publishes to
 Test PyPI instead of production PyPI. This requires a trusted publisher configured for
 the project on Test PyPI.
+
+## See also
+
+- [Contributing](contributing.md) for the pre-release development flow.

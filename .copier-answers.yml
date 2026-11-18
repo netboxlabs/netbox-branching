@@ -1,10 +1,10 @@
 # Changes here will be overwritten by Copier; NEVER EDIT MANUALLY.
-_commit: ff54ed718f4fe58055b31de5137d7fb2d92f3cfa
+_commit: 13ded70
 _src_path: gh:netboxlabs/netbox-plugin-scaffold
 author_email: support@netboxlabs.com
 author_name: NetBox Labs
 branching_support: true
-commercial: true
+commercial: false
 current_year: 2026
 default_model_name: ''
 dev_status: 5 - Production/Stable
@@ -30,5 +30,5 @@ ruff_version: 0.15.2
 serializers_layout: flat
 short_description: A git-like branching implementation for NetBox
 tables_layout: subpackage
-version: 1.2.1
+version: 1.2.3
 views_layout: flat
