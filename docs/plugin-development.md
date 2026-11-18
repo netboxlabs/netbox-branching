@@ -314,6 +314,6 @@ The recommended practice is to install or upgrade plugins before creating branch
 
 ### Making an Existing Model Branchable
 
-An edge case arises when a plugin release makes an existing model branchable, e.g. by adding change logging or a [branching resolver](#opting-in-register_branching_resolver). Migrating a branch does not add tables for models that were not branchable when it was provisioned, so open branches have no table for the model and changes made to it within them are written directly to main.
+An edge case arises when an existing model becomes branchable, e.g. when a plugin release adds change logging or a [branching resolver](#opting-in-register_branching_resolver) to it, or when an operator removes it from [`exempt_models`](#opting-out-exempt_models). Migrating a branch does not add tables for models that were not branchable when it was provisioned, so open branches have no table for the model and changes made to it within them are written directly to main.
 
 Treat such a release as a breaking change, and highlight in its release notes that users must merge, archive or delete all open branches before upgrading.
