@@ -1059,37 +1059,60 @@ class SquashMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
 class RevertSideEffectEdgesTestCase(SimpleTestCase):
     """Unit tests for SquashMergeStrategy._add_revert_side_effect_edges(). (#722)"""
 
+    MOVE = (1, 'device', 1, 2)
+
     @staticmethod
     def _edges(nodes):
-        """Add edges for UPDATEs given as {key: (references, request_ids, depends_on)}; return each one's depends_on."""
+        """Add edges for UPDATEs given as {key: (references, fk_moves, depends_on)}; return each one's depends_on."""
         changes = {
             key: SimpleNamespace(
                 key=key,
                 final_action=ActionType.UPDATE,
                 prechange_data=refs,
                 postchange_data=refs,
-                request_ids=requests,
+                fk_moves=set(moves),
                 depends_on=set(depends_on),
                 depended_by=set(),
             )
-            for key, (refs, requests, depends_on) in nodes.items()
+            for key, (refs, moves, depends_on) in nodes.items()
         }
-        with mock.patch.object(
-            SquashMergeStrategy,
-            '_iter_references',
-            side_effect=lambda collapsed, nodes, ct_cache, data: ((None, ref, False) for ref in data if ref in nodes),
+        with (
+            mock.patch.object(
+                SquashMergeStrategy,
+                '_iter_references',
+                side_effect=lambda collapsed, nodes, ct_cache, data: (
+                    (None, ref, False) for ref in data if ref in nodes
+                ),
+            ),
+            mock.patch.object(SquashMergeStrategy, '_fk_moves', side_effect=lambda collapsed: collapsed.fk_moves),
         ):
             SquashMergeStrategy._add_revert_side_effect_edges(changes, mock.Mock())
         return {key: change.depends_on for key, change in changes.items()}
 
-    def test_same_request(self):
-        edges = self._edges({'module': (set(), {1}, ()), 'interface': ({'module'}, {1, 2}, ())})
+    def test_same_move_in_same_request(self):
+        edges = self._edges({'module': (set(), {self.MOVE}, ()), 'interface': ({'module'}, {self.MOVE}, ())})
         self.assertEqual(edges, {'module': {'interface'}, 'interface': set()})
 
-    def test_separate_requests(self):
-        edges = self._edges({'cluster': (set(), {1}, ()), 'device': ({'cluster'}, {2}, ())})
+    def test_different_moves_in_same_request(self):
+        edges = self._edges({'cluster': (set(), {(1, 'site', 1, 2)}, ()), 'device': ({'cluster'}, {self.MOVE}, ())})
         self.assertEqual(edges, {'cluster': set(), 'device': set()})
 
-    def test_skips_edge_closing_cycle(self):
-        edges = self._edges({'a': ({'b'}, {1}, ()), 'b': ({'a'}, {1}, ())})
-        self.assertEqual(edges, {'a': set(), 'b': {'a'}})
+    def test_same_move_in_different_requests(self):
+        edges = self._edges({'module': (set(), {self.MOVE}, ()), 'interface': ({'module'}, {(2, *self.MOVE[1:])}, ())})
+        self.assertEqual(edges, {'module': set(), 'interface': set()})
+
+    def test_skips_every_edge_in_cycle(self):
+        edges = self._edges({'a': ({'b'}, {self.MOVE}, ()), 'b': ({'a'}, {self.MOVE}, ())})
+        self.assertEqual(edges, {'a': set(), 'b': set()})
+
+    def test_skips_edge_closing_cycle_with_existing_dependency(self):
+        edges = self._edges(
+            {'module': (set(), {self.MOVE}, ('interface',)), 'interface': ({'module'}, {self.MOVE}, ())}
+        )
+        self.assertEqual(edges, {'module': {'interface'}, 'interface': set()})
+        edges = self._edges({'module': (set(), {self.MOVE}, ()), 'interface': ({'module'}, {self.MOVE}, ('module',))})
+        self.assertEqual(edges, {'module': set(), 'interface': {'module'}})
+
+    def test_ignores_dependency_outside_changes(self):
+        edges = self._edges({'module': (set(), {self.MOVE}, ('skipped',)), 'interface': ({'module'}, {self.MOVE}, ())})
+        self.assertEqual(edges, {'module': {'skipped', 'interface'}, 'interface': set()})

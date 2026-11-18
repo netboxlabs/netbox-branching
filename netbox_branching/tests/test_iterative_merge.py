@@ -2038,11 +2038,16 @@ class BaseMergeTests(CableTestMixin):
     def _edit(self, obj, **attrs):
         """Apply a change-logged edit to an object in the active schema."""
         with event_tracking(self._make_request()):
-            obj = type(obj).objects.get(pk=obj.pk)
-            obj.snapshot()
-            for name, value in attrs.items():
-                setattr(obj, name, value)
-            obj.save()
+            self._save(obj, **attrs)
+
+    @staticmethod
+    def _save(obj, **attrs):
+        """Apply a change-logged edit to an object within the current request."""
+        obj = type(obj).objects.get(pk=obj.pk)
+        obj.snapshot()
+        for name, value in attrs.items():
+            setattr(obj, name, value)
+        obj.save()
 
     def test_merge_and_revert_wireless_link_create(self):
         """Merge and revert a branch which links two existing interfaces with a new wireless link."""
@@ -2305,6 +2310,36 @@ class BaseMergeTests(CableTestMixin):
         with activate_branch(branch):
             self._edit(cluster, scope=site)
             self._edit(device, location=location2)
+
+        branch.merge(user=self.user, commit=True)
+        branch.revert(user=self.user, commit=True)
+
+        cluster.refresh_from_db()
+        device.refresh_from_db()
+        self.assertEqual(cluster.scope, location1)
+        self.assertEqual((device.location, device.cluster), (location1, cluster))
+
+    def test_revert_widen_cluster_scope_then_move_host_in_one_request(self):
+        """Independent edits made by one request (e.g. a script) are still undone in reverse time order."""
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        location1, location2 = (
+            Location.objects.create(name=f'Location {i}', slug=f'location-{i}', site=site) for i in (1, 2)
+        )
+        cluster_type = ClusterType.objects.create(name='Cluster Type', slug='cluster-type')
+        cluster = Cluster.objects.create(name='Cluster', type=cluster_type, scope=location1)
+        device = Device.objects.create(
+            name='Host',
+            site=site,
+            location=location1,
+            cluster=cluster,
+            device_type=self.device_type,
+            role=self.device_role,
+        )
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            self._save(cluster, scope=site)
+            self._save(device, location=location2)
 
         branch.merge(user=self.user, commit=True)
         branch.revert(user=self.user, commit=True)

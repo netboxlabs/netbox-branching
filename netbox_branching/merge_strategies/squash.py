@@ -44,7 +44,7 @@ class CollapsedChange:
         self.last_change = None  # The most recent ObjectChange (for metadata)
         self.synthetic = False  # True for UPDATEs injected by cycle breaking
         self.touched_fields = set()  # Fields altered by any individual UPDATE, even if net unchanged
-        self.request_ids = set()  # Requests which changed this object
+        self.request_changes = {}  # request_id -> {field: (old, new)} for each field an UPDATE in it altered
 
         # Dependencies for ordering
         self.depends_on = set()  # Set of keys this change depends on
@@ -67,7 +67,6 @@ class CollapsedChange:
         """
         self.change_count += 1
         self.last_change = change
-        self.request_ids.add(change.request_id)
 
         # Dispatch to specific handler based on action type
         if change.action == 'create':
@@ -89,7 +88,11 @@ class CollapsedChange:
     def _add_change_update(self, change, logger):
         """Handle UPDATE action."""
         pre, post = change.prechange_data or {}, change.postchange_data or {}
-        self.touched_fields.update(k for k in pre.keys() | post.keys() if pre.get(k) != post.get(k))
+        changed = {k for k in pre.keys() | post.keys() if pre.get(k) != post.get(k)}
+        self.touched_fields.update(changed)
+        request_changes = self.request_changes.setdefault(change.request_id, {})
+        for k in changed:
+            request_changes[k] = (request_changes.get(k, (pre.get(k),))[0], post.get(k))
         if self.final_action is None:
             self.final_action = ActionType.UPDATE
             self._set_initial_data(change)
@@ -439,8 +442,8 @@ class SquashMergeStrategy(MergeStrategy):
         """
         Yield ``(field_name, target_key, breakable)`` for every concrete ForeignKey and
         GenericForeignKey in ``data`` — the post-change snapshot for a CREATE, the
-        pre-change snapshot for a DELETE — that points at another object in ``nodes``
-        (self-references excluded). Fields are visited in model definition order, so the
+        pre-change snapshot for a DELETE, either snapshot for an UPDATE — that points at
+        another object in ``nodes`` (self-references excluded). Fields are visited in model definition order, so the
         yielded sequence is deterministic.
 
         ``breakable`` is True only for nullable concrete ForeignKeys — the edges a cycle
@@ -738,39 +741,93 @@ class SquashMergeStrategy(MergeStrategy):
     @staticmethod
     def _add_revert_side_effect_edges(collapsed_changes, logger):
         """
-        For revert, make an UPDATE depend on each UPDATE which references it throughout and shares a request with it:
-        that save() rewrote the referencing object (e.g. a moved Module's components), so it must be undone first,
-        and revert reverses this order. Edges which would close a cycle are skipped, leaving those to time. (#722)
+        For revert, make an UPDATE depend on each UPDATE which references it throughout and moved one of its FKs
+        identically in the same request: that save() moved the referencing object along (e.g. a moved Module's
+        components), so it must be undone first, and revert reverses this order. Edges inside a dependency cycle
+        are dropped, leaving those to time. (#722)
         """
         updates = {k: c for k, c in collapsed_changes.items() if c.final_action == ActionType.UPDATE}
         ct_cache = {}
-        for update in updates.values():
+        moves = {key: SquashMergeStrategy._fk_moves(update) for key, update in updates.items()}
+        candidates = set()
+        for key, update in updates.items():
             held_before, held_after = (
                 {ref for _, ref, _ in SquashMergeStrategy._iter_references(update, updates, ct_cache, data)}
                 for data in (update.prechange_data, update.postchange_data)
             )
-            for ref_key in held_before & held_after:
-                referenced = updates[ref_key]
-                if not update.request_ids & referenced.request_ids:
-                    continue
-                if SquashMergeStrategy._depends_on(collapsed_changes, update.key, ref_key):
-                    logger.debug(f'    Not ordering {update} before {referenced}: would close a cycle')
-                    continue
-                referenced.depends_on.add(update.key)
-                update.depended_by.add(ref_key)
-                logger.debug(f'    {referenced} depends on {update} (its save() rewrote the referencing object)')
+            candidates.update((ref_key, key) for ref_key in held_before & held_after if moves[key] & moves[ref_key])
+        if not candidates:
+            return
+
+        adjacency = {
+            key: {dep for dep in c.depends_on if dep in collapsed_changes} for key, c in collapsed_changes.items()
+        }
+        for src, dst in candidates:
+            adjacency[src].add(dst)
+        component = SquashMergeStrategy._strongly_connected_components(adjacency)
+        for src, dst in candidates:
+            referenced, update = collapsed_changes[src], collapsed_changes[dst]
+            if component[src] == component[dst]:
+                logger.debug(f'    Not ordering {update} before {referenced}: would close a cycle')
+                continue
+            referenced.depends_on.add(dst)
+            update.depended_by.add(src)
+            logger.debug(f'    {referenced} depends on {update} (its save() moved the referencing object)')
 
     @staticmethod
-    def _depends_on(collapsed_changes, key, target):
-        """Return True if ``key`` depends on ``target``, directly or transitively."""
-        seen, stack = set(), [key]
-        while stack:
-            for dep in collapsed_changes[stack.pop()].depends_on - seen:
-                if dep == target:
-                    return True
-                seen.add(dep)
-                stack.append(dep)
-        return False
+    def _fk_moves(collapsed):
+        """Return ``(request_id, related model, old pk, new pk)`` for each ForeignKey an UPDATE changed."""
+        fields = {
+            field.name: field.related_model
+            for field in collapsed.model_class._meta.get_fields()
+            if isinstance(field, models.ForeignKey)
+        }
+        return {
+            (request_id, fields[name], old, new)
+            for request_id, changes in collapsed.request_changes.items()
+            for name, (old, new) in changes.items()
+            if name in fields
+        }
+
+    @staticmethod
+    def _strongly_connected_components(adjacency):
+        """
+        Map each key of the directed graph ``adjacency`` (key -> iterable of keys) to the index of its strongly
+        connected component, using an iterative Tarjan's algorithm. Targets outside ``adjacency`` are ignored.
+        """
+        index, lowlink, component, on_stack, stack = {}, {}, {}, set(), []
+        for root in adjacency:
+            if root in index:
+                continue
+            index[root] = lowlink[root] = len(index)
+            stack.append(root)
+            on_stack.add(root)
+            work = [(root, iter(adjacency[root]))]
+            while work:
+                node, targets = work[-1]
+                for target in targets:
+                    if target not in adjacency:
+                        continue
+                    if target not in index:
+                        index[target] = lowlink[target] = len(index)
+                        stack.append(target)
+                        on_stack.add(target)
+                        work.append((target, iter(adjacency[target])))
+                        break
+                    if target in on_stack:
+                        lowlink[node] = min(lowlink[node], index[target])
+                else:
+                    work.pop()
+                    if work:
+                        lowlink[work[-1][0]] = min(lowlink[work[-1][0]], lowlink[node])
+                    if lowlink[node] == index[node]:
+                        while True:
+                            member = stack.pop()
+                            on_stack.discard(member)
+                            component[member] = index[node]
+                            if member == node:
+                                break
+        return component
 
     @staticmethod
     def _dependency_order_by_references(collapsed_changes, logger):
@@ -872,7 +929,7 @@ class SquashMergeStrategy(MergeStrategy):
              (CREATE must exist before UPDATE can reference it)
            - If CREATE references another created object in postchange_data → referenced CREATE must come first
              (Referenced object must exist before referencing object is created)
-           - On revert, an UPDATE depends on UPDATEs its save() rewrote (see _add_revert_side_effect_edges)
+           - On revert, an UPDATE depends on UPDATEs its save() moved along (see _add_revert_side_effect_edges)
         3. Topological sort respecting dependencies
 
         This ensures:
