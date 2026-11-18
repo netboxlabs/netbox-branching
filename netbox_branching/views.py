@@ -168,6 +168,7 @@ class GroupedChangesViewMixin:
         return groups
 
     def prep_table_data(self, request, queryset, parent):
+        self.branch = parent
         if self._is_drilldown(request):
             return queryset
         return self._aggregate(queryset)
@@ -175,7 +176,9 @@ class GroupedChangesViewMixin:
     def get_table(self, data, request, bulk_actions=True):
         if self._is_drilldown(request):
             self.table = self.flat_table
-        return super().get_table(data, request, bulk_actions)
+        table = super().get_table(data, request, bulk_actions)
+        table.branch = self.branch
+        return table
 
 
 @register_model_view(Branch, 'changes-behind')

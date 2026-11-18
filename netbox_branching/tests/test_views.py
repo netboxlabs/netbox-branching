@@ -5,7 +5,7 @@ from django.contrib.auth import get_user_model
 from django.contrib.contenttypes.models import ContentType
 from django.contrib.messages import get_messages
 from django.core.exceptions import ValidationError
-from django.db import connections
+from django.db import connection, connections
 from django.test import RequestFactory, TestCase, override_settings
 from django.urls import reverse
 from django_rq import get_queue
@@ -13,7 +13,9 @@ from django_rq import get_queue
 from core.choices import JobStatusChoices, ObjectChangeActionChoices
 from core.models import ObjectChange
 from dcim.models import Site
+from extras.models import ConfigContext
 from netbox.context import current_request
+from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.constants import QUERY_PARAM
 from netbox_branching.jobs import MergeBranchJob
@@ -823,6 +825,106 @@ class ChangeDiffViewTestCase(TestCase):
         )
         response = self.client.get(self._url(diff))
         self.assertEqual(response.status_code, 200)
+
+
+class ChangedObjectLinkTestCase(FastTeardownTransactionTestCase):
+    """
+    The Diff tab and the Change Diff page link each changed object as it is in main, leaving objects created in the
+    branch unlinked until it is merged. The Changes Ahead drill-down links objects in the branch with it activated.
+    """
+
+    serialized_rollback = True
+
+    def setUp(self):
+        self.user = User.objects.create_user(username='testuser', is_superuser=True)
+        self.client.force_login(self.user)
+        self.request = RequestFactory().get(reverse('home'))
+        self.request.id = uuid.uuid4()
+        self.request.user = self.user
+
+        with event_tracking(self.request):
+            self.updated = Site.objects.create(name='Updated Site', slug='updated-site')
+            self.deleted = Site.objects.create(name='Deleted Site', slug='deleted-site')
+        self.branch = provision_branch(user=self.user)
+        with activate_branch(self.branch), event_tracking(self.request):
+            self.created = Site.objects.create(name='Created Site', slug='created-site')
+            site = Site.objects.get(pk=self.updated.pk)
+            site.snapshot()
+            site.description = 'changed in branch'
+            site.save()
+            Site.objects.get(pk=self.deleted.pk).delete()
+
+    def tearDown(self):
+        for branch in Branch.objects.all():
+            if branch.connection_name in connections:
+                connections[branch.connection_name].close()
+
+    def _diff(self, site):
+        return ChangeDiff.objects.get(branch=self.branch, object_id=site.pk)
+
+    def _branch_url(self, site):
+        return f'{site.get_absolute_url()}?{QUERY_PARAM}={self.branch.schema_id}'
+
+    def test_objects_are_found_in_main(self):
+        created, updated, deleted = (self._diff(site) for site in (self.created, self.updated, self.deleted))
+        self.assertIsNone(created.get_object())
+        self.assertIsNone(created.get_object_url())
+        self.assertEqual(updated.get_object().description, '')
+        self.assertEqual(updated.get_object_url(), self.updated.get_absolute_url())
+        self.assertEqual(deleted.get_object().pk, self.deleted.pk)
+        self.assertEqual(deleted.get_object_url(), self.deleted.get_absolute_url())
+
+    def test_created_object_is_found_once_merged(self):
+        self.branch.merge(user=self.user, commit=True)
+        for status in (BranchStatusChoices.MERGED, BranchStatusChoices.ARCHIVED):
+            with self.subTest(status=status):
+                Branch.objects.filter(pk=self.branch.pk).update(status=status)
+                created, deleted = (self._diff(site) for site in (self.created, self.deleted))
+                self.assertEqual(created.get_object_url(), self.created.get_absolute_url())
+                self.assertIsNone(deleted.get_object())
+
+    def test_objects_are_resolved_with_one_query_per_type(self):
+        ContentType.objects.get_for_model(Site)  # Warm the ContentType cache
+        diffs = list(ChangeDiff.objects.filter(branch=self.branch).select_related('branch'))
+        self.assertEqual(len(diffs), 3)
+        with self.assertNumQueries(1), self.assertNumQueries(0, using=self.branch.connection_name):
+            ChangeDiff.resolve_objects(diffs)
+
+    def test_diff_tab_links_objects(self):
+        response = self.client.get(reverse('plugins:netbox_branching:branch_diff', args=[self.branch.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, f'href="{self.created.get_absolute_url()}')
+        self.assertContains(response, 'Created Site')
+        self.assertContains(response, f'href="{self.updated.get_absolute_url()}"')
+        self.assertContains(response, f'href="{self.deleted.get_absolute_url()}"')
+
+    def test_diff_tab_with_type_missing_from_main(self):
+        # A type whose table exists only in the branch, like a custom object type created there
+        with activate_branch(self.branch), event_tracking(self.request):
+            ConfigContext.objects.create(name='Created Context', data={})
+        table = ConfigContext._meta.db_table
+        with connection.cursor() as cursor:
+            cursor.execute(f'ALTER TABLE public.{table} RENAME TO {table}_hidden')
+        try:
+            response = self.client.get(reverse('plugins:netbox_branching:branch_diff', args=[self.branch.pk]))
+        finally:
+            with connection.cursor() as cursor:
+                cursor.execute(f'ALTER TABLE public.{table}_hidden RENAME TO {table}')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Created Context')
+
+    def test_changediff_page_links_object(self):
+        diff = self._diff(self.updated)
+        response = self.client.get(reverse('plugins:netbox_branching:changediff', args=[diff.pk]))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f'href="{self.updated.get_absolute_url()}"')
+
+    def test_changes_ahead_drilldown_links_object_in_branch(self):
+        url = reverse('plugins:netbox_branching:branch_changes-ahead', args=[self.branch.pk])
+        response = self.client.get(f'{url}?request_id={self.request.id}')
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, f'href="{self._branch_url(self.created)}"')
+        self.assertContains(response, f'href="{self._branch_url(self.updated)}"')
 
 
 class GroupedChangesViewMixinTestCase(TestCase):

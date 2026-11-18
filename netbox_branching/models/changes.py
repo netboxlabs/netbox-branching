@@ -1,7 +1,9 @@
 import logging
+from collections import defaultdict
 from functools import cached_property
 
 from django.contrib.contenttypes.fields import GenericForeignKey
+from django.contrib.contenttypes.models import ContentType
 from django.contrib.postgres.fields import ArrayField
 from django.db import DEFAULT_DB_ALIAS, models
 from django.urls import reverse
@@ -12,6 +14,7 @@ from mptt.models import MPTTModel
 from core.choices import ObjectChangeActionChoices
 from core.models import ObjectChange as ObjectChange_
 from netbox.models.features import ChangeLoggingMixin
+from netbox_branching.choices import BranchStatusChoices
 from netbox_branching.utilities import (
     clear_mptt_fields,
     diff_for_merge,
@@ -284,6 +287,52 @@ class ChangeDiff(models.Model):
 
     def get_action_color(self):
         return ObjectChangeActionChoices.colors.get(self.action)
+
+    @classmethod
+    def resolve_objects(cls, diffs):
+        """
+        Look up the changed object of each ChangeDiff in main, making one query per object type. An object created in
+        the branch isn't in main (nor, for a type also created there, is its table) until the branch is merged, so
+        until then it is left as None.
+        """
+        diffs = [diff for diff in diffs if not hasattr(diff, '_changed_object')]
+        branch_model = cls._meta.get_field('branch').related_model
+        uncached_branch_ids = {diff.branch_id for diff in diffs if not cls.branch.is_cached(diff)}
+        branches = branch_model.objects.in_bulk(uncached_branch_ids) if uncached_branch_ids else {}
+
+        merged_statuses = (BranchStatusChoices.MERGED, BranchStatusChoices.ARCHIVED)
+        groups = defaultdict(list)
+        for diff in diffs:
+            branch = diff.branch if cls.branch.is_cached(diff) else branches[diff.branch_id]
+            diff._changed_object = None
+            if diff.action == ObjectChangeActionChoices.ACTION_CREATE and branch.status not in merged_statuses:
+                continue
+            groups[diff.object_type_id].append(diff)
+
+        for object_type_id, group in groups.items():
+            model = ContentType.objects.get_for_id(object_type_id).model_class()
+            if model is None:
+                continue
+            objects = model._base_manager.using(DEFAULT_DB_ALIAS).in_bulk({diff.object_id for diff in group})
+            for diff in group:
+                diff._changed_object = objects.get(diff.object_id)
+
+    def get_object(self):
+        """
+        Return the changed object as it is in main (see resolve_objects()), or None if it isn't there.
+        """
+        if not hasattr(self, '_changed_object'):
+            self.resolve_objects([self])
+        return self._changed_object
+
+    def get_object_url(self):
+        """
+        Return the URL of the changed object in main, if it is there and has one.
+        """
+        obj = self.get_object()
+        if obj is None or not hasattr(obj, 'get_absolute_url'):
+            return None
+        return obj.get_absolute_url()
 
     def _update_conflicts(self):
         """

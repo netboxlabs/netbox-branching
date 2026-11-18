@@ -117,7 +117,7 @@ class ChangeDiffSerializer(NetBoxModelSerializer):
         Serialize a nested representation of the changed object.
         """
         try:
-            target = obj.object
+            target = obj.get_object()
             if target is None:
                 return None
 

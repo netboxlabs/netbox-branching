@@ -430,6 +430,8 @@ class ChangeDiffSerializerTestCase(BaseAPITestCase, FastTeardownTransactionTestC
         result = json.loads(response.content)['results'][0]
         self.assertIn('diff', result)
         self.assertEqual(result['diff'], {'original': {}, 'modified': {}, 'current': {}})
+        # The object isn't in main until the branch is merged
+        self.assertIsNone(result['object'])
 
     def test_changediff_list_update_action(self):
         """
