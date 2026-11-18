@@ -95,7 +95,8 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 ├── docs/                      — Zensical docs site.
 │   ├── models/                — Per-model documentation.
 │   ├── using-branches/        — User guides.
-│   └── development/           — Maintainer guides (releasing).
+│   ├── development/           — Contributing (includes CONTRIBUTING.md) and releasing guides.
+│   └── releases.md            — Change log.
 ├── testing/
 │   └── configuration.py       — NetBox config used by the test workflow.
 ├── scripts/                   — Packaging verification scripts run by release.yaml.
@@ -345,7 +346,7 @@ surface. A `copier update` will offer to add it; decline. The `ui/` package is m
 
 See [`docs/development/releasing.md`](./docs/development/releasing.md) for the user-facing version.
 
-1. From a clean tree, run `copier update --trust --defaults --vcs-ref=:current: --data version=X.Y.Z`. It records the answer and bumps `version` in `pyproject.toml` and `__version__` in `netbox_branching/__init__.py` (which `AppConfig.version` reads). It conflicts in `pyproject.toml`, where the project `name` sits next to `version` (keep `netboxlabs-netbox-branching` and take the new version), and in `README.md`, where you keep this repo's side. The two must agree — `release.yaml` fails the build if they don't, on release PRs as well as on the tag itself.
+1. From a clean tree, run `copier update --trust --defaults --vcs-ref=:current: --data version=X.Y.Z`. It records the answer and bumps `version` in `pyproject.toml` and `__version__` in `netbox_branching/__init__.py` (which `AppConfig.version` reads). The two must agree — `release.yaml` fails the build if they don't, on release PRs as well as on the tag itself. The update conflicts in `pyproject.toml`, where the project `name` sits next to `version` (keep `netboxlabs-netbox-branching` and take the new version), and in `README.md`, where you keep this repo's side.
 2. Update `docs/releases.md`.
 3. Push a `vX.Y.Z` tag. `release.yaml` builds, verifies, publishes to PyPI, and attaches the sdist and wheel to the GitHub release.
 4. Write the release notes. If the release was created up front, the tag push just attaches the artifacts to it; if the tag was pushed on its own, the workflow leaves an empty draft release to paste the notes into and publish. Nothing is ever generated from commit messages.

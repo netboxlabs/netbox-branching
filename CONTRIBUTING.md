@@ -115,10 +115,11 @@ NetBox development environment.
 1. **Clone this repository** and create or activate a virtual environment.
 
 2. **Install the plugin in editable mode** from the repo root, including
-   the `docs` and `test` extras for building documentation and testing:
+   the `dev`, `test` and `docs` extras for packaging, testing and building
+   documentation:
 
    ```bash
-   pip install -e '.[docs,test]'
+   pip install -e '.[dev,test,docs]'
    ```
 
 3. **Install pre-commit hooks** so lint runs locally on every commit:

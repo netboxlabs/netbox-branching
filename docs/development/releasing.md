@@ -8,11 +8,11 @@ commit messages.
 
 1. **Bump the version.** From a clean tree, run
    `copier update --trust --defaults --vcs-ref=:current: --data version=X.Y.Z`. It bumps
-   `version` in `pyproject.toml` and `__version__` in `netbox_branching/__init__.py`, which
-   must agree. Resolve the `pyproject.toml` conflict by keeping the
+   `version` in `pyproject.toml` and `__version__` in `netbox_branching/__init__.py`. The
+   two must agree; the release workflow fails the build if they don't, on release PRs as
+   well as on the tag. Resolve the `pyproject.toml` conflict by keeping the
    `netboxlabs-netbox-branching` name with the new version, and keep this repo's
-   `README.md`; the release workflow fails the build if they don't, on release PRs as well
-   as on the tag.
+   `README.md`.
 
 2. **Update the change log.** Add the release's entries to `docs/releases.md`.
 
