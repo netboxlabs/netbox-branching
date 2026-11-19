@@ -544,8 +544,8 @@ class BranchNotReady(Exception):
     Raised by get_active_branch() when the request names a branch which exists but is not ready for
     use. Returning the branch would let queries run against a schema which may be mid-sync, mid-merge
     or gone entirely, so the request has to be refused: BranchMiddleware translates this into an HTTP
-    400. Callers which cannot refuse the request (such as request processors) must treat it as "no
-    branch" rather than activating one.
+    400, and the request processor into AbortRequest for a background job. The processor treats it as
+    "no branch" for a live request, which BranchMiddleware then refuses.
     """
 
 
