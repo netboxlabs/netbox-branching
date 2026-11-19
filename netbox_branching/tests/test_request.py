@@ -441,7 +441,7 @@ class RequestTestCase(TestCase):
         branch = Branch.objects.first()
         job = self.run_background_site_create(branch, {'name': 'Site 702', 'slug': 'site-702'})
 
-        self.assertEqual(job.status, JobStatusChoices.STATUS_ERRORED)
+        self.assertEqual(job.status, JobStatusChoices.STATUS_FAILED)
         self.assertIn(f'Branch {branch.schema_id} does not exist', job.error)
         self.assertFalse(Site.objects.filter(name='Site 702').exists(), msg='The job wrote to main')
 
