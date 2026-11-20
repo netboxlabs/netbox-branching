@@ -8,7 +8,7 @@ commercial: false
 current_year: 2026
 default_model_name: ''
 dev_status: 5 - Production/Stable
-django_version: '5.2'
+django_version: '6.1'
 filtersets_layout: flat
 forms_layout: type_files
 github_org: netboxlabs
@@ -16,7 +16,7 @@ layout_style: custom
 models_layout: subpackage
 netbox_max_version: 4.7.99
 netbox_min_version: 4.7.0
-netbox_test_max_ref: v4.7.0
+netbox_test_max_ref: v4.7.5
 netbox_test_min_ref: v4.7.0
 package_name: netbox_branching
 plugin_name: NetBox Branching

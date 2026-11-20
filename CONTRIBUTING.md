@@ -175,7 +175,7 @@ requires and migration handling.
 - **Supported NetBox:** 4.7.0 to 4.7.99
   (matches the `PluginConfig` declaration in
   `netbox_branching/__init__.py`).
-- **Django:** 5.2 (matches the supported NetBox runtime).
+- **Django:** 6.1 (matches the supported NetBox runtime).
 - **Typing:** Prefer adding or improving type hints where it increases
   clarity.
 
