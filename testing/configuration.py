@@ -14,6 +14,10 @@ DATABASES = DynamicSchemaDict({
         "HOST": "localhost",
         "PORT": "",
         "CONN_MAX_AGE": 300,
+        # Own test database, so concurrent suites of other projects never collide.
+        "TEST": {
+            "NAME": "test_netbox_branching",
+        },
     },
 })
 

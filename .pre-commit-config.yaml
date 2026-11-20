@@ -1,5 +1,6 @@
 ---
-# Pre-commit configuration, following netbox-plugin-scaffold.
+# Default pre-commit configuration for NetBox Labs plugins.
+# Generated from netbox-plugin-scaffold.
 # Tool-level config lives in pyproject.toml.
 
 repos:
@@ -35,19 +36,19 @@ repos:
       - id: ruff-format
 
   - repo: https://github.com/adamchainz/django-upgrade
-    rev: 1.30.0
+    rev: 1.33.0
     hooks:
       - id: django-upgrade
-        args: [--target-version, "5.2"]
+        args: [--target-version, "6.1"]
 
   - repo: https://github.com/djlint/djLint
-    rev: v1.36.4
+    rev: v1.47.1
     hooks:
       - id: djlint-django
       - id: djlint-reformat-django
 
   - repo: https://github.com/codespell-project/codespell
-    rev: v2.4.2
+    rev: v2.4.3
     hooks:
       - id: codespell
         additional_dependencies: [tomli]

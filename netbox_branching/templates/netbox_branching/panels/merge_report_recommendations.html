@@ -17,7 +17,7 @@
           {% for rec in entry.recommendations %}
             <li value="{{ forloop.counter }}">{{ rec }}</li>
             {% if not forloop.last %}
-              <li class="list-unstyled text-muted small fst-italic py-1">&mdash; {% trans "or" %} &mdash;</li>
+              <li class="list-unstyled text-muted small fst-italic py-1">— {% trans "or" %} —</li>
             {% endif %}
           {% endfor %}
         </ol>

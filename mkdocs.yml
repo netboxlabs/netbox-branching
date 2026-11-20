@@ -35,6 +35,9 @@ markdown_extensions:
   - pymdownx.emoji:
       emoji_index: !!python/name:zensical.extensions.emoji.twemoji
       emoji_generator: !!python/name:zensical.extensions.emoji.to_svg
+  - pymdownx.snippets:
+      base_path: ['.']
+      check_paths: true
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
@@ -51,6 +54,7 @@ nav:
       - Reverting a Branch: 'using-branches/reverting-a-branch.md'
   - Best Practices: 'best-practices.md'
   - Plugin Development: 'plugin-development.md'
+  - Contributing: 'development/contributing.md'
   - Releasing: 'development/releasing.md'
   - NetBox Docker: 'netbox-docker.md'
   - REST API: 'rest-api.md'
@@ -61,4 +65,4 @@ nav:
       - BranchEvent: 'models/branchevent.md'
       - ChangeDiff: 'models/changediff.md'
       - ObjectChange: 'models/objectchange.md'
-  - Change Log: 'changelog.md'
+  - Change Log: 'releases.md'

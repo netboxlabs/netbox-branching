@@ -1,14 +1,14 @@
 # Changes here will be overwritten by Copier; NEVER EDIT MANUALLY.
-_commit: ff54ed718f4fe58055b31de5137d7fb2d92f3cfa
+_commit: 13ded70
 _src_path: gh:netboxlabs/netbox-plugin-scaffold
 author_email: support@netboxlabs.com
 author_name: NetBox Labs
 branching_support: true
-commercial: true
+commercial: false
 current_year: 2026
 default_model_name: ''
 dev_status: 5 - Production/Stable
-django_version: '5.2'
+django_version: '6.1'
 filtersets_layout: flat
 forms_layout: type_files
 github_org: netboxlabs
@@ -16,7 +16,7 @@ layout_style: custom
 models_layout: subpackage
 netbox_max_version: 4.7.99
 netbox_min_version: 4.7.0
-netbox_test_max_ref: v4.7.0
+netbox_test_max_ref: v4.7.5
 netbox_test_min_ref: v4.7.0
 package_name: netbox_branching
 plugin_name: NetBox Branching
@@ -30,5 +30,5 @@ ruff_version: 0.15.2
 serializers_layout: flat
 short_description: A git-like branching implementation for NetBox
 tables_layout: subpackage
-version: 1.2.1
+version: 1.2.3
 views_layout: flat

@@ -95,7 +95,8 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 ├── docs/                      — Zensical docs site.
 │   ├── models/                — Per-model documentation.
 │   ├── using-branches/        — User guides.
-│   └── development/           — Maintainer guides (releasing).
+│   ├── development/           — Contributing (includes CONTRIBUTING.md) and releasing guides.
+│   └── releases.md            — Change log.
 ├── testing/
 │   └── configuration.py       — NetBox config used by the test workflow.
 ├── scripts/                   — Packaging verification scripts run by release.yaml.
@@ -112,6 +113,7 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 ├── AGENTS.md                  — This file.
 ├── CLAUDE.md                  — Shim that pulls in this file.
 ├── COMPATIBILITY.md           — Plugin → NetBox version matrix.
+├── CONTRIBUTING.md            — Contribution guide (scaffold-rendered; included by docs/development/contributing.md).
 ├── mkdocs.yml                 — Docs config (read by Zensical).
 └── pyproject.toml             — Plugin metadata, dependencies, and all tool config.
 ```
@@ -279,19 +281,25 @@ via `.copier-answers.yml`. Pull scaffold improvements with:
 copier update --trust
 ```
 
-`.copier-answers.yml` is generated — change the answers by re-running Copier, not by editing it.
+`.copier-answers.yml` is generated — change the answers by re-running Copier, not by editing it:
+`copier update --trust --defaults --vcs-ref=:current: --data <answer>=<value>` from a clean tree.
 
-The scaffold targets *private* plugins, so a few surfaces are deliberately divergent and any
-`copier update` that touches them must be resolved in this repo's favour:
+This plugin is source-available, so `commercial` must stay `false`: it selects the NetBox Limited
+Use License in `LICENSE.md`, `CONTRIBUTING.md` (and its docs page) and the bug report's volunteer
+checkbox. With `true`, an update relicenses the plugin as proprietary.
+
+A few surfaces are deliberately divergent and any `copier update` that touches them must be
+resolved in this repo's favour:
 
 | Surface | Why it diverges |
 |---|---|
-| `.github/workflows/release.yaml` | The scaffold publishes to internal CodeArtifact. This plugin publishes to public PyPI via OIDC trusted publishing, with the tag/wheel verification in `scripts/`. Reject the scaffold's `release.yml` outright. |
+| `.github/workflows/release.yaml` | The scaffold publishes to internal CodeArtifact. This plugin publishes to public PyPI via OIDC trusted publishing, with the tag/wheel verification in `scripts/`. Reject the scaffold's `release.yml` outright; keep the `.yaml` name, which the PyPI trusted publisher is registered against. |
 | `docs/development/releasing.md` | Documents the PyPI flow above, not CodeArtifact. |
 | `pyproject.toml` `[project].name` | Must stay `netboxlabs-netbox-branching`; the scaffold derives it from `repo_slug`. |
+| `netbox_branching/__init__.py` | Keep the scaffold's `__version__` / `__author__` / `__email__` header, which Copier updates; the rest of `AppConfig` is hand-maintained. |
+| `README.md`, `COMPATIBILITY.md`, `mkdocs.yml` | Plugin-specific content and nav; the scaffold's placeholders are rejected. |
 | `pyproject.toml` `[tool.setuptools]` | Kept as-is because `scripts/verify_wheel_contents.py` asserts against this exact packaging shape. |
 | `testing/configuration.py` | Maintained by hand for this plugin's `DynamicSchemaDict` / `BranchAwareRouter` requirements. |
-| `docs/changelog.md` | This repo's change log; the scaffold ships `docs/releases.md`. |
 | `.yamllint` | The scaffold ships the `yamllint` hook but renders no config, so this one is adapted from the scaffold's own root config. |
 | `.github/workflows/test.yml` matrix | Tests NetBox `main` only. The scaffold adds `netbox_test_min_ref` / `netbox_test_max_ref` legs, which break as soon as a feature depends on unreleased NetBox changes. Coverage runs on the `main` leg. |
 
@@ -326,19 +334,20 @@ surface. A `copier update` will offer to add it; decline. The `ui/` package is m
 
 ### Bump the supported NetBox version
 
-1. Update `min_version` / `max_version` in `netbox_branching/__init__.py`.
-2. Update `COMPATIBILITY.md`.
-3. Update the `netbox_min_version` / `netbox_max_version` / `netbox_test_min_ref` /
-   `netbox_test_max_ref` answers in `.copier-answers.yml`.
+1. Record the new range with Copier from a clean tree, e.g.
+   `copier update --trust --defaults --vcs-ref=:current: --data netbox_max_version=X.Y.99 --data netbox_test_max_ref=vX.Y.Z`
+   (raise the floor with `netbox_min_version` / `netbox_test_min_ref`).
+2. Update `min_version` / `max_version` in `netbox_branching/__init__.py` to match.
+3. Update `COMPATIBILITY.md`.
 4. Run the suite locally against the new version.
-5. Note any compatibility changes or breaking changes in `docs/changelog.md`.
+5. Note any compatibility changes or breaking changes in `docs/releases.md`.
 
 ### Cut a release
 
 See [`docs/development/releasing.md`](./docs/development/releasing.md) for the user-facing version.
 
-1. Bump `version` in both `pyproject.toml` and `netbox_branching/__init__.py`. The two must agree — `release.yaml` fails the build if they don't, on release PRs as well as on the tag itself.
-2. Update `docs/changelog.md`.
+1. From a clean tree, run `copier update --trust --defaults --vcs-ref=:current: --data version=X.Y.Z`. It records the answer and bumps `version` in `pyproject.toml` and `__version__` in `netbox_branching/__init__.py` (which `AppConfig.version` reads). The two must agree — `release.yaml` fails the build if they don't, on release PRs as well as on the tag itself. The update conflicts in `pyproject.toml`, where the project `name` sits next to `version` (keep `netboxlabs-netbox-branching` and take the new version), and in `README.md`, where you keep this repo's side.
+2. Update `docs/releases.md`.
 3. Push a `vX.Y.Z` tag. `release.yaml` builds, verifies, publishes to PyPI, and attaches the sdist and wheel to the GitHub release.
 4. Write the release notes. If the release was created up front, the tag push just attaches the artifacts to it; if the tag was pushed on its own, the workflow leaves an empty draft release to paste the notes into and publish. Nothing is ever generated from commit messages.
 
