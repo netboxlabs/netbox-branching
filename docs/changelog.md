@@ -7,7 +7,7 @@
 * [#683](https://github.com/netboxlabs/netbox-branching/issues/683) - Document that open branches must be merged before an existing model becomes branchable
 * [#705](https://github.com/netboxlabs/netbox-branching/issues/705) - Handle the renamed tag object type column in migration 0006 when upgrading from v0.6.x
 * [#711](https://github.com/netboxlabs/netbox-branching/issues/711) - Preserve generated columns when provisioning a branch
-* [#713](https://github.com/netboxlabs/netbox-branching/issues/713) - Bound conflict rendering on the sync and merge pages and API; 409 responses now include `conflict_count` and list at most 50 conflicts (the full set is available from `changes/?branch_id=<id>&has_conflicts=True`)
+* [#713](https://github.com/netboxlabs/netbox-branching/issues/713) - Limit how many conflicts the sync and merge pages and API list, to keep them fast for branches with many conflicts
 * [#728](https://github.com/netboxlabs/netbox-branching/issues/728) - Copy the tables of models made branchable by a plugin resolver into new branches
 * [#731](https://github.com/netboxlabs/netbox-branching/issues/731) - Don't look up objects created in an unmerged branch in main on the Diff tab and Change Diff page
 * [#732](https://github.com/netboxlabs/netbox-branching/issues/732) - Skip tables missing from main when provisioning a branch
