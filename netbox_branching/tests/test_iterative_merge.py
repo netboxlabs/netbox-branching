@@ -24,20 +24,28 @@ from dcim.models import (
     DeviceRole,
     DeviceType,
     FrontPort,
+    FrontPortTemplate,
     Interface,
+    InterfaceTemplate,
+    Location,
     MACAddress,
     Manufacturer,
+    Module,
     ModuleBay,
     ModuleBayTemplate,
+    ModuleType,
     PortMapping,
+    PortTemplateMapping,
     Rack,
     RearPort,
+    RearPortTemplate,
     Region,
     Site,
     VirtualChassis,
 )
 from extras.choices import CustomFieldTypeChoices
 from extras.models import ConfigTemplate, CustomField, Tag
+from ipam.models import IPAddress
 from netbox.context_managers import event_tracking
 from netbox_branching.choices import BranchMergeStrategyChoices, BranchStatusChoices
 from netbox_branching.error_report import build_error_report, get_entry_message, get_merge_recommendations
@@ -45,6 +53,7 @@ from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import CableTestMixin, FastTeardownTransactionTestCase, provision_branch
 from netbox_branching.utilities import DELETED, _deep_merge_dict, _strip_deleted, activate_branch, diff_for_merge
 from utilities.exceptions import AbortTransaction
+from virtualization.models import Cluster, ClusterType
 from wireless.models import WirelessLink
 
 User = get_user_model()
@@ -2029,11 +2038,16 @@ class BaseMergeTests(CableTestMixin):
     def _edit(self, obj, **attrs):
         """Apply a change-logged edit to an object in the active schema."""
         with event_tracking(self._make_request()):
-            obj = type(obj).objects.get(pk=obj.pk)
-            obj.snapshot()
-            for name, value in attrs.items():
-                setattr(obj, name, value)
-            obj.save()
+            self._save(obj, **attrs)
+
+    @staticmethod
+    def _save(obj, **attrs):
+        """Apply a change-logged edit to an object within the current request."""
+        obj = type(obj).objects.get(pk=obj.pk)
+        obj.snapshot()
+        for name, value in attrs.items():
+            setattr(obj, name, value)
+        obj.save()
 
     def test_merge_and_revert_wireless_link_create(self):
         """Merge and revert a branch which links two existing interfaces with a new wireless link."""
@@ -2185,6 +2199,201 @@ class BaseMergeTests(CableTestMixin):
         self.assertEqual(child.site, site1)
         self.assertEqual(child.description, 'Edited in main')
 
+    def _merge_module_move(self):
+        """
+        Merge a branch which moves a module to a bay on another device, taking its interface, nested module bay
+        and port mapping with it.
+        """
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        for position in ('1', '2'):
+            ModuleBayTemplate.objects.create(device_type=self.device_type, name=f'Slot {position}', position=position)
+        module_type = ModuleType.objects.create(manufacturer=self.manufacturer, model='Module Type 1')
+        InterfaceTemplate.objects.create(module_type=module_type, name='Ethernet{module}/1', type='1000base-t')
+        ModuleBayTemplate.objects.create(module_type=module_type, name='Sub {module}')
+        PortTemplateMapping.objects.create(
+            module_type=module_type,
+            front_port=FrontPortTemplate.objects.create(module_type=module_type, name='Front', type='8p8c'),
+            rear_port=RearPortTemplate.objects.create(module_type=module_type, name='Rear', type='8p8c'),
+        )
+        device_a, device_b = (
+            Device.objects.create(name=name, site=site, device_type=self.device_type, role=self.device_role)
+            for name in ('Chassis A', 'Chassis B')
+        )
+        module = Module.objects.create(
+            device=device_a, module_bay=device_a.modulebays.get(name='Slot 1'), module_type=module_type
+        )
+        components = (module.interfaces.get(), module.modulebays.get(), PortMapping.objects.get(device=device_a))
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit(module, device=device_b, module_bay=device_b.modulebays.get(name='Slot 2'))
+
+        branch.merge(user=self.user, commit=True)
+
+        interface, nested_bay, _ = components
+        for component in components:
+            component.refresh_from_db()
+            self.assertEqual(component.device, device_b)
+        self.assertEqual((interface.name, nested_bay.name), ('Ethernet2/1', 'Sub 2'))
+
+        return branch, module, components, device_a
+
+    def test_merge_module_move(self):
+        self._merge_module_move()
+
+    def test_revert_module_move(self):
+        """Undoing a component's move before its module's is a lone cross-device move, which clean() rejects. (#722)"""
+        branch, module, components, device_a = self._merge_module_move()
+
+        branch.revert(user=self.user, commit=True)
+
+        module.refresh_from_db()
+        self.assertEqual((module.device, module.module_bay.name), (device_a, 'Slot 1'))
+        interface, nested_bay, _ = components
+        for component in components:
+            component.refresh_from_db()
+            self.assertEqual(component.device, device_a)
+        self.assertEqual((interface.name, nested_bay.name), ('Ethernet1/1', 'Sub 1'))
+
+    def test_revert_module_move_with_created_reference(self):
+        """A moved component which also references a branch-created object is still undone after its module. (#722)"""
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        for position in ('1', '2'):
+            ModuleBayTemplate.objects.create(device_type=self.device_type, name=f'Slot {position}', position=position)
+        module_type = ModuleType.objects.create(manufacturer=self.manufacturer, model='Module Type 1')
+        InterfaceTemplate.objects.create(module_type=module_type, name='Ethernet{module}/1', type='1000base-t')
+        device_a, device_b = (
+            Device.objects.create(name=name, site=site, device_type=self.device_type, role=self.device_role)
+            for name in ('Chassis A', 'Chassis B')
+        )
+        module = Module.objects.create(
+            device=device_a, module_bay=device_a.modulebays.get(name='Slot 1'), module_type=module_type
+        )
+        interface = module.interfaces.get()
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit(module, device=device_b, module_bay=device_b.modulebays.get(name='Slot 2'))
+            with event_tracking(self._make_request()):
+                mac = MACAddress.objects.create(mac_address='00:00:00:00:00:01', assigned_object=interface)
+            self._edit(interface, primary_mac_address=mac)
+
+        branch.merge(user=self.user, commit=True)
+        branch.revert(user=self.user, commit=True)
+
+        module.refresh_from_db()
+        interface.refresh_from_db()
+        self.assertEqual(module.device, device_a)
+        self.assertEqual(
+            (interface.device, interface.name, interface.primary_mac_address), (device_a, 'Ethernet1/1', None)
+        )
+        self.assertFalse(MACAddress.objects.filter(pk=mac.pk).exists())
+
+    def test_revert_widen_cluster_scope_then_move_host(self):
+        """A host moved within its cluster's widened scope is undone before the scope is narrowed again."""
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        location1, location2 = (
+            Location.objects.create(name=f'Location {i}', slug=f'location-{i}', site=site) for i in (1, 2)
+        )
+        cluster_type = ClusterType.objects.create(name='Cluster Type', slug='cluster-type')
+        cluster = Cluster.objects.create(name='Cluster', type=cluster_type, scope=location1)
+        device = Device.objects.create(
+            name='Host',
+            site=site,
+            location=location1,
+            cluster=cluster,
+            device_type=self.device_type,
+            role=self.device_role,
+        )
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit(cluster, scope=site)
+            self._edit(device, location=location2)
+
+        branch.merge(user=self.user, commit=True)
+        branch.revert(user=self.user, commit=True)
+
+        cluster.refresh_from_db()
+        device.refresh_from_db()
+        self.assertEqual(cluster.scope, location1)
+        self.assertEqual((device.location, device.cluster), (location1, cluster))
+
+    def test_revert_widen_cluster_scope_then_move_host_in_one_request(self):
+        """Independent edits made by one request (e.g. a script) are still undone in reverse time order."""
+        region = Region.objects.create(name='Region', slug='region')
+        site1, site2 = (Site.objects.create(name=f'Site {i}', slug=f'site-{i}', region=region) for i in (1, 2))
+        cluster_type = ClusterType.objects.create(name='Cluster Type', slug='cluster-type')
+        cluster = Cluster.objects.create(name='Cluster', type=cluster_type, scope=site1)
+        device = Device.objects.create(
+            name='Host', site=site1, cluster=cluster, device_type=self.device_type, role=self.device_role
+        )
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            self._save(cluster, scope=region)
+            self._save(device, site=site2)
+
+        branch.merge(user=self.user, commit=True)
+        branch.revert(user=self.user, commit=True)
+
+        cluster.refresh_from_db()
+        device.refresh_from_db()
+        self.assertEqual(cluster.scope, site1)
+        self.assertEqual((device.site, device.cluster), (site1, cluster))
+
+    def test_merge_and_revert_update_reference_cycle(self):
+        """Revert a branch whose UPDATEs reference each other in a cycle (Device -> IP -> Interface -> Device)."""
+        site = Site.objects.create(name='Test Site', slug='test-site')
+        device = Device.objects.create(name='Device', site=site, device_type=self.device_type, role=self.device_role)
+        interface = Interface.objects.create(device=device, name='eth0', type='1000base-t')
+        ip = IPAddress.objects.create(address='10.0.0.1/24')
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit(interface, description='Edited in branch')
+            self._edit(ip, assigned_object=interface)
+            self._edit(device, primary_ip4=ip)
+
+        branch.merge(user=self.user, commit=True)
+
+        device.refresh_from_db()
+        self.assertEqual(device.primary_ip4, ip)
+
+        branch.revert(user=self.user, commit=True)
+
+        device.refresh_from_db()
+        ip.refresh_from_db()
+        interface.refresh_from_db()
+        self.assertIsNone(device.primary_ip4)
+        self.assertIsNone(ip.assigned_object_id)
+        self.assertEqual(interface.description, '')
+
+    def test_merge_and_revert_rescope_then_assign_cluster(self):
+        """Revert must unassign a host before restoring its cluster's scope, which Cluster.clean() checks. (#722)"""
+        site1 = Site.objects.create(name='Site 1', slug='site-1')
+        site2 = Site.objects.create(name='Site 2', slug='site-2')
+        cluster_type = ClusterType.objects.create(name='Cluster Type', slug='cluster-type')
+        cluster = Cluster.objects.create(name='Cluster', type=cluster_type, scope=site1)
+        device = Device.objects.create(name='Host', site=site2, device_type=self.device_type, role=self.device_role)
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch):
+            self._edit(cluster, scope=site2)
+            self._edit(device, cluster=cluster)
+
+        branch.merge(user=self.user, commit=True)
+
+        device.refresh_from_db()
+        self.assertEqual(device.cluster, cluster)
+
+        branch.revert(user=self.user, commit=True)
+
+        cluster.refresh_from_db()
+        device.refresh_from_db()
+        self.assertEqual(cluster.scope, site1)
+        self.assertIsNone(device.cluster)
+
 
 class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
     """Test cases for Branch merge using iterative merge strategy."""
@@ -2195,6 +2404,16 @@ class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
     def test_revert_cable_delete(self):
         """Reverse-chronological undo restores each interface's cable FK before the cable itself. Refs: #693"""
         super().test_revert_cable_delete()
+
+    @unittest.expectedFailure
+    def test_revert_module_move(self):
+        """Reverse-chronological undo moves each component back before its module. Refs: #722"""
+        super().test_revert_module_move()
+
+    @unittest.expectedFailure
+    def test_revert_module_move_with_created_reference(self):
+        """Reverse-chronological undo moves each component back before its module. Refs: #722"""
+        super().test_revert_module_move_with_created_reference()
 
 
 class DiffForMergeTests(SimpleTestCase):
