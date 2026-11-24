@@ -20,6 +20,9 @@ from .strategy import MergeStrategy
 
 __all__ = ('SquashMergeStrategy',)
 
+# Rows fetched per query when refreshing squashed creates' private fields
+PRIVATE_FIELDS_CHUNK_SIZE = 1000
+
 
 class ActionType(StrEnum):
     """
@@ -202,7 +205,8 @@ class SquashMergeStrategy(MergeStrategy):
         """
         Take each collapsed CREATE's private (underscore-prefixed) fields from its current row in the branch. These
         hold derived state, often kept by database triggers which log no change, so the last logged value can be stale.
-        UPDATEs replay only public fields, leaving private ones to the destination. (#743)
+        UPDATEs replay only public fields, leaving private ones to the destination. Values derived from objects main
+        changed after the last sync stay stale until the branch is synced. (#743)
         """
         creates_by_model = defaultdict(dict)
         for collapsed in collapsed_changes.values():
@@ -213,10 +217,13 @@ class SquashMergeStrategy(MergeStrategy):
             fields = [field.name for field in model._meta.concrete_fields if field.name.startswith('_')]
             if not fields:
                 continue
-            instances = model._base_manager.using(branch.connection_name).filter(pk__in=creates)
-            for row in json.loads(serializers.serialize('json', instances, fields=fields)):
-                data = creates[row['pk']].postchange_data
-                data.update({name: value for name, value in row['fields'].items() if name in data})
+            queryset = model._base_manager.using(branch.connection_name).only('pk', *fields)
+            pks = list(creates)
+            for i in range(0, len(pks), PRIVATE_FIELDS_CHUNK_SIZE):
+                instances = queryset.filter(pk__in=pks[i : i + PRIVATE_FIELDS_CHUNK_SIZE])
+                for row in json.loads(serializers.serialize('json', instances, fields=fields)):
+                    data = creates[row['pk']].postchange_data
+                    data.update({name: value for name, value in row['fields'].items() if name in data})
 
     def merge(self, branch, changes, request, logger, user):
         """
