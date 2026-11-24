@@ -28,6 +28,7 @@ from dcim.models import (
     DeviceType,
     FrontPort,
     Interface,
+    InterfaceTemplate,
     Manufacturer,
     Platform,
     PortMapping,
@@ -162,6 +163,33 @@ class SyncTestCase(CableTestMixin, FastTeardownTransactionTestCase):
 
         branch.refresh_from_db()
         self.assertGreater(branch.last_sync, initial_last_sync)
+
+    def test_sync_counter_cache_create_then_update(self):
+        """Syncing a create, child add and update from main leaves the branch counter correct. (#740)"""
+        branch = self._create_and_provision_branch()
+
+        def new_request():
+            request = RequestFactory().get(reverse('home'))
+            request.id = uuid.uuid4()
+            request.user = self.user
+            return request
+
+        with event_tracking(new_request()):
+            device_type = DeviceType.objects.create(manufacturer=self.manufacturer, model='DT2', slug='dt2')
+        with event_tracking(new_request()):
+            InterfaceTemplate.objects.create(device_type=device_type, name='eth0', type='1000base-t')
+        with event_tracking(new_request()):
+            device_type = DeviceType.objects.get(pk=device_type.pk)
+            device_type.snapshot()
+            device_type.description = 'Updated'
+            device_type.save()
+
+        branch.sync(user=self.user, commit=True)
+
+        with activate_branch(branch):
+            device_type = DeviceType.objects.get(pk=device_type.pk)
+            self.assertEqual(device_type.description, 'Updated')
+            self.assertEqual(device_type.interface_template_count, 1)
 
     # -------------------------------------------------------------------------
     # Conflict / concurrent modification scenarios
