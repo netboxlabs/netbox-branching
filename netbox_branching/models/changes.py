@@ -20,6 +20,7 @@ from netbox_branching.utilities import (
     diff_for_merge,
     full_clean_with_file_check,
     resolve_objectchange_field_migration,
+    strip_counter_cache_fields,
     strip_schema_local_references,
     update_object,
 )
@@ -97,6 +98,7 @@ class ObjectChange(ObjectChange_):
 
         Fields in ``replay_fields`` are written from the target snapshot even when net unchanged, since a side effect
         replayed earlier may have reset them; dicts are left to the nested diff to preserve sibling keys. (#688)
+        Counter cache fields are dropped; the destination's counter signals maintain them. (#740)
         """
         source, target = self.prechange_data_clean, self.postchange_data_clean
         if reverse:
@@ -105,7 +107,7 @@ class ObjectChange(ObjectChange_):
         for field in self.replay_fields:
             if field not in data and field in target and not isinstance(target[field], dict):
                 data[field] = target[field]
-        return data
+        return strip_counter_cache_fields(self.changed_object_type.model_class(), data)
 
     def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None, skip_missing=False):
         """
@@ -122,7 +124,7 @@ class ObjectChange(ObjectChange_):
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
             # Rows of schema-local models are rebuilt in the destination, so the source's IDs are meaningless there.
             # UPDATE and restore replay *_clean data, which drops private fields such as _path; only CREATE needs this.
-            data = strip_schema_local_references(model, self.postchange_data)
+            data = strip_counter_cache_fields(model, strip_schema_local_references(model, self.postchange_data))
             if hasattr(model, 'deserialize_object'):
                 instance = model.deserialize_object(data, pk=self.changed_object_id)
             else:
@@ -203,7 +205,8 @@ class ObjectChange(ObjectChange_):
 
         # Restoring a deleted object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
-            deserialized = deserialize_object(model, self.prechange_data_clean, pk=self.changed_object_id)
+            data = strip_counter_cache_fields(model, self.prechange_data_clean)
+            deserialized = deserialize_object(model, data, pk=self.changed_object_id)
             instance = deserialized.object
             logger.debug(f'Restoring {model._meta.verbose_name} {instance}')
 
