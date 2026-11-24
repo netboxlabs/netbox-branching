@@ -35,6 +35,8 @@ While a branch is being merged, its status will show "merging."
 
 Once a branch has been merged, it can be [reverted](./reverting-a-branch.md), archived, or deleted. Archiving a branch removes its associated schema from the PostgreSQL database to reclaim space; an archived branch cannot be reverted, but its event history is retained for future reference.
 
+Each change log entry a merge creates in main records the branch it came from. The branch is shown on the entry's detail page, in the optional **Branch** column of the change log, and as the `branch` field on `ObjectChangeType` in GraphQL (null for changes made directly in main). Deleting a merged branch removes this attribution.
+
 ## Merge Strategies
 
 Both strategies read the same source data: the ObjectChange audit log recorded while you worked inside the branch. The difference is _how_ those records are applied to main.

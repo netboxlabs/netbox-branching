@@ -9,6 +9,7 @@ from .models import Branch, ChangeDiff
 __all__ = (
     'BranchNotification',
     'BranchSelector',
+    'ObjectChangeBranch',
     'ScriptNotification',
     'ShareButton',
     'template_extensions',
@@ -56,6 +57,22 @@ class BranchNotification(PluginTemplateExtension):
         )
 
 
+class ObjectChangeBranch(PluginTemplateExtension):
+    models = ('core.objectchange',)
+
+    def left_page(self):
+        if not (application := getattr(self.context['object'], 'application', None)):
+            return ''
+        if not self.context['request'].user.has_perm('netbox_branching.view_branch', application.branch):
+            return ''
+        return self.render(
+            'netbox_branching/inc/objectchange_branch.html',
+            extra_context={
+                'branch': application.branch,
+            },
+        )
+
+
 class ScriptNotification(PluginTemplateExtension):
     models = ('extras.script',)
 
@@ -71,6 +88,7 @@ class ScriptNotification(PluginTemplateExtension):
 template_extensions = (
     BranchSelector,
     BranchNotification,
+    ObjectChangeBranch,
     ScriptNotification,
     ShareButton,
 )

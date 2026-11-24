@@ -31,6 +31,7 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 │   ├── error_report.py        — Error reporting helpers.
 │   ├── events.py              — BranchEvent creation and management.
 │   ├── filtersets.py          — BranchFilterSet, BranchEventFilterSet, ChangeDiffFilterSet.
+│   ├── graphql_extensions.py  — Adds the source `branch` field to NetBox's ObjectChangeType.
 │   ├── jobs.py                — AsyncJob subclasses: Provision, Sync, Merge, Revert, Migrate.
 │   ├── middleware.py          — BranchMiddleware: per-request branch context activation.
 │   ├── navigation.py          — Plugin menu definition.
@@ -296,7 +297,7 @@ The scaffold targets *private* plugins, so a few surfaces are deliberately diver
 | `.github/workflows/test.yml` matrix | Tests NetBox `main` only. The scaffold adds `netbox_test_min_ref` / `netbox_test_max_ref` legs, which break as soon as a feature depends on unreleased NetBox changes. Coverage runs on the `main` leg. |
 
 The scaffold's `graphql/` stub package is intentionally absent — this plugin has no GraphQL
-surface. A `copier update` will offer to add it; decline. The `ui/` package is maintained by hand
+schema of its own, only the core type extensions in `graphql_extensions.py`. A `copier update` will offer to add it; decline. The `ui/` package is maintained by hand
 (see below), so reject the scaffold's stub for it too.
 
 ## Common Tasks
