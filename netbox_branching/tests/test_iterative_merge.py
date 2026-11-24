@@ -25,6 +25,7 @@ from dcim.models import (
     DeviceType,
     FrontPort,
     Interface,
+    Location,
     MACAddress,
     Manufacturer,
     ModuleBay,
@@ -2184,6 +2185,39 @@ class BaseMergeTests(CableTestMixin):
         child.refresh_from_db()
         self.assertEqual(child.site, site1)
         self.assertEqual(child.description, 'Edited in main')
+
+    def _merge_component_of_moved_device(self, delete_old_location):
+        """Merge a branch which creates a device with an interface, then moves the device to another location."""
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            location_a = Location.objects.create(site=site, name='Location A', slug='location-a')
+            device = Device.objects.create(
+                name='Device 1', site=site, location=location_a, device_type=self.device_type, role=self.device_role
+            )
+            interface = Interface.objects.create(device=device, name='eth0', type='1000base-t')
+            location_b = Location.objects.create(site=site, name='Location B', slug='location-b')
+        with activate_branch(branch):
+            self._edit(device, location=location_b)
+            if delete_old_location:
+                with event_tracking(self._make_request()):
+                    Location.objects.get(pk=location_a.pk).delete()
+
+        branch.merge(user=self.user, commit=True)
+
+        interface = Interface.objects.get(pk=interface.pk)
+        self.assertEqual(interface._site_id, site.pk)
+        self.assertEqual(interface._location_id, location_b.pk)
+        self.assertEqual(Device.objects.get(pk=device.pk).location_id, location_b.pk)
+
+    def test_merge_component_of_moved_device(self):
+        """A component's trigger-maintained _location follows its device's move. Refs: #743"""
+        self._merge_component_of_moved_device(delete_old_location=False)
+
+    def test_merge_component_of_moved_device_old_location_deleted(self):
+        """A component's stale _location must not reference a location deleted in the branch. Refs: #743"""
+        self._merge_component_of_moved_device(delete_old_location=True)
 
 
 class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
