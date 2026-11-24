@@ -98,7 +98,7 @@ class ObjectChange(ObjectChange_):
 
         Fields in ``replay_fields`` are written from the target snapshot even when net unchanged, since a side effect
         replayed earlier may have reset them; dicts are left to the nested diff to preserve sibling keys. (#688)
-        Counter cache fields are dropped; the destination's counter signals maintain them. (#740)
+        Counter cache fields are dropped; the destination's counter signals maintain them.
         """
         source, target = self.prechange_data_clean, self.postchange_data_clean
         if reverse:
@@ -344,7 +344,8 @@ class ChangeDiff(models.Model):
         ``original``, ``modified``, and ``current`` are each passed through any
         registered ObjectChange field migrators before comparison so that a
         rename in one snapshot doesn't appear as a divergent key set.  Models
-        without a registered migrator are compared as-is.
+        without a registered migrator are compared as-is. Counter cache fields
+        are ignored since merge doesn't write them.
 
         The migrator hook is internal and subject to change; external plugins
         should not rely on it.
@@ -352,9 +353,10 @@ class ChangeDiff(models.Model):
         if self.original is None:
             return
         model = self.object_type.model_class()
-        original = resolve_objectchange_field_migration(model, self.original)
-        modified = resolve_objectchange_field_migration(model, self.modified)
-        current = resolve_objectchange_field_migration(model, self.current)
+        original, modified, current = (
+            strip_counter_cache_fields(model, resolve_objectchange_field_migration(model, data))
+            for data in (self.original, self.modified, self.current)
+        )
         conflicts = None
         if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             if current is None:

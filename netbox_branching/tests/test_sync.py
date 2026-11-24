@@ -165,20 +165,14 @@ class SyncTestCase(CableTestMixin, FastTeardownTransactionTestCase):
         self.assertGreater(branch.last_sync, initial_last_sync)
 
     def test_sync_counter_cache_create_then_update(self):
-        """Syncing a create, child add and update from main leaves the branch counter correct. (#740)"""
+        """Syncing a create, child add and update from main leaves the branch counter correct."""
         branch = self._create_and_provision_branch()
 
-        def new_request():
-            request = RequestFactory().get(reverse('home'))
-            request.id = uuid.uuid4()
-            request.user = self.user
-            return request
-
-        with event_tracking(new_request()):
+        with event_tracking(self._make_request()):
             device_type = DeviceType.objects.create(manufacturer=self.manufacturer, model='DT2', slug='dt2')
-        with event_tracking(new_request()):
+        with event_tracking(self._make_request()):
             InterfaceTemplate.objects.create(device_type=device_type, name='eth0', type='1000base-t')
-        with event_tracking(new_request()):
+        with event_tracking(self._make_request()):
             device_type = DeviceType.objects.get(pk=device_type.pk)
             device_type.snapshot()
             device_type.description = 'Updated'

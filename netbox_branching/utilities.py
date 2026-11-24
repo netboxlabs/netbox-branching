@@ -315,10 +315,12 @@ def strip_schema_local_references(model, data):
 def strip_counter_cache_fields(model, data):
     """
     Return a copy of serialized object data without counter cache fields, which the destination's counter signals
-    maintain as the related objects are replayed. (#740)
+    maintain as the related objects are replayed.
     """
     from utilities.fields import CounterCacheField
 
+    if data is None:
+        return None
     if model is None:
         return dict(data)
     counters = {field.name for field in model._meta.concrete_fields if isinstance(field, CounterCacheField)}

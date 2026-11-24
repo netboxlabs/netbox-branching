@@ -617,28 +617,22 @@ class BaseMergeTests(CableTestMixin):
         # Verify revert deleted the created object
         self.assertFalse(Site.objects.filter(id=site_id).exists())
 
-    def _counter_request(self):
-        request = RequestFactory().get(reverse('home'))
-        request.id = uuid.uuid4()
-        request.user = self.user
-        return request
-
     def _edit_description(self, branch, model, pk, description):
         """Edit an object in its own request, re-fetching it so the snapshot carries the current counter values."""
-        with activate_branch(branch), event_tracking(self._counter_request()):
+        with activate_branch(branch), event_tracking(self._make_request()):
             obj = model.objects.get(pk=pk)
             obj.snapshot()
             obj.description = description
             obj.save()
 
     def _add_interface_template(self, branch, device_type, name):
-        with activate_branch(branch), event_tracking(self._counter_request()):
+        with activate_branch(branch), event_tracking(self._make_request()):
             InterfaceTemplate.objects.create(device_type_id=device_type.pk, name=name, type='1000base-t')
 
     def test_merge_counter_cache_create_then_update(self):
-        """Counter cache fields are recomputed in main, not copied from a later update's snapshot. (#740)"""
+        """Counter cache fields are recomputed in main, not copied from a later update's snapshot."""
         branch = self._create_and_provision_branch()
-        with activate_branch(branch), event_tracking(self._counter_request()):
+        with activate_branch(branch), event_tracking(self._make_request()):
             device_type = DeviceType.objects.create(manufacturer=self.manufacturer, model='DT2', slug='dt2')
         self._add_interface_template(branch, device_type, 'eth0')
         self._edit_description(branch, DeviceType, device_type.pk, 'Updated')
@@ -653,7 +647,7 @@ class BaseMergeTests(CableTestMixin):
         self.assertFalse(DeviceType.objects.filter(pk=device_type.pk).exists())
 
     def test_merge_counter_cache_update_existing_object(self):
-        """An update straddling a counter change doesn't write the counter on top of the replayed children. (#740)"""
+        """An update straddling a counter change doesn't write the counter on top of the replayed children."""
         branch = self._create_and_provision_branch()
         self._edit_description(branch, DeviceType, self.device_type.pk, 'First')
         self._add_interface_template(branch, self.device_type, 'eth0')
@@ -670,14 +664,14 @@ class BaseMergeTests(CableTestMixin):
         self.assertEqual(device_type.interface_template_count, 0)
 
     def test_revert_counter_cache_restored_object(self):
-        """Restoring a deleted object doesn't keep the counter its restored children add back. (#740)"""
-        with event_tracking(self._counter_request()):
+        """Restoring a deleted object doesn't keep the counter its restored children add back."""
+        with event_tracking(self._make_request()):
             device_type = DeviceType.objects.create(manufacturer=self.manufacturer, model='DT2', slug='dt2')
             InterfaceTemplate.objects.create(device_type=device_type, name='eth0', type='1000base-t')
         self.assertEqual(DeviceType.objects.get(pk=device_type.pk).interface_template_count, 1)
 
         branch = self._create_and_provision_branch()
-        with activate_branch(branch), event_tracking(self._counter_request()):
+        with activate_branch(branch), event_tracking(self._make_request()):
             DeviceType.objects.get(pk=device_type.pk).delete()
 
         branch.merge(user=self.user, commit=True)

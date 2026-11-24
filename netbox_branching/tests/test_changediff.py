@@ -9,7 +9,7 @@ from django.test import RequestFactory, SimpleTestCase, TestCase
 from django.urls import reverse
 
 from core.choices import ObjectChangeActionChoices
-from dcim.models import Site
+from dcim.models import DeviceType, Site
 from netbox.context_managers import event_tracking
 from netbox_branching.models import Branch, ChangeDiff
 from netbox_branching.tests.utils import FastTeardownTransactionTestCase, provision_branch
@@ -415,3 +415,16 @@ class DivergentKeySetTestCase(TestCase):
         )
         diff._update_conflicts()
         self.assertEqual(diff.conflicts, ['retired'])
+
+    def test_counter_cache_fields_ignored(self):
+        """Counters diverge whenever both sides add children, but merge doesn't write them."""
+        diff = ChangeDiff(
+            object_type=ContentType.objects.get_for_model(DeviceType),
+            object_id=1,
+            action=ObjectChangeActionChoices.ACTION_UPDATE,
+            original={'description': '', 'interface_template_count': 0},
+            modified={'description': 'branch', 'interface_template_count': 1},
+            current={'description': '', 'interface_template_count': 2},
+        )
+        diff._update_conflicts()
+        self.assertIsNone(diff.conflicts)
