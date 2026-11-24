@@ -25,6 +25,7 @@ from dcim.models import (
     DeviceType,
     FrontPort,
     Interface,
+    Location,
     MACAddress,
     Manufacturer,
     ModuleBay,
@@ -2185,6 +2186,77 @@ class BaseMergeTests(CableTestMixin):
         self.assertEqual(child.site, site1)
         self.assertEqual(child.description, 'Edited in main')
 
+    def _merge_component_of_moved_device(self, delete_old_location):
+        """Merge a branch which creates a device with an interface, then moves the device to another location."""
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            site = Site.objects.create(name='Site 1', slug='site-1')
+            location_a = Location.objects.create(site=site, name='Location A', slug='location-a')
+            device = Device.objects.create(
+                name='Device 1', site=site, location=location_a, device_type=self.device_type, role=self.device_role
+            )
+            interface = Interface.objects.create(device=device, name='eth0', type='1000base-t')
+            location_b = Location.objects.create(site=site, name='Location B', slug='location-b')
+        with activate_branch(branch):
+            self._edit(device, location=location_b)
+            if delete_old_location:
+                with event_tracking(self._make_request()):
+                    Location.objects.get(pk=location_a.pk).delete()
+
+        branch.merge(user=self.user, commit=True)
+
+        interface = Interface.objects.get(pk=interface.pk)
+        self.assertEqual(interface._site_id, site.pk)
+        self.assertEqual(interface._location_id, location_b.pk)
+        self.assertEqual(Device.objects.get(pk=device.pk).location_id, location_b.pk)
+
+        branch.revert(user=self.user, commit=True)
+        self.assertFalse(Interface.objects.filter(pk=interface.pk).exists())
+        self.assertFalse(Device.objects.filter(pk=device.pk).exists())
+        self.assertFalse(Location.objects.filter(site=site).exists())
+
+    def _merge_component_of_device_moved_in_main(self, sync):
+        """Merge a branch which adds an interface to a device that main then moves to another location."""
+        site = Site.objects.create(name='Site 1', slug='site-1')
+        location_a = Location.objects.create(site=site, name='Location A', slug='location-a')
+        device = Device.objects.create(
+            name='Device 1', site=site, location=location_a, device_type=self.device_type, role=self.device_role
+        )
+        branch = self._create_and_provision_branch()
+
+        with activate_branch(branch), event_tracking(self._make_request()):
+            interface = Interface.objects.create(device=device, name='eth0', type='1000base-t')
+        with event_tracking(self._make_request()):
+            location_c = Location.objects.create(site=site, name='Location C', slug='location-c')
+        self._edit(device, location=location_c)
+        if sync:
+            branch.sync(user=self.user, commit=True)
+
+        branch.merge(user=self.user, commit=True)
+        self.assertEqual(Interface.objects.get(pk=interface.pk)._location_id, location_c.pk)
+
+        branch.revert(user=self.user, commit=True)
+        self.assertFalse(Interface.objects.filter(pk=interface.pk).exists())
+        self.assertEqual(Device.objects.get(pk=device.pk).location_id, location_c.pk)
+
+    def test_merge_component_of_device_moved_in_main_synced(self):
+        """Syncing first carries main's device move onto the branch's new component. Refs: #743"""
+        self._merge_component_of_device_moved_in_main(sync=True)
+
+    @unittest.expectedFailure
+    def test_merge_component_of_device_moved_in_main_unsynced(self):
+        """Cached fields are taken from the branch, so an unsynced main move is missed. Refs: #743"""
+        self._merge_component_of_device_moved_in_main(sync=False)
+
+    def test_merge_component_of_moved_device(self):
+        """A component's trigger-maintained _location follows its device's move. Refs: #743"""
+        self._merge_component_of_moved_device(delete_old_location=False)
+
+    def test_merge_component_of_moved_device_old_location_deleted(self):
+        """A component's stale _location must not reference a location deleted in the branch. Refs: #743"""
+        self._merge_component_of_moved_device(delete_old_location=True)
+
 
 class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
     """Test cases for Branch merge using iterative merge strategy."""
@@ -2195,6 +2267,11 @@ class IterativeMergeTestCase(BaseMergeTests, FastTeardownTransactionTestCase):
     def test_revert_cable_delete(self):
         """Reverse-chronological undo restores each interface's cable FK before the cable itself. Refs: #693"""
         super().test_revert_cable_delete()
+
+    @unittest.expectedFailure
+    def test_merge_component_of_device_moved_in_main_synced(self):
+        """Iterative replays the component's logged create, whose cached fields predate the sync. Refs: #743"""
+        super().test_merge_component_of_device_moved_in_main_synced()
 
 
 class DiffForMergeTests(SimpleTestCase):

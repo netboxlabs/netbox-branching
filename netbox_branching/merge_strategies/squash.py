@@ -2,10 +2,13 @@
 Squash merge strategy implementation with functions for collapsing and ordering ObjectChanges.
 """
 
+import json
+from collections import defaultdict
 from enum import StrEnum
 
 from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
+from django.core import serializers
 from django.core.exceptions import ValidationError
 from django.db import DEFAULT_DB_ALIAS, models
 
@@ -16,6 +19,9 @@ from ..signals import squash_dependency_graph_built
 from .strategy import MergeStrategy
 
 __all__ = ('SquashMergeStrategy',)
+
+# Rows fetched per query when refreshing squashed creates' private fields
+PRIVATE_FIELDS_CHUNK_SIZE = 1000
 
 
 class ActionType(StrEnum):
@@ -194,6 +200,31 @@ class SquashMergeStrategy(MergeStrategy):
                     )
                     collapsed.final_action = ActionType.SKIP
 
+    @staticmethod
+    def _refresh_private_fields(branch, collapsed_changes):
+        """
+        Take each collapsed CREATE's private (underscore-prefixed) fields from its current row in the branch. These
+        hold derived state, often kept by database triggers which log no change, so the last logged value can be stale.
+        UPDATEs replay only public fields, leaving private ones to the destination. Values derived from objects main
+        changed after the last sync stay stale until the branch is synced. (#743)
+        """
+        creates_by_model = defaultdict(dict)
+        for collapsed in collapsed_changes.values():
+            if collapsed.final_action == ActionType.CREATE:
+                creates_by_model[collapsed.model_class][collapsed.key[1]] = collapsed
+
+        for model, creates in creates_by_model.items():
+            fields = [field.name for field in model._meta.concrete_fields if field.name.startswith('_')]
+            if not fields:
+                continue
+            queryset = model._base_manager.using(branch.connection_name).only('pk', *fields)
+            pks = list(creates)
+            for i in range(0, len(pks), PRIVATE_FIELDS_CHUNK_SIZE):
+                instances = queryset.filter(pk__in=pks[i : i + PRIVATE_FIELDS_CHUNK_SIZE])
+                for row in json.loads(serializers.serialize('json', instances, fields=fields)):
+                    data = creates[row['pk']].postchange_data
+                    data.update({name: value for name, value in row['fields'].items() if name in data})
+
     def merge(self, branch, changes, request, logger, user):
         """
         Apply changes after collapsing them by object and ordering by dependencies.
@@ -203,6 +234,7 @@ class SquashMergeStrategy(MergeStrategy):
         logger.info('Collapsing ObjectChanges by object (incremental)...')
         collapsed_changes, _ = SquashMergeStrategy._collapse_changes(changes, logger)
         SquashMergeStrategy._skip_updates_missing_in_main(collapsed_changes, logger)
+        SquashMergeStrategy._refresh_private_fields(branch, collapsed_changes)
 
         # Order collapsed changes based on dependencies
         ordered_changes = SquashMergeStrategy._order_collapsed_changes(collapsed_changes, logger, operation='merge')
