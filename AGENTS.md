@@ -87,6 +87,7 @@ Defer all version pins to `pyproject.toml` and `netbox_branching/__init__.py`.
 │       ├── test_events.py
 │       ├── test_filtersets.py
 │       ├── test_iterative_merge.py
+│       ├── test_objectchange_branch.py
 │       ├── test_query.py
 │       ├── test_related_models.py
 │       ├── test_request.py
@@ -253,6 +254,7 @@ After model changes, generate a migration with `python netbox/manage.py makemigr
 | `test_events.py` | `BranchEvent` creation |
 | `test_filtersets.py` | Filterset functionality |
 | `test_iterative_merge.py` | Iterative merge strategy (comprehensive) |
+| `test_objectchange_branch.py` | A change log entry's source branch in the detail view and GraphQL |
 | `test_query.py` | Branch-aware query routing |
 | `test_related_models.py` | Related model handling across schemas |
 | `test_request.py` | Request-level branch context |
@@ -297,8 +299,9 @@ The scaffold targets *private* plugins, so a few surfaces are deliberately diver
 | `.github/workflows/test.yml` matrix | Tests NetBox `main` only. The scaffold adds `netbox_test_min_ref` / `netbox_test_max_ref` legs, which break as soon as a feature depends on unreleased NetBox changes. Coverage runs on the `main` leg. |
 
 The scaffold's `graphql/` stub package is intentionally absent — this plugin has no GraphQL
-schema of its own, only the core type extensions in `graphql_extensions.py`. A `copier update` will offer to add it; decline. The `ui/` package is maintained by hand
-(see below), so reject the scaffold's stub for it too.
+schema of its own, only the core type extensions in `graphql_extensions.py`. A `copier update`
+will offer to add it; decline. The `ui/` package is maintained by hand (see below), so reject the
+scaffold's stub for it too.
 
 ## Common Tasks
 

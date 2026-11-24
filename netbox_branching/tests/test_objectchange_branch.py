@@ -70,6 +70,21 @@ class ObjectChangeBranchTestCase(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertNotContains(response, branch.get_absolute_url())
 
+    def _grant_view(self, *models, constraints=None):
+        self.user.is_superuser = False
+        self.user.save()
+        permission = ObjectPermission.objects.create(name='View', actions=['view'], constraints=constraints)
+        permission.users.add(self.user)
+        permission.object_types.add(*(ObjectType.objects.get_for_model(m) for m in models))
+
+    def test_detail_view_hides_branch_without_permission(self):
+        self._grant_view(ObjectChange)
+        self.client.force_login(self.user)
+
+        response = self.client.get(reverse('core:objectchange', kwargs={'pk': self.changes[0].pk}))
+        self.assertEqual(response.status_code, 200)
+        self.assertNotContains(response, self.branches[0].get_absolute_url())
+
     def test_graphql_branch_field(self):
         branches = self._graphql()
         self.assertEqual(
@@ -82,14 +97,26 @@ class ObjectChangeBranchTestCase(TestCase):
         )
 
     def test_graphql_branch_field_requires_branch_permission(self):
-        self.user.is_superuser = False
-        self.user.save()
-        permission = ObjectPermission.objects.create(name='View sites and changes', actions=['view'])
-        permission.users.add(self.user)
-        permission.object_types.add(
-            ObjectType.objects.get_for_model(Site), ObjectType.objects.get_for_model(ObjectChange)
-        )
+        self._grant_view(Site, ObjectChange)
 
         branches = self._graphql()
         self.assertEqual(set(branches), {c.pk for c in self.changes})
         self.assertEqual(set(branches.values()), {None})
+
+    def test_graphql_branch_field_constrained_permission(self):
+        self._grant_view(Site, ObjectChange)
+        permission = ObjectPermission.objects.create(
+            name='View Branch 1', actions=['view'], constraints={'name': 'Branch 1'}
+        )
+        permission.users.add(self.user)
+        permission.object_types.add(ObjectType.objects.get_for_model(Branch))
+
+        branches = self._graphql()
+        self.assertEqual(
+            branches,
+            {
+                self.changes[0].pk: {'id': str(self.branches[0].pk), 'name': 'Branch 1'},
+                self.changes[1].pk: None,
+                self.changes[2].pk: None,
+            },
+        )
