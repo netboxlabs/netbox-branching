@@ -164,26 +164,22 @@ class SyncTestCase(CableTestMixin, FastTeardownTransactionTestCase):
         branch.refresh_from_db()
         self.assertGreater(branch.last_sync, initial_last_sync)
 
-    def test_sync_counter_cache_create_then_update(self):
-        """Syncing a create, child add and update from main leaves the branch counter correct."""
+    def test_sync_counter_cache_in_create(self):
+        """A CREATE whose recorded data already counts its children doesn't double the counter when synced."""
         branch = self._create_and_provision_branch()
+        tag = Tag.objects.create(name='Counter Tag', slug='counter-tag')
 
+        # Tagging in the same request rewrites the CREATE's postchange_data with the current counter value.
         with event_tracking(self._make_request()):
             device_type = DeviceType.objects.create(manufacturer=self.manufacturer, model='DT2', slug='dt2')
-        with event_tracking(self._make_request()):
             InterfaceTemplate.objects.create(device_type=device_type, name='eth0', type='1000base-t')
-        with event_tracking(self._make_request()):
             device_type = DeviceType.objects.get(pk=device_type.pk)
-            device_type.snapshot()
-            device_type.description = 'Updated'
-            device_type.save()
+            device_type.tags.add(tag)
 
         branch.sync(user=self.user, commit=True)
 
         with activate_branch(branch):
-            device_type = DeviceType.objects.get(pk=device_type.pk)
-            self.assertEqual(device_type.description, 'Updated')
-            self.assertEqual(device_type.interface_template_count, 1)
+            self.assertEqual(DeviceType.objects.get(pk=device_type.pk).interface_template_count, 1)
 
     # -------------------------------------------------------------------------
     # Conflict / concurrent modification scenarios

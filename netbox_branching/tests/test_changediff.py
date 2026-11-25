@@ -428,3 +428,16 @@ class DivergentKeySetTestCase(TestCase):
         )
         diff._update_conflicts()
         self.assertIsNone(diff.conflicts)
+
+    def test_counter_cache_fields_conflict_on_delete(self):
+        """A counter that moved in main flags a delete that will cascade to main's new children."""
+        diff = ChangeDiff(
+            object_type=ContentType.objects.get_for_model(DeviceType),
+            object_id=1,
+            action=ObjectChangeActionChoices.ACTION_DELETE,
+            original={'description': '', 'interface_template_count': 0},
+            modified=None,
+            current={'description': '', 'interface_template_count': 3},
+        )
+        diff._update_conflicts()
+        self.assertEqual(diff.conflicts, ['interface_template_count'])

@@ -345,7 +345,9 @@ class ChangeDiff(models.Model):
         registered ObjectChange field migrators before comparison so that a
         rename in one snapshot doesn't appear as a divergent key set.  Models
         without a registered migrator are compared as-is. Counter cache fields
-        are ignored since merge doesn't write them.
+        are ignored for updates, since merge doesn't write them, but kept for
+        deletes, where a moved counter means main changed the children the
+        delete will cascade to.
 
         The migrator hook is internal and subject to change; external plugins
         should not rely on it.
@@ -354,9 +356,10 @@ class ChangeDiff(models.Model):
             return
         model = self.object_type.model_class()
         original, modified, current = (
-            strip_counter_cache_fields(model, resolve_objectchange_field_migration(model, data))
-            for data in (self.original, self.modified, self.current)
+            resolve_objectchange_field_migration(model, data) for data in (self.original, self.modified, self.current)
         )
+        if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
+            original, modified, current = (strip_counter_cache_fields(model, d) for d in (original, modified, current))
         conflicts = None
         if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             if current is None:
