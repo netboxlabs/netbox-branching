@@ -20,6 +20,7 @@ from netbox_branching.utilities import (
     diff_for_merge,
     full_clean_with_file_check,
     resolve_objectchange_field_migration,
+    strip_counter_cache_fields,
     strip_schema_local_references,
     update_object,
 )
@@ -97,6 +98,7 @@ class ObjectChange(ObjectChange_):
 
         Fields in ``replay_fields`` are written from the target snapshot even when net unchanged, since a side effect
         replayed earlier may have reset them; dicts are left to the nested diff to preserve sibling keys. (#688)
+        Counter cache fields are dropped; the destination's counter signals maintain them.
         """
         source, target = self.prechange_data_clean, self.postchange_data_clean
         if reverse:
@@ -105,7 +107,7 @@ class ObjectChange(ObjectChange_):
         for field in self.replay_fields:
             if field not in data and field in target and not isinstance(target[field], dict):
                 data[field] = target[field]
-        return data
+        return strip_counter_cache_fields(self.changed_object_type.model_class(), data)
 
     def apply(self, branch, using=DEFAULT_DB_ALIAS, logger=None, skip_missing=False):
         """
@@ -122,7 +124,7 @@ class ObjectChange(ObjectChange_):
         if self.action == ObjectChangeActionChoices.ACTION_CREATE:
             # Rows of schema-local models are rebuilt in the destination, so the source's IDs are meaningless there.
             # UPDATE and restore replay *_clean data, which drops private fields such as _path; only CREATE needs this.
-            data = strip_schema_local_references(model, self.postchange_data)
+            data = strip_counter_cache_fields(model, strip_schema_local_references(model, self.postchange_data))
             if hasattr(model, 'deserialize_object'):
                 instance = model.deserialize_object(data, pk=self.changed_object_id)
             else:
@@ -203,7 +205,8 @@ class ObjectChange(ObjectChange_):
 
         # Restoring a deleted object
         elif self.action == ObjectChangeActionChoices.ACTION_DELETE:
-            deserialized = deserialize_object(model, self.prechange_data_clean, pk=self.changed_object_id)
+            data = strip_counter_cache_fields(model, self.prechange_data_clean)
+            deserialized = deserialize_object(model, data, pk=self.changed_object_id)
             instance = deserialized.object
             logger.debug(f'Restoring {model._meta.verbose_name} {instance}')
 
@@ -341,7 +344,10 @@ class ChangeDiff(models.Model):
         ``original``, ``modified``, and ``current`` are each passed through any
         registered ObjectChange field migrators before comparison so that a
         rename in one snapshot doesn't appear as a divergent key set.  Models
-        without a registered migrator are compared as-is.
+        without a registered migrator are compared as-is. Counter cache fields
+        are ignored for updates, since merge doesn't write them, but kept for
+        deletes, where a moved counter means main changed the children the
+        delete will cascade to.
 
         The migrator hook is internal and subject to change; external plugins
         should not rely on it.
@@ -349,9 +355,11 @@ class ChangeDiff(models.Model):
         if self.original is None:
             return
         model = self.object_type.model_class()
-        original = resolve_objectchange_field_migration(model, self.original)
-        modified = resolve_objectchange_field_migration(model, self.modified)
-        current = resolve_objectchange_field_migration(model, self.current)
+        original, modified, current = (
+            resolve_objectchange_field_migration(model, data) for data in (self.original, self.modified, self.current)
+        )
+        if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
+            original, modified, current = (strip_counter_cache_fields(model, d) for d in (original, modified, current))
         conflicts = None
         if self.action == ObjectChangeActionChoices.ACTION_UPDATE:
             if current is None:

@@ -312,6 +312,21 @@ def strip_schema_local_references(model, data):
     return data
 
 
+def strip_counter_cache_fields(model, data):
+    """
+    Return a copy of serialized object data without counter cache fields, which the destination's counter signals
+    maintain as the related objects are replayed.
+    """
+    from utilities.fields import CounterCacheField
+
+    if data is None:
+        return None
+    if model is None:
+        return dict(data)
+    counters = {field.name for field in model._meta.concrete_fields if isinstance(field, CounterCacheField)}
+    return {k: v for k, v in data.items() if k not in counters}
+
+
 def get_tables_to_replicate():
     """
     Return an ordered list of database tables to replicate when provisioning a new schema.
